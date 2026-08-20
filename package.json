@@ -1,0 +1,42 @@
+{
+  "name": "seb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A read-only Sleeper fantasy football agent.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "ask": "node --import tsx src/cli.ts",
+    "check": "npm run typecheck && npm test",
+    "connectors": "node --import tsx src/connectors/server.ts",
+    "deps:check": "npm outdated",
+    "sleeper:smoke": "node --import tsx src/smoke-sleeper.ts",
+    "test": "vitest run",
+    "test:connectors": "vitest run test/connectors.test.ts",
+    "test:harness": "vitest run test/agent-harness.test.ts",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^4.0.47",
+    "@chat-adapter/discord": "^4.38.1",
+    "@chat-adapter/slack": "^4.38.1",
+    "@chat-adapter/state-memory": "^4.38.1",
+    "@chat-adapter/state-redis": "^4.38.1",
+    "@chat-adapter/telegram": "^4.38.1",
+    "@hono/node-server": "^2.1.1",
+    "ai": "^7.0.70",
+    "chat": "^4.38.1",
+    "hono": "^4.13.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@chat-adapter/tests": "^4.38.1",
+    "@types/node": "^26.2.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

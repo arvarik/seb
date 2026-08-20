@@ -80,6 +80,78 @@ describe('interactive presentation', () => {
     expect(output).toContain('│ {"team":"BAL"}');
   });
 
+  it('renders common inline Markdown without visible syntax markers', () => {
+    const plainTheme = createTheme({ NO_COLOR: '1' });
+    const colorTheme = createTheme({});
+    const markdown = [
+      '*italic* and _also italic_',
+      '**bold** and __also bold__',
+      '***bold italic*** and ___also bold italic___',
+      '~~removed~~ and **bold with *nested italic*** and __bold with *cross nested italic*__',
+      '*italic with **nested bold***',
+      '`*literal code*` and \\*escaped literal\\* and snake_case',
+    ].join('\n');
+    const plain = renderAnalysisText(markdown, plainTheme);
+    const color = renderAnalysisText(markdown, colorTheme);
+
+    expect(plain).toBe([
+      'italic and also italic',
+      'bold and also bold',
+      'bold italic and also bold italic',
+      'removed and bold with nested italic and bold with cross nested italic',
+      'italic with nested bold',
+      '*literal code* and *escaped literal* and snake_case',
+    ].join('\n'));
+    expect(stripAnsi(color)).toBe(plain);
+    expect(color).toContain('\x1b[3mitalic\x1b[23m');
+    expect(color).toContain('\x1b[1mbold\x1b[22m');
+    expect(color).toContain('\x1b[9mremoved\x1b[29m');
+  });
+
+  it('renders inline Markdown inside headings and links', () => {
+    const theme = createTheme({});
+    const output = renderAnalysisText([
+      '## **Decision** for *Week 1* ##',
+      '[**Detailed report**](https://example.com/report)',
+      '![Game chart](https://example.com/chart.png)',
+    ].join('\n'), theme);
+
+    expect(stripAnsi(output)).toContain('━━ DECISION FOR WEEK 1');
+    expect(stripAnsi(output)).toContain('↗ Detailed report');
+    expect(stripAnsi(output)).toContain('↗ Image: Game chart');
+    expect(output).not.toMatch(/\*{1,3}(?:Decision|Week 1|Detailed report)\*{1,3}/u);
+  });
+
+  it('keeps inline styles when one long word wraps', () => {
+    const theme = createTheme({});
+    const word = 'x'.repeat(35);
+    const output = renderAnalysisText(`*${word}*`, theme, 20);
+    const lines = output.split('\n');
+
+    expect(lines).toHaveLength(2);
+    expect(lines.every((line) => visibleLength(line) <= 20)).toBe(true);
+    expect(lines.every((line) => line.includes('\x1b[3m'))).toBe(true);
+    expect(stripAnsi(output).replace('\n', '')).toBe(word);
+  });
+
+  it('renders inline styles in lists, quotes, labels, and tables', () => {
+    const theme = createTheme({ NO_COLOR: '1' });
+    const output = renderAnalysisText([
+      '- Player: **Lamar Jackson**',
+      '> *Current starter*',
+      'Status: __Ready__',
+      '| Field | Value |',
+      '| --- | --- |',
+      '| Trend | ~~Falling~~ **Rising** |',
+    ].join('\n'), theme, 60);
+
+    expect(output).toContain('PLAYER  Lamar Jackson');
+    expect(output).toContain('│ Current starter');
+    expect(output).toContain('STATUS  Ready');
+    expect(output).toContain('Falling Rising');
+    expect(output).not.toMatch(/[\*~]{1,3}/u);
+  });
+
   it('formats source freshness and elapsed time', () => {
     expect(sourceBadge({
       accessedAt: '2026-08-20T12:00:00Z',

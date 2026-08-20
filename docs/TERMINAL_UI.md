@@ -198,6 +198,10 @@ The renderer keeps every table value in both layouts.
 
 Headings, nested lists, numbered lists, labeled metrics, quotes, and code blocks use distinct terminal styles.
 
+Inline styles include emphasis, strong emphasis, nested styles, strikethrough, links, and code spans.
+
+Escaped Markdown characters remain visible as literal characters.
+
 A percentage on a `Confidence` line becomes a ten-cell bar.
 
 A `Win probability` percentage becomes a twenty-cell bar.

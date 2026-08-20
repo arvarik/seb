@@ -6,6 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The terminal now renders emphasis, strong emphasis, strikethrough, escapes, nested inline styles, code spans, and image labels without visible Markdown markers.
+- Headings and wrapped long words now keep their inline terminal styles.
+
 ## [0.0.6] - 2026-08-20
 
 ### Changed

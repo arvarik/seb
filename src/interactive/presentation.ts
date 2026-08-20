@@ -2,8 +2,9 @@ import type { DataSourceRecord } from '../sources.js';
 import { paint, symbol, type SebTheme } from './theme.js';
 
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/gu;
-const INLINE_LINK_PATTERN = /\[([^\]]+)\]\((?:<([^>\s]+)>|(https?:\/\/[^)\s]+))\)|<(https?:\/\/[^>\s]+)>|(https?:\/\/[^\s<>\x1b]+)/gu;
+const INLINE_LINK_PATTERN = /(!?)\[([^\]]+)\]\((?:<([^>\s]+)>|(https?:\/\/[^)\s]+))\)|<(https?:\/\/[^>\s]+)>|(https?:\/\/[^\s<>\x1b]+)/gu;
 const TERMINAL_LINK_PATTERN = /\x1b\]8;;([^\x07\x1b]*)(?:\x07|\x1b\\)([\s\S]*?)\x1b\]8;;(?:\x07|\x1b\\)/gu;
+const TERMINAL_CONTROL_PATTERN = /^\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/u;
 
 type TableAlignment = 'center' | 'left' | 'right';
 
@@ -128,10 +129,12 @@ function renderMarkdownLine(
     const marker = theme.iconMode === 'unicode'
       ? level <= 2 ? '━━' : level <= 4 ? '◆' : '›'
       : level <= 2 ? '==' : level <= 4 ? '#' : '>';
-    const title = level <= 2
-      ? (heading[2] ?? '').toUpperCase()
-      : heading[2] ?? '';
-    return wrapPlainWords(`${marker} ${title}`, width).map((value) =>
+    const title = inlineMarkup(
+      (heading[2] ?? '').replace(/\s+#+\s*$/u, ''),
+      theme,
+      level <= 2 ? (value) => value.toUpperCase() : undefined,
+    );
+    return wrapTerminalLine(`${marker} ${title}`, width).map((value) =>
       paint(theme, level <= 4 ? 'accent' : 'source', value));
   }
 
@@ -583,9 +586,10 @@ function wrapPlainWords(value: string, width: number): string[] {
 
 function hardWrap(value: string, width: number): string[] {
   if (!value) return [''];
+  const characters = [...value];
   const chunks: string[] = [];
-  for (let index = 0; index < value.length; index += width) {
-    chunks.push(value.slice(index, index + width));
+  for (let index = 0; index < characters.length; index += width) {
+    chunks.push(characters.slice(index, index + width).join(''));
   }
   return chunks;
 }
@@ -638,10 +642,23 @@ export function wrapTerminalLine(value: string, width: number): string[] {
   return stabilizeTerminalStyles(lines.length > 0 ? lines : ['']);
 }
 
-function inlineMarkup(value: string, theme: SebTheme): string {
-  let output = value.replace(INLINE_LINK_PATTERN,
+function inlineMarkup(
+  value: string,
+  theme: SebTheme,
+  transform: (value: string) => string = (text) => text,
+): string {
+  const tokens: string[] = [];
+  const protect = (text: string): string => {
+    const index = tokens.push(text) - 1;
+    return `\u{e100}${index}\u{e101}`;
+  };
+  let output = value.replace(/\\([\\`*_[\]{}()#+.!~>|-])/gu,
+    (_match, character: string) => protect(character));
+  output = protectCodeSpans(output, theme, protect);
+  output = output.replace(INLINE_LINK_PATTERN,
     (
       _match,
+      image: string | undefined,
       label: string | undefined,
       angleUrl: string | undefined,
       markdownUrl: string | undefined,
@@ -650,13 +667,98 @@ function inlineMarkup(value: string, theme: SebTheme): string {
     ) => {
       const candidate = angleUrl ?? markdownUrl ?? autolinkUrl ?? bareUrl ?? '';
       const { trailing, url } = bareUrl ? trimBareUrl(candidate) : { trailing: '', url: candidate };
-      const display = label ?? url;
-      const prefix = label ? `${symbol(theme, 'source')} ` : '';
+      const display = label
+        ? applyInlineStyles(transform(label), theme, protect)
+        : url;
+      const prefix = label
+        ? `${symbol(theme, 'source')} ${image ? 'Image: ' : ''}`
+        : '';
       const link = !theme.links && !label ? url : terminalLink(display, url, theme.links);
-      return `${prefix}${link}${trailing}`;
+      return protect(`${prefix}${link}${trailing}`);
     });
-  output = output.replace(/`([^`]+)`/gu, (_match, code: string) => paint(theme, 'source', code));
-  output = output.replace(/\*\*([^*]+)\*\*/gu, (_match, strong: string) => paint(theme, 'assistant', strong));
+  output = applyInlineStyles(transform(output), theme, protect);
+  return restoreInlineTokens(output, tokens);
+}
+
+function protectCodeSpans(
+  value: string,
+  theme: SebTheme,
+  protect: (value: string) => string,
+): string {
+  return value.replace(/(`+)([\s\S]*?)\1/gu, (_match, _delimiter: string, content: string) => {
+    const normalized = content.replace(/\s+/gu, ' ');
+    const code = normalized.startsWith(' ') && normalized.endsWith(' ') && normalized.trim()
+      ? normalized.slice(1, -1)
+      : normalized;
+    return protect(inlineCode(theme, code));
+  });
+}
+
+function applyInlineStyles(
+  value: string,
+  theme: SebTheme,
+  protect: (value: string) => string,
+): string {
+  const styled = (
+    content: string,
+    style: 'emphasis' | 'strike' | 'strong' | 'strong-emphasis',
+  ) => protect(inlineStyle(
+    theme,
+    applyInlineStyles(content, theme, protect),
+    style,
+  ));
+  let output = value;
+  for (let iteration = 0; iteration < 8; iteration += 1) {
+    const previous = output;
+    output = output
+      .replace(/\*{3}(\S(?:[^*\n]*?\S)?)\*{3}/gu,
+        (_match, content: string) => styled(content, 'strong-emphasis'))
+      .replace(/(^|[^\w_])_{3}(\S(?:[^_\n]*?\S)?)_{3}(?!\w)/gu,
+        (_match, prefix: string, content: string) =>
+          `${prefix}${styled(content, 'strong-emphasis')}`)
+      .replace(/\*{2}(\S(?:[^*\n]*?\S)?)\*{2}/gu,
+        (_match, content: string) => styled(content, 'strong'))
+      .replace(/(^|[^\w_])_{2}(\S(?:[^_\n]*?\S)?)_{2}(?!\w)/gu,
+        (_match, prefix: string, content: string) =>
+          `${prefix}${styled(content, 'strong')}`)
+      .replace(/~~(\S(?:[^~\n]*?\S)?)~~/gu,
+        (_match, content: string) => styled(content, 'strike'))
+      .replace(/(^|[^\w*])\*(?!\*)(\S(?:[^*\n]*?\S)?)\*(?=\*{2}|[^*]|$)/gu,
+        (_match, prefix: string, content: string) =>
+          `${prefix}${styled(content, 'emphasis')}`)
+      .replace(/(^|[^\w_])_(?!_)(\S(?:[^_\n]*?\S)?)_(?=_{2}|[^\w_]|$)/gu,
+        (_match, prefix: string, content: string) =>
+          `${prefix}${styled(content, 'emphasis')}`);
+    if (output === previous) break;
+  }
+  return output;
+}
+
+function inlineStyle(
+  theme: SebTheme,
+  value: string,
+  style: 'emphasis' | 'strike' | 'strong' | 'strong-emphasis',
+): string {
+  if (!theme.color) return value;
+  if (style === 'emphasis') return `\x1b[3m${value}\x1b[23m`;
+  if (style === 'strike') return `\x1b[9m${value}\x1b[29m`;
+  if (style === 'strong-emphasis') return `\x1b[1;3m${value}\x1b[22;23m`;
+  return `\x1b[1m${value}\x1b[22m`;
+}
+
+function inlineCode(theme: SebTheme, value: string): string {
+  const color = theme.palette.source;
+  return color ? `${color}${value}\x1b[39m` : value;
+}
+
+function restoreInlineTokens(value: string, tokens: readonly string[]): string {
+  let output = value;
+  for (let iteration = 0; iteration <= tokens.length; iteration += 1) {
+    const restored = output.replace(/\u{e100}(\d+)\u{e101}/gu,
+      (_match, index: string) => tokens[Number(index)] ?? '');
+    if (restored === output) return restored;
+    output = restored;
+  }
   return output;
 }
 
@@ -691,16 +793,33 @@ function count(value: string, character: string): number {
 }
 
 function stabilizeTerminalStyles(lines: readonly string[]): string[] {
-  let activeStyle = '';
+  const activeStyles = new Map<string, string>();
   return lines.map((line) => {
-    const prefix = activeStyle;
+    const prefix = [...activeStyles.values()].join('');
     for (const match of line.matchAll(/\x1b\[([0-9;]*)m/gu)) {
-      const parameters = match[1] ?? '';
-      if (!parameters || parameters.split(';').includes('0')) activeStyle = '';
-      else activeStyle += match[0];
+      updateActiveStyles(activeStyles, match[1] ?? '');
     }
-    return `${prefix}${line}${activeStyle ? '\x1b[0m' : ''}`;
+    return `${prefix}${line}${activeStyles.size > 0 ? '\x1b[0m' : ''}`;
   });
+}
+
+function updateActiveStyles(styles: Map<string, string>, parameters: string): void {
+  const codes = parameters ? parameters.split(';').map(Number) : [0];
+  for (const code of codes) {
+    if (code === 0) styles.clear();
+    else if (code === 1 || code === 2) styles.set('intensity', `\x1b[${code}m`);
+    else if (code === 3) styles.set('emphasis', '\x1b[3m');
+    else if (code === 9) styles.set('strike', '\x1b[9m');
+    else if (code === 22) styles.delete('intensity');
+    else if (code === 23) styles.delete('emphasis');
+    else if (code === 29) styles.delete('strike');
+    else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
+      styles.set('foreground', `\x1b[${code}m`);
+    } else if (code === 39) styles.delete('foreground');
+    else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
+      styles.set('background', `\x1b[${code}m`);
+    } else if (code === 49) styles.delete('background');
+  }
 }
 
 function splitLongTerminalWord(value: string, width: number): string[] {
@@ -709,11 +828,38 @@ function splitLongTerminalWord(value: string, width: number): string[] {
     const url = link[1] ?? '';
     const label = link[2] ?? '';
     const suffix = link[3] ?? '';
-    const chunks = hardWrap(label, width);
+    const chunks = label.includes('\x1b')
+      ? hardWrapTerminalText(label, width)
+      : hardWrap(label, width);
     return chunks.map((chunk, index) =>
       `${terminalLink(chunk, url)}${index === chunks.length - 1 ? suffix : ''}`);
   }
-  return value.includes('\x1b') ? [value] : hardWrap(value, width);
+  return value.includes('\x1b') ? hardWrapTerminalText(value, width) : hardWrap(value, width);
+}
+
+function hardWrapTerminalText(value: string, width: number): string[] {
+  const chunks: string[] = [];
+  let chunk = '';
+  let length = 0;
+  for (let index = 0; index < value.length;) {
+    const control = value.slice(index).match(TERMINAL_CONTROL_PATTERN)?.[0];
+    if (control) {
+      chunk += control;
+      index += control.length;
+      continue;
+    }
+    const character = String.fromCodePoint(value.codePointAt(index) ?? 0);
+    chunk += character;
+    length += 1;
+    index += character.length;
+    if (length === width) {
+      chunks.push(chunk);
+      chunk = '';
+      length = 0;
+    }
+  }
+  if (chunk) chunks.push(chunk);
+  return chunks.length > 0 ? chunks : [''];
 }
 
 function bar(score: number, width: number, theme: SebTheme): string {

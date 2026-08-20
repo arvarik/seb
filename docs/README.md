@@ -2,11 +2,13 @@
 
 Use these guides in order.
 
-1. [Set up Seb](SETUP.md) for command-line use and basic verification.
-2. [Choose a connector](CONNECTORS.md) for Slack, Discord, or Telegram.
-3. Follow the platform guide in the [connectors folder](connectors/README.md).
-4. Read [production operations](OPERATIONS.md) before a public deployment.
-5. Read the [V1 design](V1.md) for news, schedules, statistics, and projections.
+1. [Set up Seb](SETUP.md) for installation and basic verification.
+2. Read the [command-line guide](CLI.md) for chat, pipes, JSON, and diagnostics.
+3. Read the [versioning guide](VERSIONING.md) before a release.
+4. [Choose a connector](CONNECTORS.md) for Slack, Discord, or Telegram.
+5. Follow the platform guide in the [connectors folder](connectors/README.md).
+6. Read [production operations](OPERATIONS.md) before a public deployment.
+7. Read the [V1 design](V1.md) for news, schedules, statistics, and projections.
 
 The current connector code supports Slack, Discord, and Telegram.
 

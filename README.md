@@ -4,7 +4,9 @@ Seb is a read-only fantasy football agent for Sleeper leagues. It uses Gemini to
 
 The V0 reads public Sleeper data. It never changes a league, roster, waiver claim, trade, or lineup.
 
-Seb uses Gemini 3.7 Flash by default. It retries with Gemini 3.6 Flash when the primary model returns a temporary capacity error.
+Seb uses Gemini 3.7 Flash by default. One-shot requests retry Gemini 3.6 Flash after a temporary capacity error.
+
+The current project version is `0.0.1`. Seb follows the [documented release policy](docs/VERSIONING.md).
 
 ## Requirements
 
@@ -31,13 +33,19 @@ Seb uses Gemini 3.7 Flash by default. It retries with Gemini 3.6 Flash when the 
    GOOGLE_GENERATIVE_AI_API_KEY=your-key
    ```
 
-4. Verify the Sleeper connection. This command does not require a Gemini key.
+4. Verify the complete setup.
 
    ```bash
-   npm run sleeper:smoke
+   npm run doctor
    ```
 
-5. Ask the agent a question.
+5. Start the interactive terminal interface.
+
+   ```bash
+   npm run seb
+   ```
+
+6. Ask one question without the interactive interface.
 
    ```bash
    npm run ask -- "Show the current NFL state and the most added players."
@@ -48,6 +56,15 @@ League questions work best when the prompt includes a Sleeper league ID.
 ```bash
 npm run ask -- "Analyze every roster in Sleeper league 123456789."
 ```
+
+Run `npm link` once when you want a direct `seb` command.
+
+```bash
+npm link
+seb
+```
+
+See the [command-line guide](docs/CLI.md) for pipes, JSON, exit codes, and diagnostics.
 
 See [the detailed setup guide](docs/SETUP.md) for verification and troubleshooting.
 
@@ -97,6 +114,7 @@ Sleeper does not document NFL schedules, player game logs, projections, or news 
 
 ```bash
 npm run check
+npm run doctor
 npm run test:connectors
 npm run test:harness
 npm run deps:check

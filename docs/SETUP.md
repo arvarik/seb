@@ -48,21 +48,59 @@ Run the Sleeper smoke test.
 npm run sleeper:smoke
 ```
 
-This test reads the current NFL state and a small trending-player list.
+This test reads the current NFL state.
 
 The test does not call Gemini.
 
 ## 4. Verify Gemini
 
-Ask one small question.
+Run the complete diagnostic command.
+
+```bash
+npm run doctor
+```
+
+This command checks Node.js, the Gemini key, Gemini, and Sleeper.
+
+The Gemini check sends one small request.
+
+Use the offline check when you only want to verify local configuration.
+
+```bash
+npm run doctor -- --offline
+```
+
+Then ask one small question.
 
 ```bash
 npm run ask -- "Show the current NFL state."
 ```
 
-Seb uses `GEMINI_MODEL` first. It uses `GEMINI_FALLBACK_MODEL` after a temporary capacity error.
+One-shot requests use `GEMINI_MODEL` first. They use `GEMINI_FALLBACK_MODEL` after a temporary capacity error.
 
-## 5. Ask league questions
+## 5. Install the direct command
+
+Link the project into the active Node.js installation.
+
+```bash
+npm link
+```
+
+Start the interactive interface.
+
+```bash
+seb
+```
+
+The npm command remains available when you do not want a link.
+
+```bash
+npm run seb
+```
+
+Read the [command-line guide](CLI.md) for pipes, JSON output, and exit codes.
+
+## 6. Ask league questions
 
 Include the Sleeper league ID in each league request.
 
@@ -76,9 +114,9 @@ Use a user name when you do not know the league ID.
 npm run ask -- "Find the Sleeper user arvind and list the user's 2026 NFL leagues."
 ```
 
-Seb can then use a returned league ID in a later prompt.
+Interactive chat can use a returned league ID in a later prompt.
 
-## 6. Run the project checks
+## 7. Run the project checks
 
 Run the type check and all unit tests.
 
@@ -98,7 +136,7 @@ Check for newer direct dependencies.
 npm run deps:check
 ```
 
-## 7. Start a chat connector
+## 8. Start a chat connector
 
 Choose one platform guide.
 

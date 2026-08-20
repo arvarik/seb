@@ -35,6 +35,7 @@ import { InteractiveUiState } from './interactive/ui-state.js';
 import {
   createSessionState,
   formatSessionContext,
+  inferExperienceMode,
   recordUsage,
 } from './interactive/session.js';
 import { isModelCapacityError } from './model-capacity-error.js';
@@ -51,7 +52,11 @@ import {
   FileSetupProfileStore,
   formatSetupProfile,
 } from './setup/profile.js';
-import { applySetupProfile, runFirstRunSetup } from './setup/wizard.js';
+import {
+  applySetupProfile,
+  refreshAutomaticSession,
+  runFirstRunSetup,
+} from './setup/wizard.js';
 
 const MAX_STDIN_BYTES = 128 * 1024;
 const packageJson = createRequire(import.meta.url)('../package.json') as {
@@ -93,6 +98,10 @@ interface AnswerResult {
     inputTokens: number | null;
     outputTokens: number | null;
   };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function runCli(
@@ -168,7 +177,7 @@ export async function runCli(
       return 0;
     }
     case 'setup':
-      await runSetupCommand(streams, environment);
+      await runSetupCommand(streams, environment, command.username);
       return 0;
     case 'doctor': {
       const report = await runDoctor({
@@ -237,12 +246,18 @@ async function startInteractiveChat(
   const profileStore = new FileSetupProfileStore({ environment });
   let profile = await profileStore.load();
   if (!profile) {
-    streams.stdout.write('Seb found no local profile. Creating a team-independent profile.\n');
-    profile = await runSetupWizard(environment, clients.sleeperClient, profileStore);
+    profile = await runSetupWizard(environment, profileStore);
   }
   const session = createSessionState();
   applySetupProfile(profile, session);
   const uiState = new InteractiveUiState();
+  try {
+    await refreshAutomaticSession(clients.sleeperClient, session);
+  } catch (error) {
+    uiState.notification = session.user
+      ? `Seb could not refresh @${session.user}: ${errorMessage(error)}`
+      : `Seb could not refresh the current NFL state: ${errorMessage(error)}`;
+  }
   const agent = createFantasyFootballAgent({
     apiKey: selection.apiKey,
     model: selection.primaryModel,
@@ -279,25 +294,25 @@ async function startInteractiveChat(
 async function runSetupCommand(
   streams: CliStreams,
   environment: NodeJS.ProcessEnv,
+  username?: string,
 ): Promise<void> {
   const store = new FileSetupProfileStore({ environment });
-  const sleeper = new SleeperClient();
-  const profile = await runSetupWizard(environment, sleeper, store);
-  streams.stdout.write(`Seb saved the team-independent profile.\n\n${formatSetupProfile(profile, store.path)}\n`);
+  const profile = await runSetupWizard(environment, store, username);
+  streams.stdout.write(`Seb saved the account preference.\n\n${formatSetupProfile(profile, store.path)}\n`);
 }
 
 async function runSetupWizard(
   environment: NodeJS.ProcessEnv,
-  sleeper: SleeperClient,
   store: FileSetupProfileStore,
+  username?: string,
 ) {
   const primaryModel = environment.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
   const fallbackModel = environment.GEMINI_FALLBACK_MODEL?.trim() ||
     DEFAULT_GEMINI_FALLBACK_MODEL;
   return runFirstRunSetup({
     environment,
-    sleeper,
     store,
+    ...(username ? { username } : {}),
     verifyApiKey: async (apiKey) => {
       await verifyGeminiApi(apiKey, primaryModel, fallbackModel);
     },
@@ -354,21 +369,33 @@ async function answerOneQuestion(
 
   const selection = selectModels(environment, command.model);
   if (command.json) {
-    const result = await generateAnswer(selection, prompt, streams.stderr);
+    const result = await generateAnswer(
+      selection,
+      prompt,
+      streams.stderr,
+      environment,
+    );
     streams.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
 
-  await streamAnswer(selection, prompt, streams, command.progress);
+  await streamAnswer(selection, prompt, streams, command.progress, environment);
 }
 
 async function generateAnswer(
   selection: ModelSelection,
   prompt: string,
   stderr: CliOutput,
+  environment: NodeJS.ProcessEnv,
 ): Promise<AnswerResult> {
   try {
-    return await generateWithModel(selection, selection.primaryModel, prompt, false);
+    return await generateWithModel(
+      selection,
+      selection.primaryModel,
+      prompt,
+      false,
+      environment,
+    );
   } catch (error) {
     if (
       !isModelCapacityError(error) ||
@@ -377,7 +404,13 @@ async function generateAnswer(
       throw error;
     }
     writeFallbackNotice(stderr, selection);
-    return generateWithModel(selection, selection.fallbackModel, prompt, true);
+    return generateWithModel(
+      selection,
+      selection.fallbackModel,
+      prompt,
+      true,
+      environment,
+    );
   }
 }
 
@@ -386,13 +419,20 @@ async function generateWithModel(
   model: string,
   prompt: string,
   fallbackUsed: boolean,
+  environment: NodeJS.ProcessEnv,
 ): Promise<AnswerResult> {
   const sources = new SourceTracker();
   const clients = createDataClients(selection.nwsUserAgent, sources);
+  const automaticContext = await loadAutomaticContext(
+    environment,
+    clients.sleeperClient,
+    prompt,
+  );
   const researchAgent = createFantasyFootballAgent({
     apiKey: selection.apiKey,
     model,
     ...clients,
+    getRuntimeInstructions: () => automaticContext,
   });
   const research = await researchAgent.generate({ prompt });
   for (const source of research.sources) {
@@ -466,6 +506,7 @@ async function streamAnswer(
   prompt: string,
   streams: CliStreams,
   progressEnabled: boolean,
+  environment: NodeJS.ProcessEnv,
 ): Promise<void> {
   let wroteText = false;
   const webSources = new Map<string, { title?: string; url: string }>();
@@ -475,10 +516,16 @@ async function streamAnswer(
       selection.nwsUserAgent,
       new SourceTracker(),
     );
+    const automaticContext = await loadAutomaticContext(
+      environment,
+      clients.sleeperClient,
+      prompt,
+    );
     const agent = createFantasyFootballAgent({
       apiKey: selection.apiKey,
       model,
       ...clients,
+      getRuntimeInstructions: () => automaticContext,
     });
     const result = await agent.stream({ prompt });
 
@@ -531,6 +578,31 @@ async function streamAnswer(
     );
   }
   streams.stdout.write('\n');
+}
+
+async function loadAutomaticContext(
+  environment: NodeJS.ProcessEnv,
+  sleeper: SleeperClient,
+  prompt: string,
+): Promise<string> {
+  const session = createSessionState();
+  session.mode = inferExperienceMode(prompt, session.mode);
+  const profileStore = new FileSetupProfileStore({ environment });
+  try {
+    const profile = await profileStore.load();
+    if (profile) applySetupProfile(profile, session);
+    session.mode = inferExperienceMode(prompt, session.mode);
+  } catch (error) {
+    session.accountError = `Seb could not read the local profile: ${errorMessage(error)}`;
+    session.accountStatus = 'error';
+  }
+  try {
+    await refreshAutomaticSession(sleeper, session);
+  } catch (error) {
+    session.accountError = errorMessage(error);
+    session.accountStatus = 'error';
+  }
+  return formatSessionContext(session);
 }
 
 function selectModels(

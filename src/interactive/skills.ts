@@ -7,6 +7,11 @@ export interface SebSkill {
   title: string;
 }
 
+export interface SebSkillInvocation {
+  prompt: string;
+  skill: SebSkill;
+}
+
 export const SEB_SKILLS: readonly SebSkill[] = [
   {
     id: 'general',
@@ -228,6 +233,20 @@ export function findSkill(value: string): SebSkill | null {
       (skill) => skill.id === normalized || skill.title.toLowerCase() === value.trim().toLowerCase(),
     ) ?? null
   );
+}
+
+export function parseSkillInvocation(value: string): SebSkillInvocation | null {
+  const parts = value.trim().split(/\s+/u).filter(Boolean);
+  for (let length = parts.length; length > 0; length -= 1) {
+    const skill = findSkill(parts.slice(0, length).join(' '));
+    if (skill) {
+      return {
+        prompt: parts.slice(length).join(' '),
+        skill,
+      };
+    }
+  }
+  return null;
 }
 
 export function getSkill(id: string): SebSkill {

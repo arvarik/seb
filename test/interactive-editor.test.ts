@@ -53,4 +53,31 @@ describe('TerminalKeyParser', () => {
 
     expect(parser.parse('\x1b[Z')).toEqual([{ type: 'ignore' }]);
   });
+
+  it('parses SGR and legacy mouse-wheel input', () => {
+    const parser = new TerminalKeyParser();
+
+    expect(parser.parse('\x1b[<64;12;8M\x1b[<65;12;8M')).toEqual([
+      { type: 'scroll-up' },
+      { type: 'scroll-down' },
+    ]);
+    expect(parser.parse('\x1b[M`!!\x1b[Ma!!')).toEqual([
+      { type: 'scroll-up' },
+      { type: 'scroll-down' },
+    ]);
+  });
+
+  it('collects an incomplete legacy mouse event across chunks', () => {
+    const parser = new TerminalKeyParser();
+
+    expect(parser.parse('\x1b[M`')).toEqual([]);
+    expect(parser.parse('!!')).toEqual([{ type: 'scroll-up' }]);
+  });
+
+  it('collects an incomplete SGR mouse event across chunks', () => {
+    const parser = new TerminalKeyParser();
+
+    expect(parser.parse('\x1b[<64;12;')).toEqual([]);
+    expect(parser.parse('8M')).toEqual([{ type: 'scroll-up' }]);
+  });
 });

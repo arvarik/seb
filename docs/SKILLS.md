@@ -1,8 +1,20 @@
 # Skill guide
 
-A skill gives Seb focused instructions for one NFL or fantasy workflow.
+A skill gives Seb focused instructions for one advanced NFL or fantasy workflow.
+
+Most requests do not need a selected skill.
+
+Ask naturally or use Explore, My Fantasy, and Analyze first.
 
 Select a skill with `/skill NAME` inside interactive chat.
+
+Run a skill immediately with `/skill NAME QUESTION`.
+
+```text
+/skill player-info Lamar Jackson
+```
+
+Seb selects `player-info` and sends `Lamar Jackson` as the question.
 
 The default skill is `general`.
 
@@ -71,7 +83,9 @@ The `weather-watch` skill finds wind, rain, cold, heat, and active alerts.
 
 It can screen every outdoor game in one NFL week.
 
-Run `/week current` to load the current season, week, and season type from Sleeper.
+Seb loads the current season, week, and season type from Sleeper automatically.
+
+Run `/week current` only to retry or override that automatic value.
 
 The weather tools use `REG` or `POST` to select the correct nflverse schedule.
 

@@ -7,19 +7,21 @@ This design keeps current facts outside model memory.
 ## Request flow
 
 1. The command-line parser selects chat, ask, setup, doctor, cache, snapshot, replay, completion, help, or version mode.
-2. Interactive chat loads a season-only profile or creates one automatically.
-3. The Seb renderer reads and edits the terminal prompt.
-4. The transport runs a slash command locally or sends a normal question to the agent.
-5. `ToolLoopAgent` gives Gemini the read-only tools, grounded web tools, and active session instructions.
-6. Middleware adds valid input examples to each compatible data tool.
-7. An identity tool resolves ambiguous player or team identifiers when necessary.
-8. Gemini selects only the tools that the question needs.
-9. A source client reads a fresh SQLite cache record or requests the source.
-10. Google Search or URL Context returns current public reporting when necessary.
-11. A deterministic function calculates summaries and risk signals.
-12. Gemini explains the returned facts.
-13. The transport adds web sources and contextual next actions.
-14. The Seb renderer draws the response, tool progress, badges, and supported charts.
+2. Seb loads one optional saved Sleeper username.
+3. Seb refreshes the NFL state, league season, leagues, owned rosters, and league settings.
+4. The Seb renderer reads and edits the terminal prompt.
+5. The transport selects Explore, My Fantasy, or Analyze from the question.
+6. The transport runs a slash command locally or sends a normal question to the agent.
+7. `ToolLoopAgent` gives Gemini the read-only tools, grounded web tools, and active session instructions.
+8. Middleware adds valid input examples to each compatible data tool.
+9. An identity tool resolves ambiguous player or team identifiers when necessary.
+10. Gemini selects only the tools that the question needs.
+11. A source client reads a fresh SQLite cache record or requests the source.
+12. Google Search or URL Context returns current public reporting when necessary.
+13. A deterministic function calculates summaries and risk signals.
+14. Gemini explains the returned facts.
+15. The transport adds web sources and contextual next actions.
+16. The Seb renderer draws the response, responsive tables, record cards, tool progress, badges, and supported charts.
 
 ## Agent harness
 
@@ -63,13 +65,23 @@ Seb supplies a custom `ChatTransport` around `DirectChatTransport`.
 
 The direct transport enables AI SDK source stream parts.
 
-The custom transport intercepts slash commands before the model call.
+The custom transport intercepts local slash commands before the model call.
+
+It selects an experience from normal question terms.
+
+Explicit `/explore`, `/fantasy`, and `/analyze` commands can select the same experiences.
+
+An inline `/skill NAME QUESTION` command selects the skill and sends the question to the model.
 
 It removes local command messages from later model context.
 
 It also supports a `/new` model-context boundary.
 
 The transport appends contextual suggestions as UI stream parts.
+
+The transport records the active player from compatible tool input.
+
+It removes synthetic suggestion text before the next model request.
 
 The transport also appends validated grounded web sources.
 
@@ -82,6 +94,10 @@ The `/complete` command ranks local command and argument candidates.
 The renderer opens a live palette when the input starts with `/`.
 
 The renderer calculates the palette, transcript, header, and prompt rows together.
+
+The renderer enables terminal mouse reporting for transcript scrolling.
+
+It renders each contextual suggestion on a separate footer row.
 
 Arrow keys change the selection. Tab fills the selected value.
 
@@ -103,9 +119,15 @@ Tests can verify those modules without a live terminal or model request.
 
 The session stores these values in memory.
 
-- NFL season and week.
-- Sleeper user, league, and roster.
+- Active Explore, My Fantasy, or Analyze experience.
+- NFL season, phase, and display week.
+- Sleeper league season.
+- Sleeper username and user ID.
+- Every discovered league and owned roster.
+- Available trade, playoff, and waiver settings.
+- Optional focused league and roster.
 - NFL team.
+- Active NFL player.
 - Active skill.
 - Token totals.
 - Model-context boundary.
@@ -114,15 +136,17 @@ The agent receives these values through dynamic call instructions.
 
 A direct value in the user question overrides the active session value.
 
-## Setup profile
+## Account preferences
 
 Interactive chat loads one validated JSON profile before it starts the TUI.
 
-The top-level setup command validates Gemini and reads the current NFL season.
+One-shot requests load the same profile before they call the agent.
 
-The profile stores only the NFL season, schema version, and update time.
+The top-level setup command validates Gemini and accepts one optional Sleeper username.
 
-Sleeper and NFL team values remain in the in-memory session.
+The profile stores only that username, the schema version, and the update time.
+
+League, roster, NFL state, and subject values remain in the in-memory session.
 
 It never stores an API key.
 

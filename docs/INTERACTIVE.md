@@ -1,6 +1,6 @@
 # Interactive guide
 
-The interactive interface keeps a conversation and active NFL or fantasy context.
+The interactive interface keeps a conversation and selects useful context automatically.
 
 Start it with either command.
 
@@ -13,50 +13,46 @@ Run `/help` inside Seb to show the local command list.
 
 Local commands do not call Gemini. Regular questions call Gemini and the required data tools.
 
-Seb creates a team-independent setup profile when no local profile exists.
+Seb refreshes the NFL season, phase, display week, and Sleeper league season at startup.
 
-The saved profile supplies only the default season.
+The optional preferences file stores one Sleeper username.
 
-Sleeper users, leagues, rosters, and NFL teams remain session-specific.
+Seb then discovers every current league and owned roster for that account.
 
 ## Recommended first session
 
-1. Show the loaded profile and session values.
+1. Ask an Explore question without setup.
 
    ```text
-   /profile show
-   /context
+   Show Derrick Henry's profile, recent statistics, and verified news.
    ```
 
-2. Set the current week.
+2. Connect Sleeper when you want My Fantasy.
 
    ```text
-   /week current
+   /connect your-sleeper-name
+   What needs my attention across my leagues?
    ```
 
-3. Set an NFL team when several questions use the same team.
+3. Continue into Analyze from the active subject.
 
    ```text
-   /team SEA
+   Compare him with Saquon Barkley for the upcoming matchup.
    ```
 
-4. Select an analysis skill.
+Seb remembers the active player or team for a natural follow-up.
 
-   ```text
-   /skill start-sit
-   ```
+You do not need to select a week, league, roster, team, or workflow first.
 
-5. Ask a normal question.
+Use an advanced override only when you want another period or one league.
 
-   ```text
-   Compare my two flex choices for this week.
-   ```
-
-Seb uses the active values when a question does not give different values.
+Read the [experience guide](EXPERIENCES.md) for complete user journeys.
 
 ## Home screen and contextual actions
 
-The home screen shows the active season, week, model, skill, and source health.
+The home screen explains Explore, My Fantasy, and Analyze.
+
+The header shows the active experience and current NFL state.
 
 It shows up to three contextual actions.
 
@@ -72,17 +68,19 @@ Press `Ctrl+K` or type `/` to open the command palette.
 
 The menu filters commands after each character.
 
-It groups commands into seven clear sections.
+It groups commands into nine clear sections.
 
 - Essentials
-- Context
-- Analysis
+- Explore
+- My Fantasy
+- Analyze
 - Sources
 - Conversation
 - Preferences
+- Advanced
 - Diagnostics
 
-The empty palette starts with the most common context, skill, and navigation commands.
+The empty palette starts with the three experiences, account connection, and navigation.
 
 It shows active context values and the selected command effect.
 
@@ -134,24 +132,30 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | Command | Result |
 | --- | --- |
 | `/help` or `/?` | Shows every interactive command. |
+| `/explore [QUESTION]` | Opens Explore or runs one Explore question. |
+| `/fantasy [QUESTION]` or `/my` | Opens My Fantasy or runs one account-aware question. |
+| `/analyze [QUESTION]` | Opens Analyze or runs one analysis question. |
+| `/connect USERNAME` | Saves one username and discovers leagues and owned rosters. |
+| `/account` | Shows the connected account and discovered league settings. |
+| `/disconnect` | Removes the saved Sleeper username. |
 | `/commands [SEARCH]` | Searches the command catalog. |
 | `/complete INPUT` | Suggests commands and arguments. |
 | `/shortcuts` | Shows the keyboard shortcut guide. |
 | `/context` or `/status` | Shows the active session values. |
 | `/season YEAR|current` | Sets the active season. |
 | `/week NUMBER|current|clear` | Sets or clears the active week. |
-| `/user NAME|clear` | Sets or clears the Sleeper user. |
-| `/leagues [SLEEPER_USER]` | Discovers leagues for the active season. |
-| `/league ID|clear` | Sets or clears the Sleeper league. |
+| `/user NAME|clear` | Runs the legacy account connection command. |
+| `/leagues [SLEEPER_USER] [YEAR]` | Refreshes current or historical fantasy context. |
+| `/league ID|all` | Focuses one discovered league or all leagues. |
 | `/rosters [LEAGUE_ID]` | Lists every roster in a Sleeper league. |
 | `/roster ID|clear` | Sets or clears the Sleeper roster. |
 | `/team CODE|clear` | Sets or clears the NFL team. |
 | `/skills` | Lists all analysis skills. |
-| `/skill NAME|list` | Selects or lists a skill. |
+| `/skill NAME [QUESTION]` | Selects a skill, or selects it and runs one question. |
 | `/retry` | Runs the latest model prompt again. |
 | `/edit` | Places the latest model prompt in the editor. |
-| `/setup` | Saves team-independent defaults. |
-| `/profile [show|load|clear]` | Reads or removes the setup profile. |
+| `/setup [USERNAME]` | Saves the current or supplied Sleeper username. |
+| `/profile [show|load|clear]` | Reads or removes the preferences file. |
 | `/sources` | Shows source URLs and cache outcomes. |
 | `/source INDEX` | Shows one numbered source link. |
 | `/cache` | Shows SQLite cache and snapshot counts. |
@@ -184,7 +188,15 @@ Earlier command names remain available as aliases.
 | `/save` | `/export` |
 | `/completion` | `/shell-completion` |
 
-## Context commands
+## Automatic context and advanced overrides
+
+Seb normally gets the current period from Sleeper.
+
+It also gets league and roster IDs from the connected account.
+
+Run `/context` to inspect the selected values.
+
+Use these advanced commands only when a question needs a different scope.
 
 | Command | Result |
 | --- | --- |
@@ -195,51 +207,52 @@ Earlier command names remain available as aliases.
 | `/week NUMBER` | Sets an NFL week from 1 through 22. |
 | `/week current` | Reads the current week from Sleeper. |
 | `/week clear` | Removes the active week. |
-| `/user NAME` | Sets the Sleeper user. |
-| `/leagues [USER]` | Lists the user's leagues for the active season. |
-| `/league ID` | Sets the numeric Sleeper league ID. |
+| `/user NAME` | Connects a Sleeper account through the legacy command. |
+| `/leagues [USER] [YEAR]` | Refreshes current or historical leagues. |
+| `/league ID` | Focuses one discovered Sleeper league. |
+| `/league all` | Returns My Fantasy to all discovered leagues. |
 | `/rosters [LEAGUE_ID]` | Lists every roster in the selected league. |
 | `/roster ID` | Sets the Sleeper roster ID. |
 | `/team CODE` | Sets an NFL team code, such as `SEA`. |
 
-Use `clear` with `/user`, `/league`, `/roster`, or `/team` to remove that value.
+Use `/disconnect` to remove the saved account.
 
-## Setup and profile commands
+For historical fantasy research, run `/leagues USERNAME YEAR`.
 
-Run `/setup` to save the active season as the global default.
+The normal `/connect USERNAME` path always returns to the current Sleeper state.
 
-Setup never saves a Sleeper user, league, roster, or NFL team.
+## Account preference commands
 
-Run `/season YEAR` first when you want another default season.
+Run `/connect USERNAME` for the normal account flow.
 
-Discover a user's leagues.
+Seb validates the user, discovers leagues, finds owned rosters, and saves the username.
+
+Run `/account` to show the automatic fantasy context.
+
+Run `/disconnect` to remove the saved username.
 
 ```text
-/leagues your-sleeper-name
+/connect your-sleeper-name
+/account
+/disconnect
 ```
 
-Select one returned league.
+The preferences file never contains a league, roster, NFL team, season, week, or Gemini key.
+
+Use `/league ID` only when you want one league instead of the account-wide view.
 
 ```text
 /league 123456789
+/league all
 ```
 
-List every roster in that league, then select one.
-
-```text
-/rosters
-/roster 4
-```
-
-Seb applies these values only to the active interactive session.
-
-Show the saved profile.
+Show the saved preferences file.
 
 ```text
 /profile show
 ```
 
-Load its default season into the current session again.
+Load its username and refresh the current fantasy context.
 
 ```text
 /profile load
@@ -251,11 +264,7 @@ Remove the saved file.
 /profile clear
 ```
 
-The clear action does not erase current session values.
-
-Use the related context commands to clear those values.
-
-The profile never contains the Gemini key.
+The clear action removes the file without changing the active session.
 
 Read the [setup guide](SETUP.md) for the path and file permissions.
 
@@ -265,6 +274,8 @@ Run `/skills` to list every skill.
 
 Run `/skill NAME` to select one skill.
 
+Add a question after the name to select and run the skill in one step.
+
 ```text
 /skill waiver-scout
 /skill weather-watch
@@ -272,11 +283,12 @@ Run `/skill NAME` to select one skill.
 /skill player-info
 /skill team-info
 /skill nfl-stats
+/skill player-info Lamar Jackson
 ```
 
 The skill changes the analysis instructions. It does not hide any read-only data tool.
 
-The home screen shows actions for the active skill before optional setup actions.
+The home screen keeps workflows under the Advanced command group.
 
 An action with missing values stays in the editor for completion.
 
@@ -313,6 +325,8 @@ Press `Alt+Enter` to insert a new line.
 Bracketed paste keeps a multiline paste inside one prompt.
 
 Use `Up` and `Down` to read prior prompts.
+
+Use the mouse wheel or `Page Up` and `Page Down` to scroll the transcript.
 
 Press `Ctrl+R` to search history with the current editor text.
 
@@ -427,7 +441,13 @@ Seb adds contextual next actions after each answer.
 
 Run `/next` when you want only the current action list.
 
-The suggestions use the active skill and the missing session values.
+The suggestions use the active experience, player, team, and fantasy account.
+
+Player suggestions repeat the active player name.
+
+Seb learns the active player from player tool input and inline player skills.
+
+The model does not receive the interface suggestion footer as conversation text.
 
 Run `/usage` to show model requests and token totals.
 
@@ -523,7 +543,9 @@ Run `/new` before an unrelated research task.
 
 This command removes earlier messages from the next model request.
 
-The command keeps season, week, league, roster, team, and skill values.
+The command keeps the automatic NFL state and Sleeper account.
+
+It clears the active subject and advanced workflow.
 
 Use the related `clear` commands when you also want to remove those values.
 
@@ -538,22 +560,16 @@ Run `/exit`, `/quit`, or `/q` to exit from an empty prompt.
 ### Start and sit
 
 ```text
-/season 2026
-/week 8
-/team SEA
-/skill start-sit
-Compare Player A and Player B in PPR. Include usage, opponent, and weather.
+/analyze Compare Player A and Player B in PPR. Include usage, opponent, and weather.
 ```
 
 ### Weather watch
 
 ```text
-/week current
-/skill weather-watch
-Which outdoor games have the highest fantasy weather risk?
+/analyze Which outdoor games have the highest fantasy weather risk this week?
 ```
 
-`/week current` also loads the preseason, regular-season, or postseason type.
+Seb loads the current week and season type automatically.
 
 During preseason, nflverse can lack the required game row.
 
@@ -562,8 +578,7 @@ Seb then gives a home-stadium outlook and labels the missing venue and kickoff m
 ### Player information
 
 ```text
-/skill player-info
-Show Justin Jefferson's player profile and 2025 NFL game log.
+/explore Show Justin Jefferson's player profile and 2025 NFL game log.
 ```
 
 This skill does not add fantasy advice unless you request it.
@@ -571,9 +586,7 @@ This skill does not add fantasy advice unless you request it.
 ### Team information
 
 ```text
-/team SEA
-/skill team-info
-Show the team profile, current player records, schedule, and recent results.
+/explore Show Seattle's team profile, current player records, schedule, and recent results.
 ```
 
 Sleeper player records are not an official NFL roster source.
@@ -581,33 +594,23 @@ Sleeper player records are not an official NFL roster source.
 ### NFL facts and stats
 
 ```text
-/week 8
-/skill nfl-stats
-Show the complete NFL schedule and recorded results for this week.
+/explore Show the complete NFL schedule and recorded results for this week.
 ```
 
 ### Trade review
 
 ```text
-/season 2026
-/skill trade-review
-Compare Player A for Player B. Show production, usage, roster fit, and risk.
+/analyze Compare Player A for Player B. Show production, usage, roster fit, and risk.
 ```
 
 ### League audit
 
 ```text
-/league 123456789
-/week 8
-/skill league-audit
-Rank every roster and explain each main weakness.
+/fantasy Rank every roster in my leagues and explain each main weakness.
 ```
 
 ### Waiver scout
 
 ```text
-/league 123456789
-/week 8
-/skill waiver-scout
-Rank the top trending adds by recent opportunity and schedule.
+/fantasy Rank the top trending adds by recent opportunity and schedule.
 ```

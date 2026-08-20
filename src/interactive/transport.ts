@@ -34,8 +34,12 @@ import {
 import {
   applySetupProfile,
   checkGeminiApiKey,
+  connectSleeperSession,
   createSetupProfile,
-  discoverSleeperAccount,
+  disconnectSleeperSession,
+  focusSessionLeague,
+  refreshAutomaticSession,
+  resolveCurrentNflWeek,
 } from '../setup/wizard.js';
 import {
   completeInteractiveInput,
@@ -43,15 +47,25 @@ import {
   formatCommandCatalog,
   formatCompletions,
   generateShellCompletion,
+  interactiveCommandArgumentError,
+  parseInteractiveCommandInput,
   type CompletionShell,
 } from './commands.js';
 import {
+  formatFantasyDashboard,
   formatSessionStatus,
   getContextualSuggestions,
+  inferExperienceMode,
+  inferPlayerNameFromPrompt,
   normalizeSessionSeasonType,
+  recordSessionToolInput,
   type SessionState,
 } from './session.js';
-import { findSkill, formatSkillList, getSkill } from './skills.js';
+import {
+  formatSkillList,
+  getSkill,
+  parseSkillInvocation,
+} from './skills.js';
 import { sourceBadge } from './presentation.js';
 import { InteractiveUiState } from './ui-state.js';
 
@@ -76,6 +90,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   private readonly delegate: ChatTransport<UIMessage>;
   private readonly options: SebInteractiveTransportOptions;
   private readonly profileStore: SetupProfileStore;
+  private readonly skillPromptByMessageId = new Map<string, string>();
   private readonly uiState: InteractiveUiState;
 
   constructor(options: SebInteractiveTransportOptions) {
@@ -95,7 +110,49 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   ): Promise<ReadableStream<UIMessageChunk>> {
     const lastMessage = options.messages.at(-1);
     const text = lastMessage?.role === 'user' ? messageText(lastMessage).trim() : '';
-    if (lastMessage?.role === 'user' && text.startsWith('/')) {
+    const parsed = parseInteractiveCommandInput(text);
+    if (lastMessage?.role === 'user' && parsed?.command?.name === 'skill') {
+      const invocation = parseSkillInvocation(parsed.argumentText);
+      if (invocation?.prompt) {
+        this.options.session.skillId = invocation.skill.id;
+        if (invocation.skill.id === 'player-info') {
+          const player = inferPlayerNameFromPrompt(invocation.prompt);
+          if (player) this.options.session.player = player;
+        }
+        this.uiState.latestPrompt = invocation.prompt;
+        this.uiState.recordCommand('skill');
+        this.skillPromptByMessageId.set(lastMessage.id, invocation.prompt);
+        const stream = await this.delegate.sendMessages({
+          ...options,
+          messages: this.modelMessages(options.messages),
+        });
+        return appendContextualSuggestions(
+          stream,
+          this.options.session,
+          this.options.sources,
+          this.uiState,
+        );
+      }
+    }
+    const selectedMode = parsed?.command ? experienceModeForCommand(parsed.command.name) : null;
+    if (lastMessage?.role === 'user' && selectedMode && parsed?.argumentText) {
+      this.options.session.mode = selectedMode;
+      this.options.session.skillId = 'general';
+      this.uiState.latestPrompt = parsed.argumentText;
+      this.uiState.recordCommand(parsed.command?.name ?? selectedMode);
+      this.skillPromptByMessageId.set(lastMessage.id, parsed.argumentText);
+      const stream = await this.delegate.sendMessages({
+        ...options,
+        messages: this.modelMessages(options.messages),
+      });
+      return appendContextualSuggestions(
+        stream,
+        this.options.session,
+        this.options.sources,
+        this.uiState,
+      );
+    }
+    if (lastMessage?.role === 'user' && parsed) {
       this.commandMessageIds.add(lastMessage.id);
       let response: string;
       try {
@@ -106,6 +163,9 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       return localTextStream(withSuggestions(response, this.options.session, this.uiState));
     }
 
+    if (text) {
+      this.options.session.mode = inferExperienceMode(text, this.options.session.mode);
+    }
     const stream = await this.delegate.sendMessages({
       ...options,
       messages: this.modelMessages(options.messages),
@@ -140,7 +200,10 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         continue;
       }
       skipNextAssistant = false;
-      filtered.push(message);
+      const skillPrompt = this.skillPromptByMessageId.get(message.id);
+      const modelMessage = skillPrompt ? replaceMessageText(message, skillPrompt) : message;
+      const sanitized = sanitizeModelMessage(modelMessage);
+      if (sanitized.parts.length > 0) filtered.push(sanitized);
     }
     return filtered;
   }
@@ -150,14 +213,49 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     messages: UIMessage[],
     messageId: string,
   ): Promise<string> {
-    const [rawName, ...arguments_] = input.slice(1).trim().split(/\s+/);
-    const name = rawName?.toLowerCase() ?? '';
+    const parsed = parseInteractiveCommandInput(input);
+    if (!parsed) {
+      throw new Error('Add a command after the slash. Run /help.');
+    }
+    const argumentError = interactiveCommandArgumentError(parsed);
+    if (argumentError) {
+      throw new Error(argumentError);
+    }
+    const arguments_ = parsed.arguments;
+    const name = parsed.command?.name ?? parsed.name;
     const state = this.options.session;
     if (name) {
       this.uiState.recordCommand(findInteractiveCommand(name)?.name ?? name);
     }
 
     switch (name) {
+      case 'explore':
+      case 'analyze':
+      case 'fantasy': {
+        const mode = experienceModeForCommand(name);
+        if (!mode) throw new Error('Seb could not select that experience.');
+        state.mode = mode;
+        state.skillId = 'general';
+        return mode === 'fantasy'
+          ? formatFantasyDashboard(state)
+          : `Seb is ready to ${mode}. Ask a question in plain language.`;
+      }
+      case 'connect': {
+        const username = arguments_[0];
+        if (!username) throw new Error('Use /connect <Sleeper username>.');
+        await refreshAutomaticSession(this.options.sleeper, state, username);
+        const profile = createSetupProfile(state.user);
+        await this.profileStore.save(profile);
+        return `${formatFantasyDashboard(state)}\n\nSeb saved this username for future sessions.`;
+      }
+      case 'disconnect': {
+        disconnectSleeperSession(state);
+        await this.profileStore.save(createSetupProfile());
+        return 'Seb disconnected the Sleeper account. Explore and Analyze remain available.';
+      }
+      case 'account':
+        state.mode = 'fantasy';
+        return formatFantasyDashboard(state);
       case 'help':
       case '?':
         return INTERACTIVE_HELP;
@@ -175,14 +273,15 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'skills':
         return `## Skills\n\n${formatSkillList()}`;
       case 'skill': {
-        const value = arguments_.join(' ');
-        if (!value || value === 'list') {
+        const value = parsed.argumentText;
+        if (!value || value.toLowerCase() === 'list') {
           return `## Skills\n\n${formatSkillList()}`;
         }
-        const skill = findSkill(value);
-        if (!skill) {
+        const invocation = parseSkillInvocation(value);
+        if (!invocation || invocation.prompt) {
           throw new Error(`Unknown skill: ${value}. Run /skills.`);
         }
+        const skill = invocation.skill;
         state.skillId = skill.id;
         return `The active skill is now \`${skill.id}\`. ${skill.description}`;
       }
@@ -192,62 +291,67 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         return 'The Seb terminal places the latest model prompt in the editor.';
       case 'season': {
         const value = arguments_[0];
-        const nfl = value === 'current'
+        const nfl = value?.toLowerCase() === 'current'
           ? await this.options.sleeper.getNflState()
           : null;
         const season = nfl?.season ?? value;
         state.season = validInteger(season, 1999, 2100, 'season');
+        if (nfl) {
+          state.leagueSeason = validInteger(
+            nfl.league_season ?? nfl.season,
+            1999,
+            2100,
+            'league season',
+          );
+        }
         state.seasonType = nfl
           ? normalizeSessionSeasonType(nfl.season_type)
           : null;
-        state.leagueOptions = [];
-        state.rosterOptions = [];
         return `The active NFL season is now ${state.season}.`;
       }
       case 'week': {
         const value = arguments_[0];
-        if (value === 'clear') {
+        const keyword = value?.toLowerCase();
+        if (keyword === 'clear') {
           state.week = null;
           return 'The active NFL week is now unset.';
         }
-        if (value === 'current') {
+        if (keyword === 'current') {
           const nfl = await this.options.sleeper.getNflState();
           state.season = validInteger(nfl.season, 1999, 2100, 'season');
+          state.leagueSeason = validInteger(
+            nfl.league_season ?? nfl.season,
+            1999,
+            2100,
+            'league season',
+          );
           state.seasonType = normalizeSessionSeasonType(nfl.season_type);
-          state.week = validInteger(nfl.week, 1, 22, 'week');
+          state.week = resolveCurrentNflWeek(nfl);
         } else {
           state.seasonType = null;
           state.week = validInteger(value, 1, 22, 'week');
         }
-        return `The active NFL week is now ${state.week}.`;
+        return `The active NFL week is now ${state.week ?? 'unset'}.`;
       }
       case 'leagues': {
-        const username = arguments_.join(' ') || state.user;
+        const username = arguments_[0] || state.user;
         if (!username) {
-          throw new Error('Use /leagues <Sleeper user> or set /user first.');
+          throw new Error('Use /connect <Sleeper username>.');
         }
-        const account = await discoverSleeperAccount(
-          this.options.sleeper,
-          username,
-          state.season,
-        );
-        state.user = account.user.username ?? username;
-        state.leagueOptions = account.leagues.map((league) => league.league_id);
-        state.rosterOptions = [];
-        if (account.leagues.length === 0) {
-          return `Sleeper found no NFL leagues for ${state.user} in ${state.season}.`;
+        if (arguments_[1]) {
+          state.leagueSeason = validInteger(
+            arguments_[1],
+            1999,
+            2100,
+            'league season',
+          );
         }
-        return [
-          `## Sleeper leagues for ${state.user}`,
-          '',
-          ...account.leagues.map(
-            (league) => `- ${league.name}: \`${league.league_id}\` (${league.total_rosters} rosters)`,
-          ),
-          '',
-          'Select one with `/league <league ID>`.',
-        ].join('\n');
+        await connectSleeperSession(this.options.sleeper, state, username);
+        await this.profileStore.save(createSetupProfile(state.user));
+        return formatFantasyDashboard(state);
       }
       case 'rosters': {
+        state.mode = 'fantasy';
         const leagueId = optionalIdentifier(
           arguments_[0] ?? state.leagueId ?? undefined,
           /^\d+$/,
@@ -272,21 +376,40 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           'Select one with `/roster <roster ID>`.',
         ].join('\n');
       }
-      case 'league':
-        state.leagueId = optionalIdentifier(arguments_[0], /^\d+$/, 'Sleeper league ID');
-        state.rosterOptions = [];
-        return `The active Sleeper league ID is now ${state.leagueId ?? 'unset'}.`;
-      case 'roster': {
+      case 'league': {
+        state.mode = 'fantasy';
         const value = arguments_[0];
-        state.rosterId = value === 'clear' ? null : validInteger(value, 1, 1_000_000, 'roster ID');
+        const leagueId = value?.toLowerCase() === 'clear' || value?.toLowerCase() === 'all'
+          ? null
+          : optionalIdentifier(value, /^\d+$/, 'Sleeper league ID');
+        focusSessionLeague(state, leagueId);
+        const label = leagueId
+          ? state.leagues.find((league) => league.leagueId === leagueId)?.name ?? leagueId
+          : 'all discovered leagues';
+        return `Seb will use ${label} as the fantasy focus.`;
+      }
+      case 'roster': {
+        state.mode = 'fantasy';
+        const value = arguments_[0];
+        state.rosterId = value?.toLowerCase() === 'clear'
+          ? null
+          : validInteger(value, 1, 1_000_000, 'roster ID');
         return `The active Sleeper roster ID is now ${state.rosterId ?? 'unset'}.`;
       }
-      case 'user':
-        state.user = optionalIdentifier(arguments_.join(' '), /^[A-Za-z0-9_.-]{1,100}$/, 'Sleeper user');
-        state.leagueOptions = [];
-        state.rosterOptions = [];
-        return `The active Sleeper user is now ${state.user ?? 'unset'}.`;
+      case 'user': {
+        const username = arguments_[0];
+        if (username?.toLowerCase() === 'clear') {
+          disconnectSleeperSession(state);
+          await this.profileStore.save(createSetupProfile());
+          return 'Seb disconnected the Sleeper account.';
+        }
+        if (!username) throw new Error('Use /connect <Sleeper username>.');
+        await refreshAutomaticSession(this.options.sleeper, state, username);
+        await this.profileStore.save(createSetupProfile(state.user));
+        return formatFantasyDashboard(state);
+      }
       case 'team':
+        state.mode = 'explore';
         state.team = resolveTeam(arguments_.join(' '));
         return `The active NFL team is now ${state.team ?? 'unset'}.`;
       case 'setup':
@@ -403,10 +526,14 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'new':
       case 'clear':
         state.contextAfterMessageId = messageId;
+        state.mode = 'explore';
+        state.player = null;
+        state.skillId = 'general';
+        state.team = null;
         this.options.sources.clear();
-        return 'Seb started a new model context. The terminal keeps the visible transcript.';
+        return 'Seb started a new Explore context. It kept the automatic NFL state and Sleeper account.';
       case 'history':
-        return arguments_[0] === 'clear'
+        return arguments_[0]?.toLowerCase() === 'clear'
           ? 'Run `/history clear` in the Seb terminal to delete its private prompt history.'
           : 'Run `/history` in the Seb terminal to view its private prompt history.';
       case 'copy':
@@ -423,7 +550,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'doctor': {
         const report = await runDoctor({
           environment: this.options.environment,
-          offline: arguments_[0] === 'offline' || arguments_[0] === '--offline',
+          offline: ['offline', '--offline'].includes(arguments_[0]?.toLowerCase() ?? ''),
         });
         return `\`\`\`text\n${formatDoctorReport(report)}\n\`\`\``;
       }
@@ -475,48 +602,67 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   }
 
   private async runSetupCommand(arguments_: string[]): Promise<string> {
-    if (arguments_.length > 0) {
-      throw new Error('Use /setup without arguments. Set team context with /user, /league, /roster, or /team.');
-    }
+    if (arguments_.length > 1) throw new Error('Use /setup [Sleeper username].');
     const key = checkGeminiApiKey(this.options.environment);
     if (!key.present) {
       throw new Error(key.message);
     }
-    const profile = createSetupProfile(this.options.session.season);
+    if (arguments_[0]) {
+      await refreshAutomaticSession(
+        this.options.sleeper,
+        this.options.session,
+        arguments_[0],
+      );
+    }
+    const profile = createSetupProfile(this.options.session.user);
     await this.profileStore.save(profile);
     return [
-      'Seb saved a team-independent setup profile.',
+      'Seb saved the account preference.',
       '',
       formatSetupProfile(profile, this.profileStore.path),
-      '',
-      'Use `/leagues <Sleeper user>` and `/rosters <league ID>` for fantasy context.',
-      'Use `/team <NFL code>` for one NFL team.',
     ].join('\n');
   }
 
   private async runProfileCommand(action = 'show'): Promise<string> {
-    if (!['show', 'load', 'clear'].includes(action)) {
+    const normalizedAction = action.toLowerCase();
+    if (!['show', 'load', 'clear'].includes(normalizedAction)) {
       throw new Error('Use /profile show, /profile load, or /profile clear.');
     }
-    if (action === 'clear') {
+    if (normalizedAction === 'clear') {
       const removed = await this.profileStore.remove();
       return removed
         ? `Seb removed the local profile at \`${this.profileStore.path}\`.`
-        : 'Seb found no local setup profile.';
+        : 'Seb found no local preferences file.';
     }
     const profile = await this.profileStore.load();
     if (!profile) {
-      return 'Seb found no local setup profile. Run `/setup` for instructions.';
+      return 'Seb found no local preferences file. Run `/setup` to create one.';
     }
-    if (action === 'load') {
+    if (normalizedAction === 'load') {
       applySetupProfile(profile, this.options.session);
+      if (profile.sleeper) {
+        await refreshAutomaticSession(
+          this.options.sleeper,
+          this.options.session,
+          profile.sleeper.username,
+        );
+      }
       return `Seb loaded the profile.\n\n${formatSetupProfile(profile, this.profileStore.path)}`;
     }
     return formatSetupProfile(profile, this.profileStore.path);
   }
 }
 
-export const INTERACTIVE_HELP = `${formatCommandCatalog()}
+export const INTERACTIVE_HELP = `## Use Seb
+
+Ask a player, team, statistic, schedule, or news question in plain language.
+
+- \`/explore [QUESTION]\`: Find NFL information.
+- \`/fantasy [QUESTION]\`: Use the connected Sleeper account.
+- \`/analyze [QUESTION]\`: Compare choices and add decision context.
+- \`/connect USERNAME\`: Save one optional Sleeper username.
+
+${formatCommandCatalog()}
 
 Press Escape or Ctrl+C to exit.`;
 
@@ -535,6 +681,7 @@ export const SHORTCUT_HELP = `## Keyboard shortcuts
 - \`Up\` and \`Down\`: Read prompt history.
 - \`Ctrl+R\`: Search prompt history.
 - \`Page Up\` and \`Page Down\`: Scroll the transcript.
+- \`Mouse wheel\`: Scroll the transcript.
 - \`Escape\`: Close a panel or stop the current request.
 - \`Ctrl+C\`: Exit Seb.`;
 
@@ -564,6 +711,9 @@ function appendContextualSuggestions(
   return stream.pipeThrough(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
       transform(chunk, controller) {
+        if (chunk.type === 'tool-input-available') {
+          recordSessionToolInput(state, chunk.toolName, chunk.input);
+        }
         if (chunk.type === 'source-url') {
           const url = normalizeWebUrl(chunk.url);
           const source = {
@@ -637,6 +787,46 @@ function messageText(message: UIMessage): string {
     .join('\n');
 }
 
+function replaceMessageText(message: UIMessage, text: string): UIMessage {
+  return {
+    ...message,
+    parts: [
+      { type: 'text', text },
+      ...message.parts.filter((part) => part.type !== 'text'),
+    ],
+  };
+}
+
+function sanitizeModelMessage(message: UIMessage): UIMessage {
+  if (message.role !== 'assistant') return message;
+  const parts: UIMessage['parts'] = [];
+  for (const part of message.parts) {
+    if (part.type !== 'text') {
+      parts.push(part);
+      continue;
+    }
+    const text = stripSuggestionText(part.text);
+    if (text) parts.push({ ...part, text });
+  }
+  return {
+    ...message,
+    parts,
+  };
+}
+
+function stripSuggestionText(value: string): string {
+  return value.replace(/(?:^|\n\n)Try next: [^\n]+\s*$/u, '').trim();
+}
+
+function experienceModeForCommand(
+  name: string,
+): 'analyze' | 'explore' | 'fantasy' | null {
+  if (name === 'analyze') return 'analyze';
+  if (name === 'explore') return 'explore';
+  if (name === 'fantasy') return 'fantasy';
+  return null;
+}
+
 function formatSourceRecord(source: DataSourceRecord, index: number): string {
   const cache = source.cacheOutcome
     ? source.cacheOutcome.replace(/-/g, ' ')
@@ -691,7 +881,7 @@ function optionalIdentifier(
   pattern: RegExp,
   label: string,
 ): string | null {
-  if (value === 'clear') {
+  if (value?.toLowerCase() === 'clear') {
     return null;
   }
   if (!value || !pattern.test(value)) {

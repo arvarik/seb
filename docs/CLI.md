@@ -30,7 +30,7 @@ You can skip `npm link`. Use `npm run seb` and `npm run ask` instead.
 | --- | --- |
 | `seb` or `seb chat` | Start interactive chat. |
 | `seb ask` | Ask one question or read standard input. |
-| `seb setup` | Validate Gemini and save team-independent defaults. |
+| `seb setup [USERNAME]` | Validate Gemini and save one optional Sleeper username. |
 | `seb doctor` | Verify local configuration and source access. |
 | `seb cache` | Inspect or clear the SQLite source cache. |
 | `seb snapshots` | List snapshots or inspect snapshot provenance. |
@@ -40,9 +40,9 @@ You can skip `npm link`. Use `npm run seb` and `npm run ask` instead.
 
 Run `seb COMMAND --help` to return the general command help.
 
-## First-run setup
+## First-run preferences
 
-Create the local setup profile.
+Validate Gemini without connecting Sleeper.
 
 ```bash
 seb setup
@@ -50,13 +50,17 @@ seb setup
 
 Setup validates Gemini with one small request.
 
-It reads the current NFL season from Sleeper.
+Add a Sleeper username when you want automatic fantasy context.
 
-It stores only the season and update time.
+```bash
+seb setup your-sleeper-name
+```
 
-It never stores a Sleeper user, league, roster, or NFL team.
+Seb stores only the optional username and update time.
 
-Starting interactive chat without a profile runs setup automatically.
+It never stores a league, roster, NFL team, season, week, or API key.
+
+Starting interactive chat without preferences validates Gemini and creates an empty file.
 
 Read the [setup guide](SETUP.md) for profile paths and security rules.
 
@@ -105,7 +109,9 @@ Start the full terminal interface.
 seb
 ```
 
-The interface keeps the conversation until you exit. It renders Markdown, context badges, sources, charts, and data tool activity.
+The interface keeps the conversation until you exit. It renders Markdown, automatic context, sources, charts, and data tool activity.
+
+The home screen presents Explore, My Fantasy, and Analyze.
 
 Use these controls.
 
@@ -121,6 +127,7 @@ Use these controls.
 | `Ctrl+R` | Search private prompt history. |
 | `1`, `2`, or `3` | Select a contextual action. |
 | `PageUp` and `PageDown` | Scroll one page. |
+| Mouse wheel or trackpad | Scroll the transcript. |
 | `Ctrl+L` | Repaint the terminal. |
 | `Escape` | Close a panel or stop the current request. |
 | `Ctrl+C` | Exit Seb. |
@@ -131,7 +138,9 @@ Seb hides model reasoning by default. It shows a compact reasoning card when the
 
 Run `/help` inside the interface. Local commands do not call Gemini.
 
-Use `/leagues USER`, `/rosters LEAGUE_ID`, and `/team CODE` for optional context.
+Run `/connect USERNAME` once to save a Sleeper account.
+
+Seb discovers its current leagues and owned rosters automatically.
 
 Use the [interactive guide](INTERACTIVE.md) for every command and skill.
 
@@ -146,6 +155,10 @@ seb ask "Show the current NFL state."
 ```
 
 Seb streams answer text to standard output. An interactive terminal can show tool activity on standard error.
+
+Seb loads the optional Sleeper username and current NFL state before the request.
+
+Account-aware prompts can use discovered leagues without copied IDs.
 
 Current-news answers end with a source list when Gemini returns web sources.
 

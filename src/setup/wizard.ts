@@ -5,6 +5,7 @@ import type {
   SleeperUser,
 } from '../sleeper/types.js';
 import type { SessionState } from '../interactive/session.js';
+import { normalizeSessionSeasonType } from '../interactive/session.js';
 import {
   SETUP_PROFILE_SCHEMA_VERSION,
   type SebSetupProfile,
@@ -33,8 +34,8 @@ export interface DiscoveredSleeperAccount {
 export interface FirstRunSetupOptions {
   environment: NodeJS.ProcessEnv;
   now?: () => Date;
-  sleeper: Pick<SleeperSetupDiscovery, 'getNflState'>;
   store: SetupProfileStore;
+  username?: string;
   verifyApiKey?: (apiKey: string) => Promise<void>;
 }
 
@@ -110,9 +111,8 @@ export async function runFirstRunSetup(
     }
   }
 
-  const nflState = await options.sleeper.getNflState();
   const profile = createSetupProfile(
-    parseSeason(nflState.season),
+    options.username ?? options.environment.SEB_SLEEPER_USER ?? null,
     options.now?.(),
   );
   await options.store.save(profile);
@@ -120,16 +120,14 @@ export async function runFirstRunSetup(
 }
 
 export function createSetupProfile(
-  season: number,
+  username: string | null = null,
   now = new Date(),
 ): SebSetupProfile {
-  if (!Number.isInteger(season) || season < 1999 || season > 2100) {
-    throw new SetupWizardError('The default NFL season is invalid.');
-  }
+  const normalizedUsername = username === null ? null : validateUsername(username);
   return {
     schemaVersion: SETUP_PROFILE_SCHEMA_VERSION,
+    sleeper: normalizedUsername ? { username: normalizedUsername } : null,
     updatedAt: now.toISOString(),
-    defaults: { season },
   };
 }
 
@@ -137,8 +135,117 @@ export function applySetupProfile(
   profile: SebSetupProfile,
   session: SessionState,
 ): void {
-  session.season = profile.defaults.season;
-  session.seasonType = null;
+  disconnectSleeperSession(session);
+  if (profile.sleeper) {
+    session.user = profile.sleeper.username;
+    session.mode = 'fantasy';
+  }
+}
+
+export async function refreshAutomaticSession(
+  sleeper: SleeperSetupDiscovery,
+  session: SessionState,
+  username = session.user,
+): Promise<void> {
+  const nflState = await sleeper.getNflState();
+  session.season = parseSeason(nflState.season);
+  session.leagueSeason = parseSeason(nflState.league_season ?? nflState.season);
+  session.seasonType = normalizeSessionSeasonType(nflState.season_type);
+  session.week = resolveCurrentNflWeek(nflState);
+  if (username) {
+    await connectSleeperSession(sleeper, session, username);
+  }
+}
+
+export async function connectSleeperSession(
+  sleeper: SleeperSetupDiscovery,
+  session: SessionState,
+  username: string,
+): Promise<void> {
+  try {
+    const account = await discoverSleeperAccount(
+      sleeper,
+      username,
+      session.leagueSeason,
+    );
+    const leagues = await Promise.all(account.leagues.map(async (league) => {
+      try {
+        const rosters = await discoverOwnedRosters(
+          sleeper,
+          league.league_id,
+          account.user.user_id,
+        );
+        return {
+          deadlines: leagueDeadlines(league),
+          leagueId: league.league_id,
+          name: league.name,
+          rosterIds: rosters.map((roster) => roster.roster_id),
+          status: league.status,
+          warning: null,
+        };
+      } catch (error) {
+        return {
+          deadlines: leagueDeadlines(league),
+          leagueId: league.league_id,
+          name: league.name,
+          rosterIds: [],
+          status: league.status,
+          warning: errorMessage(error),
+        };
+      }
+    }));
+    const warningCount = leagues.filter((league) => league.warning).length;
+    session.accountError = warningCount > 0
+      ? `${warningCount} league roster refresh${warningCount === 1 ? '' : 'es'} failed.`
+      : null;
+    session.accountStatus = 'ready';
+    session.leagues = leagues;
+    session.leagueOptions = leagues.map((league) => league.leagueId);
+    session.mode = 'fantasy';
+    session.user = account.user.username ?? username;
+    session.userId = account.user.user_id;
+    selectAutomaticLeague(session);
+  } catch (error) {
+    session.accountError = errorMessage(error);
+    session.accountStatus = 'error';
+    session.leagues = [];
+    session.leagueOptions = [];
+    session.leagueId = null;
+    session.rosterId = null;
+    session.rosterOptions = [];
+    session.user = username.trim();
+    session.userId = null;
+    throw error;
+  }
+}
+
+export function disconnectSleeperSession(session: SessionState): void {
+  session.accountError = null;
+  session.accountStatus = 'disconnected';
+  session.leagueId = null;
+  session.leagues = [];
+  session.leagueOptions = [];
+  session.mode = 'explore';
+  session.rosterId = null;
+  session.rosterOptions = [];
+  session.user = null;
+  session.userId = null;
+}
+
+export function focusSessionLeague(
+  session: SessionState,
+  leagueId: string | null,
+): void {
+  if (leagueId === null) {
+    session.leagueId = null;
+    session.rosterId = null;
+    session.rosterOptions = [];
+    return;
+  }
+  const league = session.leagues.find((candidate) => candidate.leagueId === leagueId);
+  session.leagueId = leagueId;
+  session.rosterOptions = league?.rosterIds ?? [];
+  session.rosterId = league?.rosterIds.length === 1 ? league.rosterIds[0] ?? null : null;
 }
 
 function validateUsername(value: string): string {
@@ -147,6 +254,59 @@ function validateUsername(value: string): string {
     throw new SetupWizardError(error);
   }
   return value.trim();
+}
+
+export function resolveCurrentNflWeek(state: SleeperNflState): number | null {
+  for (const value of [state.display_week, state.week, state.leg]) {
+    if (Number.isInteger(value) && value !== undefined && value >= 1 && value <= 22) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function leagueDeadlines(league: SleeperLeague): string[] {
+  const deadlines: string[] = [];
+  const tradeDeadline = settingInteger(league.settings.trade_deadline, 1, 18);
+  const playoffStart = settingInteger(league.settings.playoff_week_start, 1, 18);
+  const waiverDays = settingInteger(league.settings.waiver_clear_days, 0, 30);
+  const waiverHour = settingInteger(
+    league.settings.daily_waivers_hour ?? league.settings.waiver_hour,
+    0,
+    23,
+  );
+  if (tradeDeadline) deadlines.push(`Trade deadline: end of NFL Week ${tradeDeadline}`);
+  if (playoffStart) deadlines.push(`Fantasy playoffs start: Week ${playoffStart}`);
+  if (waiverDays !== null) {
+    deadlines.push(`Dropped-player waivers: ${waiverDays} day${waiverDays === 1 ? '' : 's'}`);
+  }
+  if (waiverHour !== null) {
+    deadlines.push(`Waiver processing hour setting: ${String(waiverHour).padStart(2, '0')}:00`);
+  }
+  return deadlines;
+}
+
+function settingInteger(
+  value: string | number | boolean | null | undefined,
+  minimum: number,
+  maximum: number,
+): number | null {
+  if (value === null || value === undefined || typeof value === 'boolean') return null;
+  const number = Number(value);
+  return Number.isInteger(number) && number >= minimum && number <= maximum
+    ? number
+    : null;
+}
+
+function selectAutomaticLeague(session: SessionState): void {
+  const owned = session.leagues.filter((league) => league.rosterIds.length > 0);
+  const active = owned.filter((league) => league.status === 'in_season');
+  const selected = owned.length === 1
+    ? owned[0]
+    : active.length === 1
+      ? active[0]
+      : null;
+  focusSessionLeague(session, selected?.leagueId ?? null);
 }
 
 function usernameError(value: string): string | null {

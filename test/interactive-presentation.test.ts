@@ -7,6 +7,7 @@ import {
   sourceBadge,
   stripAnsi,
   terminalLink,
+  visibleLength,
 } from '../src/interactive/presentation.js';
 import { createTheme } from '../src/interactive/theme.js';
 
@@ -24,6 +25,59 @@ describe('interactive presentation', () => {
     expect(output).toContain('72% #######---');
     expect(output).toContain('61% ############--------');
     expect(output).toContain('8 -> 14 -> 10 -> 19');
+  });
+
+  it('renders wide NFL stat tables as grouped terminal tables', () => {
+    const theme = createTheme({ NO_COLOR: '1' });
+    const output = renderAnalysisText([
+      'Passing: 183 completions on 292 attempts, 2,549 passing yards, 21 touchdowns',
+      '• Rushing: 67 carries, 349 rushing yards, 2 touchdowns',
+      '',
+      '#### 2025 Regular Season Game-by-Game Breakdown',
+      '',
+      '| Week | Opponent | Comp / Att | Pass Yds | Pass TD | INT | Carries | Rush Yds | Rush TD |',
+      '| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |',
+      '| 1 | @ BUF | 14 / 19 | 209 | 2 | 0 | 6 | 70 | 1 |',
+      '| 2 | vs. CLE | 19 / 29 | 225 | 4 | 0 | 2 | 13 | 0 |',
+    ].join('\n'), theme, 76);
+
+    expect(output).toContain('PASSING  183 completions');
+    expect(output).toContain('◆ 2025 Regular Season Game-by-Game Breakdown');
+    expect(output).toContain('│ WEEK │ OPPONENT │ PASSING');
+    expect(output).toContain('14 / 19 · 209 yd · 2 TD · 0 INT');
+    expect(output).toContain('6 car · 70 yd · 1 TD');
+    expect(output).not.toContain(':---');
+    expect(output.split('\n').every((line) => visibleLength(line) <= 76)).toBe(true);
+  });
+
+  it('uses record cards for generic tables that cannot fit safely', () => {
+    const theme = createTheme({ NO_COLOR: '1' });
+    const output = renderAnalysisText([
+      '| Player | Team | Metric A | Metric B | Metric C | Metric D |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| A very long player name | SEA | Alpha value | Beta value | Gamma value | Delta value |',
+    ].join('\n'), theme, 44);
+
+    expect(output).toContain('╭─ PLAYER A very long player name');
+    expect(output).toContain('METRIC A Alpha value');
+    expect(output).toContain('METRIC D Delta value');
+    expect(output.split('\n').every((line) => visibleLength(line) <= 44)).toBe(true);
+  });
+
+  it('styles deep headings, Unicode bullets, and fenced code blocks', () => {
+    const theme = createTheme({ NO_COLOR: '1' });
+    const output = renderAnalysisText([
+      '#### Details',
+      '• Record: 12-5',
+      '```json',
+      '{"team":"BAL"}',
+      '```',
+    ].join('\n'), theme, 60);
+
+    expect(output).toContain('◆ Details');
+    expect(output).toContain('• RECORD  12-5');
+    expect(output).toContain('┌─ CODE · json');
+    expect(output).toContain('│ {"team":"BAL"}');
   });
 
   it('formats source freshness and elapsed time', () => {

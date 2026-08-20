@@ -82,6 +82,13 @@ describe('parseCliArguments', () => {
 
   it('parses setup, completion, cache, and snapshot commands', () => {
     expect(parseCliArguments(['setup'])).toEqual({ name: 'setup' });
+    expect(parseCliArguments(['setup', 'arvarik'])).toEqual({
+      name: 'setup',
+      username: 'arvarik',
+    });
+    expect(() => parseCliArguments(['setup', 'one', 'two'])).toThrow(
+      'Use seb setup [SLEEPER_USERNAME].',
+    );
     expect(parseCliArguments(['completion', 'zsh'])).toEqual({
       name: 'completion',
       shell: 'zsh',

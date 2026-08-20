@@ -6,6 +6,41 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-08-20
+
+### Added
+
+- Explore, My Fantasy, and Analyze as the three primary product experiences.
+- Automatic Sleeper account discovery from one optional saved username.
+- Automatic current NFL state, display week, league season, owned roster, and league deadline context.
+- Account-wide fantasy dashboards with current league and owned roster context.
+- Historical league discovery through `/leagues USERNAME YEAR`.
+- Responsive terminal tables, compact record cards, and data-aware table grouping.
+- Mouse and trackpad transcript scrolling with explicit scroll position status.
+- A dedicated experience guide and a goal-based documentation index.
+
+### Changed
+
+- The first-run preferences file now stores only an optional Sleeper username.
+- Version 1 and version 2 profiles now migrate to the username-only version 3 schema.
+- Interactive and one-shot requests now refresh automatic context before model use.
+- The home screen now explains the three experiences and hides empty setup placeholders.
+- The command palette now promotes experience and account actions before advanced overrides.
+- Contextual actions now follow the active player, team, account, and experience.
+- Plain-language questions now select the most relevant experience automatically.
+- The README now presents Seb as a product and routes technical detail into focused guides.
+
+### Fixed
+
+- Inline `/skill NAME QUESTION` commands now run the supplied question.
+- Player follow-ups now retain the active player instead of asking for the player again.
+- Skill instructions now remain active during a natural follow-up.
+- The mouse wheel now scrolls the transcript instead of recalling prompt history.
+- Current week selection now falls back when Sleeper returns an invalid display week.
+- NFL season and Sleeper league season now remain distinct.
+- A failed roster request no longer removes healthy league context.
+- Loading blank preferences no longer preserves an earlier account's leagues.
+
 ## [0.0.4] - 2026-08-20
 
 ### Added

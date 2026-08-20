@@ -11,8 +11,15 @@ import {
   createSessionState,
   formatSessionContext,
   getContextualSuggestions,
+  inferExperienceMode,
+  inferPlayerNameFromPrompt,
+  recordSessionToolInput,
 } from '../src/interactive/session.js';
-import { formatSkillList, SEB_SKILLS } from '../src/interactive/skills.js';
+import {
+  formatSkillList,
+  parseSkillInvocation,
+  SEB_SKILLS,
+} from '../src/interactive/skills.js';
 import {
   INTERACTIVE_HELP,
   SebInteractiveTransport,
@@ -43,6 +50,15 @@ describe('interactive skills', () => {
     expect(formatSkillList()).toContain('### Fantasy');
     expect(formatSkillList()).toContain('### Research');
     expect(SEB_SKILLS.every((skill) => skill.category.length > 0)).toBe(true);
+    for (const skill of SEB_SKILLS) {
+      expect(parseSkillInvocation(`${skill.id} Test question`)).toEqual({
+        prompt: 'Test question',
+        skill,
+      });
+      expect(parseSkillInvocation(skill.title)).toEqual({ prompt: '', skill });
+      expect(skill.instructions.length).toBeGreaterThan(0);
+      expect(skill.suggestions.length).toBeGreaterThan(0);
+    }
   });
 
   it('shows active skill actions before optional setup actions', () => {
@@ -75,9 +91,142 @@ describe('interactive skills', () => {
       'Do not add fantasy advice unless the user requests it.',
     );
   });
+
+  it('keeps the active player in standalone follow-up suggestions', () => {
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    session.skillId = 'player-info';
+    session.player = inferPlayerNameFromPrompt('derrick henry');
+
+    expect(session.player).toBe('Derrick Henry');
+    expect(getContextualSuggestions(session).slice(0, 3)).toEqual([
+      "Show Derrick Henry's profile and recent NFL statistics.",
+      "Summarize Derrick Henry's season game log.",
+      'Find the latest verified news about Derrick Henry.',
+    ]);
+    expect(formatSessionContext(session)).toContain('NFL player: Derrick Henry.');
+  });
+
+  it('updates the active player from player tool input', () => {
+    const session = createSessionState();
+
+    recordSessionToolInput(session, 'getPlayerWeeklyStats', {
+      playerName: 'Derrick Henry',
+      season: 2025,
+    });
+
+    expect(session.player).toBe('Derrick Henry');
+    recordSessionToolInput(session, 'getNflSchedule', { team: 'BAL' });
+    expect(session.player).toBe('Derrick Henry');
+    recordSessionToolInput(session, 'findPlayers', { query: '\u001b[2Jfake' });
+    expect(session.player).toBe('Derrick Henry');
+    expect(inferPlayerNameFromPrompt('show Derrick Henry')).toBeNull();
+  });
+
+  it('routes natural questions into the three experiences', () => {
+    expect(inferExperienceMode('Show player statistics.', 'analyze')).toBe('explore');
+    expect(inferExperienceMode('What needs my attention across my leagues?', 'explore'))
+      .toBe('fantasy');
+    expect(inferExperienceMode('Look deeper into their stats.', 'explore')).toBe('analyze');
+  });
 });
 
 describe('SebInteractiveTransport', () => {
+  it('runs an inline question with the selected skill', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'Player profile.' },
+            { type: 'text-end', id: 'text-1' },
+            {
+              type: 'finish',
+              finishReason: { unified: 'stop', raw: undefined },
+              usage: {
+                inputTokens: {
+                  total: 5,
+                  noCache: 5,
+                  cacheRead: undefined,
+                  cacheWrite: undefined,
+                },
+                outputTokens: {
+                  total: 2,
+                  text: 2,
+                  reasoning: undefined,
+                },
+              },
+            },
+          ],
+        }),
+      }),
+    });
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    const clients = dataClients();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({
+        languageModel: model,
+        getRuntimeInstructions: () => formatSessionContext(session),
+        ...clients,
+      }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session,
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      version: '0.0.1',
+      weather: clients.weatherClient,
+    });
+
+    const output = await sendCommand(
+      transport,
+      '/skill player-info Derrick Henry',
+      'message-1',
+    );
+    const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt);
+
+    expect(output).toContain('Player profile.');
+    expect(session.skillId).toBe('player-info');
+    expect(prompt).toContain('Derrick Henry');
+    expect(prompt).toContain('Active skill: player-info');
+    expect(prompt).not.toContain('/skill player-info');
+
+    const followUp = 'Look deeper into their stats.';
+    await sendConversation(transport, [
+      {
+        id: 'message-1',
+        role: 'user',
+        parts: [{ type: 'text', text: '/skill player-info Derrick Henry' }],
+      },
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'Player profile.' },
+          {
+            type: 'text',
+            text: '\n\nTry next: Show more about him. · Look deeper into his stats.',
+          },
+        ],
+      },
+      {
+        id: 'message-2',
+        role: 'user',
+        parts: [{ type: 'text', text: followUp }],
+      },
+    ]);
+    const followUpPrompt = JSON.stringify(model.doStreamCalls[1]?.prompt);
+
+    expect(session.player).toBe('Derrick Henry');
+    expect(session.mode).toBe('analyze');
+    expect(session.skillId).toBe('player-info');
+    expect(followUpPrompt).toContain('Derrick Henry');
+    expect(followUpPrompt).toContain('Player profile.');
+    expect(followUpPrompt).not.toContain('Try next:');
+    expect(followUpPrompt).not.toContain('/skill player-info');
+  });
+
   it('answers help and context commands without calling the model', async () => {
     const model = new MockLanguageModelV4({
       doGenerate: async () => {
@@ -125,18 +274,21 @@ describe('SebInteractiveTransport', () => {
     const devtools = await sendCommand(transport, '/devtools', 'message-7');
     const currentWeek = await sendCommand(transport, '/week current', 'message-8');
     const currentStatus = await sendCommand(transport, '/status', 'message-9');
+    const extraArguments = await sendCommand(transport, '/HELP extra', 'message-10');
 
     expect(help).toContain(INTERACTIVE_HELP);
     expect(skill).toContain('weather-watch');
     expect(team).toContain('SEA');
-    expect(status).toContain('Skill: `weather-watch`');
-    expect(status).toContain('NFL team: SEA');
+    expect(status).toContain('Experience: Explore');
+    expect(status).toContain('Looking at: SEA');
+    expect(status).toContain('Advanced workflow: Weather watch');
     expect(commands).toContain('/cache');
     expect(completion).toContain('/skill weather-watch');
     expect(devtools).toContain('disabled');
     expect(devtools).toContain('npm run devtools');
     expect(currentWeek).toContain('Week 2 kickoff weather');
-    expect(currentStatus).toContain('Season type: pre');
+    expect(currentStatus).toContain('NFL now: 2026 pre, Week 2');
+    expect(extraArguments).toContain('Command error: Use /help.');
   });
 
   it('shows source links recorded during the session', async () => {
@@ -229,9 +381,19 @@ describe('SebInteractiveTransport', () => {
     expect(model.doStreamCalls).toHaveLength(1);
   });
 
-  it('keeps setup team-independent and discovers context inside the UI', async () => {
+  it('connects one username and discovers fantasy context inside the UI', async () => {
     const sleeperFetch: typeof globalThis.fetch = async (input) => {
       const path = new URL(String(input)).pathname;
+      if (path === '/v1/state/nfl') {
+        return Response.json({
+          display_week: 2,
+          league_season: '2026',
+          leg: 2,
+          season: '2026',
+          season_type: 'regular',
+          week: 2,
+        });
+      }
       if (path === '/v1/user/arvarik') {
         return Response.json({ user_id: 'user-1', username: 'arvarik' });
       }
@@ -249,6 +411,20 @@ describe('SebInteractiveTransport', () => {
           settings: {},
         }]);
       }
+      if (path === '/v1/user/user-1/leagues/nfl/2025') {
+        return Response.json([{
+          league_id: '150',
+          name: 'Archived League',
+          season: '2025',
+          season_type: 'regular',
+          sport: 'nfl',
+          status: 'complete',
+          total_rosters: 12,
+          roster_positions: [],
+          scoring_settings: {},
+          settings: {},
+        }]);
+      }
       if (path === '/v1/league/200/rosters') {
         return Response.json([{
           roster_id: 4,
@@ -257,6 +433,9 @@ describe('SebInteractiveTransport', () => {
           players: [],
           settings: {},
         }]);
+      }
+      if (path === '/v1/league/150/rosters') {
+        return Response.json([]);
       }
       return new Response('Not found', { status: 404 });
     };
@@ -283,16 +462,17 @@ describe('SebInteractiveTransport', () => {
       weather: clients.weatherClient,
     });
 
-    const setup = await sendCommand(transport, '/setup', 'message-1');
-    const leagues = await sendCommand(transport, '/leagues arvarik', 'message-2');
+    const connected = await sendCommand(transport, '/connect arvarik', 'message-1');
+    const account = await sendCommand(transport, '/account', 'message-2');
     const leagueCompletion = await sendCommand(transport, '/complete /league 2', 'message-3');
     await sendCommand(transport, '/league 200', 'message-4');
     const rosters = await sendCommand(transport, '/rosters', 'message-5');
     const rosterCompletion = await sendCommand(transport, '/complete /roster 4', 'message-6');
     await sendCommand(transport, '/roster 4', 'message-7');
 
-    expect(setup).toContain('team-independent');
-    expect(leagues).toContain('Test League');
+    expect(connected).toContain('Test League');
+    expect(connected).toContain('saved this username');
+    expect(account).toContain('Sleeper: @arvarik');
     expect(leagueCompletion).toContain('/league 200');
     expect(rosters).toContain('Roster `4`');
     expect(rosterCompletion).toContain('/roster 4');
@@ -301,14 +481,34 @@ describe('SebInteractiveTransport', () => {
       leagueId: '200',
       rosterId: 4,
       season: 2026,
+      mode: 'fantasy',
     });
     expect(profileStore.profile).toMatchObject({
-      schemaVersion: 2,
-      defaults: { season: 2026 },
+      schemaVersion: 3,
+      sleeper: { username: 'arvarik' },
     });
-    expect(JSON.stringify(profileStore.profile)).not.toContain('arvarik');
     expect(JSON.stringify(profileStore.profile)).not.toContain('200');
     expect(JSON.stringify(profileStore.profile)).not.toContain('secret-value');
+
+    const historical = await sendCommand(
+      transport,
+      '/leagues arvarik 2025',
+      'message-8',
+    );
+    expect(historical).toContain('Archived League');
+    expect(session.leagueSeason).toBe(2025);
+
+    const disconnected = await sendCommand(transport, '/disconnect', 'message-9');
+    expect(disconnected).toContain('disconnected the Sleeper account');
+    expect(session).toMatchObject({
+      accountStatus: 'disconnected',
+      leagueId: null,
+      leagues: [],
+      mode: 'explore',
+      rosterId: null,
+      user: null,
+    });
+    expect(profileStore.profile?.sleeper).toBeNull();
   });
 });
 
@@ -354,6 +554,24 @@ async function sendCommand(
     chatId: 'test-chat',
     messageId: undefined,
     messages: [message],
+    abortSignal: undefined,
+  });
+  let output = '';
+  for await (const chunk of stream) {
+    output += textDelta(chunk);
+  }
+  return output;
+}
+
+async function sendConversation(
+  transport: SebInteractiveTransport,
+  messages: UIMessage[],
+): Promise<string> {
+  const stream = await transport.sendMessages({
+    trigger: 'submit-message',
+    chatId: 'test-chat',
+    messageId: undefined,
+    messages,
     abortSignal: undefined,
   });
   let output = '';

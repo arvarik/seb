@@ -21,7 +21,7 @@ describe('Seb executable', () => {
     const result = runSeb('--version');
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe('seb 0.0.4\n');
+    expect(result.stdout).toBe('seb 0.0.5\n');
   });
 
   it('returns the usage exit code for an empty one-shot request', () => {

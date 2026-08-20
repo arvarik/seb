@@ -3,6 +3,14 @@ import { paint, symbol, type SebTheme } from './theme.js';
 
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/gu;
 
+type TableAlignment = 'center' | 'left' | 'right';
+
+interface MarkdownTable {
+  alignments: TableAlignment[];
+  headers: string[];
+  rows: string[][];
+}
+
 export function formatElapsed(milliseconds: number): string {
   if (milliseconds < 1_000) return `${Math.max(0, Math.round(milliseconds))}ms`;
   return `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
@@ -48,7 +56,11 @@ export function sourceBadge(source: DataSourceRecord, now = new Date()): string 
   return 'LIVE';
 }
 
-export function renderAnalysisText(text: string, theme: SebTheme): string {
+export function renderAnalysisText(
+  text: string,
+  theme: SebTheme,
+  width = 100,
+): string {
   const enhanced = text
     .replace(/^(Confidence:\s*)(?:low|medium|high)?\s*\(?([0-9]{1,3})%\)?\.?$/gimu,
       (_match, label: string, score: string) => `${label}${score}% ${bar(Number(score), 10, theme)}`)
@@ -56,21 +68,521 @@ export function renderAnalysisText(text: string, theme: SebTheme): string {
       (_match, label: string, score: string) => `${label}${score}% ${bar(Number(score), 20, theme)}`)
     .replace(/^(Weekly points|Usage trend|Schedule difficulty):\s*((?:-?\d+(?:\.\d+)?\s*,\s*)*-?\d+(?:\.\d+)?)$/gimu,
       (_match, label: string, values: string) => `${label}: ${sparkline(values.split(',').map(Number), theme)}`);
-  return renderTerminalMarkdown(enhanced, theme);
+  return renderTerminalMarkdown(enhanced, theme, width);
 }
 
-export function renderTerminalMarkdown(text: string, theme: SebTheme): string {
-  return text.split('\n').map((line) => {
-    const heading = line.match(/^(#{1,3})\s+(.+)$/u);
-    if (heading) return paint(theme, 'accent', heading[2]?.toUpperCase() ?? '');
-    const bullet = line.match(/^\s*[-*]\s+(.+)$/u);
-    if (bullet) return `  ${symbol(theme, 'bullet')} ${inlineMarkup(bullet[1] ?? '', theme)}`;
-    const decisionField = line.match(/^(Recommendation|Confidence|Key drivers|Risks|Win probability):\s*(.*)$/iu);
-    if (decisionField) {
-      return `${paint(theme, 'source', `${decisionField[1]}:`)} ${inlineMarkup(decisionField[2] ?? '', theme)}`;
+export function renderTerminalMarkdown(
+  text: string,
+  theme: SebTheme,
+  width = 100,
+): string {
+  const maximumWidth = Math.max(20, width);
+  const input = text.split('\n');
+  const output: string[] = [];
+  for (let index = 0; index < input.length; index += 1) {
+    const line = input[index] ?? '';
+    const fence = line.match(/^```\s*([\w-]*)\s*$/u);
+    if (fence) {
+      const code: string[] = [];
+      index += 1;
+      while (index < input.length && !/^```\s*$/u.test(input[index] ?? '')) {
+        code.push(input[index] ?? '');
+        index += 1;
+      }
+      output.push(...renderCodeBlock(code, fence[1] ?? '', theme, maximumWidth));
+      continue;
     }
-    return inlineMarkup(line, theme);
-  }).join('\n');
+
+    const headers = parseTableRow(line);
+    const alignments = headers ? parseTableSeparator(input[index + 1] ?? '') : null;
+    if (headers && alignments && headers.length === alignments.length) {
+      const rows: string[][] = [];
+      index += 2;
+      while (index < input.length) {
+        const row = parseTableRow(input[index] ?? '');
+        if (!row || row.length !== headers.length) break;
+        rows.push(row);
+        index += 1;
+      }
+      index -= 1;
+      output.push(...renderTable({ alignments, headers, rows }, theme, maximumWidth));
+      continue;
+    }
+
+    output.push(...renderMarkdownLine(line, theme, maximumWidth));
+  }
+  return output.join('\n');
+}
+
+function renderMarkdownLine(
+  line: string,
+  theme: SebTheme,
+  width: number,
+): string[] {
+  if (!line.trim()) return [''];
+  const heading = line.match(/^(#{1,6})\s+(.+)$/u);
+  if (heading) {
+    const level = heading[1]?.length ?? 1;
+    const marker = theme.iconMode === 'unicode'
+      ? level <= 2 ? '━━' : level <= 4 ? '◆' : '›'
+      : level <= 2 ? '==' : level <= 4 ? '#' : '>';
+    const title = level <= 2
+      ? (heading[2] ?? '').toUpperCase()
+      : heading[2] ?? '';
+    return wrapPlainWords(`${marker} ${title}`, width).map((value) =>
+      paint(theme, level <= 4 ? 'accent' : 'source', value));
+  }
+
+  if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/u.test(line)) {
+    return [paint(theme, 'dim', (theme.iconMode === 'unicode' ? '─' : '-').repeat(width))];
+  }
+
+  const list = line.match(/^(\s*)([-*+•]|\d+[.)])\s+(.+)$/u);
+  if (list) {
+    const depth = Math.min(3, Math.floor((list[1]?.length ?? 0) / 2));
+    const listMarker = /^\d/u.test(list[2] ?? '')
+      ? list[2] ?? ''
+      : symbol(theme, 'bullet');
+    const prefix = `${'  '.repeat(depth + 1)}${listMarker} `;
+    const contentWidth = Math.max(10, width - visibleLength(prefix));
+    const parts = wrapPlainWords(list[3] ?? '', contentWidth);
+    return parts.map((part, index) =>
+      `${index === 0 ? prefix : ' '.repeat(visibleLength(prefix))}${inlineLabeledMarkup(part, theme)}`);
+  }
+
+  const quote = line.match(/^\s*>\s?(.*)$/u);
+  if (quote) {
+    const prefix = theme.iconMode === 'unicode' ? '│ ' : '| ';
+    return wrapPlainWords(quote[1] ?? '', Math.max(10, width - 2)).map((part) =>
+      `${paint(theme, 'dim', prefix)}${inlineMarkup(part, theme)}`);
+  }
+
+  const decisionField = line.match(
+    /^(Recommendation|Confidence|Key drivers|Risks|Win probability):\s*(.*)$/iu,
+  );
+  if (decisionField) {
+    return renderLabeledValue(
+      decisionField[1] ?? '',
+      decisionField[2] ?? '',
+      theme,
+      width,
+      false,
+    );
+  }
+
+  const labeledValue = line.match(/^([A-Za-z][A-Za-z0-9 /&+-]{1,24}):\s+(.+)$/u);
+  if (labeledValue) {
+    return renderLabeledValue(
+      labeledValue[1] ?? '',
+      labeledValue[2] ?? '',
+      theme,
+      width,
+      true,
+    );
+  }
+
+  return wrapPlainWords(line, width).map((part) => inlineMarkup(part, theme));
+}
+
+function renderLabeledValue(
+  label: string,
+  value: string,
+  theme: SebTheme,
+  width: number,
+  uppercase: boolean,
+): string[] {
+  const renderedLabel = uppercase ? label.toUpperCase() : `${label}:`;
+  const prefix = `${paint(theme, 'source', renderedLabel)}  `;
+  const firstWidth = Math.max(10, width - visibleLength(prefix));
+  const parts = wrapPlainWords(value, firstWidth);
+  return parts.map((part, index) =>
+    `${index === 0 ? prefix : ' '.repeat(visibleLength(prefix))}${inlineMarkup(part, theme)}`);
+}
+
+function inlineLabeledMarkup(value: string, theme: SebTheme): string {
+  const match = value.match(/^([A-Za-z][A-Za-z0-9 /&+-]{1,20}):\s+(.+)$/u);
+  if (!match) return inlineMarkup(value, theme);
+  return `${paint(theme, 'source', (match[1] ?? '').toUpperCase())}  ${inlineMarkup(match[2] ?? '', theme)}`;
+}
+
+function renderCodeBlock(
+  code: readonly string[],
+  language: string,
+  theme: SebTheme,
+  width: number,
+): string[] {
+  const unicode = theme.iconMode === 'unicode';
+  const top = `${unicode ? '┌─' : '+-'} CODE${language ? ` · ${language}` : ''}`;
+  const side = unicode ? '│ ' : '| ';
+  const bottom = unicode ? '└─' : '+-';
+  return [
+    paint(theme, 'dim', top),
+    ...code.flatMap((line) =>
+      hardWrap(line, Math.max(1, width - 2)).map((part) =>
+        `${paint(theme, 'dim', side)}${paint(theme, 'source', part)}`)),
+    paint(theme, 'dim', bottom),
+  ];
+}
+
+function parseTableRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) return null;
+  const value = trimmed.replace(/^\|/u, '').replace(/\|$/u, '');
+  const cells: string[] = [];
+  let cell = '';
+  let code = false;
+  let escaped = false;
+  for (const character of value) {
+    if (escaped) {
+      cell += character;
+      escaped = false;
+      continue;
+    }
+    if (character === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (character === '`') {
+      code = !code;
+      cell += character;
+      continue;
+    }
+    if (character === '|' && !code) {
+      cells.push(cell.trim());
+      cell = '';
+      continue;
+    }
+    cell += character;
+  }
+  if (escaped) cell += '\\';
+  cells.push(cell.trim());
+  return cells.length > 1 ? cells : null;
+}
+
+function parseTableSeparator(line: string): TableAlignment[] | null {
+  const cells = parseTableRow(line);
+  if (!cells || cells.some((cell) => !/^:?-{3,}:?$/u.test(cell))) return null;
+  return cells.map((cell) => {
+    if (cell.startsWith(':') && cell.endsWith(':')) return 'center';
+    if (cell.endsWith(':')) return 'right';
+    return 'left';
+  });
+}
+
+function renderTable(
+  original: MarkdownTable,
+  theme: SebTheme,
+  width: number,
+): string[] {
+  const originalWidth = naturalTableWidth(original, theme);
+  const compact = originalWidth > width ? compactSportsTable(original) : null;
+  const table = compact ?? original;
+  const canUseGrid = naturalTableWidth(table, theme) <= width ||
+    table.headers.length <= 3 ||
+    (table.headers.length <= 5 && width >= 48);
+  return canUseGrid
+    ? renderGridTable(table, theme, width)
+    : renderTableCards(table, theme, width);
+}
+
+function renderGridTable(
+  table: MarkdownTable,
+  theme: SebTheme,
+  width: number,
+): string[] {
+  const widths = fitColumnWidths(table, theme, width);
+  if (!widths) return renderTableCards(table, theme, width);
+  const border = tableBorderCharacters(theme);
+  const line = (left: string, middle: string, right: string) =>
+    paint(theme, 'dim', `${left}${widths.map((cellWidth) => border.horizontal.repeat(cellWidth + 2)).join(middle)}${right}`);
+  const output = [line(border.topLeft, border.topMiddle, border.topRight)];
+  output.push(...renderGridRow(
+    table.headers.map((header) => header.toUpperCase()),
+    widths,
+    table.alignments,
+    theme,
+    true,
+    border.vertical,
+  ));
+  output.push(line(border.middleLeft, border.middle, border.middleRight));
+  for (const row of table.rows) {
+    output.push(...renderGridRow(
+      row,
+      widths,
+      inferredAlignments(table, row),
+      theme,
+      false,
+      border.vertical,
+    ));
+  }
+  output.push(line(border.bottomLeft, border.bottomMiddle, border.bottomRight));
+  return output;
+}
+
+function renderGridRow(
+  cells: readonly string[],
+  widths: readonly number[],
+  alignments: readonly TableAlignment[],
+  theme: SebTheme,
+  header: boolean,
+  vertical: string,
+): string[] {
+  const wrapped = cells.map((cell, index) =>
+    wrapPlainWords(cell, widths[index] ?? 3));
+  const height = Math.max(1, ...wrapped.map((parts) => parts.length));
+  return Array.from({ length: height }, (_, lineIndex) => {
+    const rendered = widths.map((cellWidth, columnIndex) => {
+      const raw = wrapped[columnIndex]?.[lineIndex] ?? '';
+      const value = header
+        ? paint(theme, 'source', raw)
+        : inlineMarkup(raw, theme);
+      return ` ${alignVisible(value, cellWidth, alignments[columnIndex] ?? 'left')} `;
+    });
+    return `${paint(theme, 'dim', vertical)}${rendered.join(paint(theme, 'dim', vertical))}${paint(theme, 'dim', vertical)}`;
+  });
+}
+
+function renderTableCards(
+  table: MarkdownTable,
+  theme: SebTheme,
+  width: number,
+): string[] {
+  const unicode = theme.iconMode === 'unicode';
+  const top = unicode ? '╭─' : '+-';
+  const side = unicode ? '│ ' : '| ';
+  const bottom = unicode ? '╰─' : '+-';
+  const identityCount = table.headers.length > 4 ? 2 : 1;
+  const output: string[] = [];
+  for (const row of table.rows) {
+    const identity = table.headers.slice(0, identityCount).map((header, index) =>
+      `${header.toUpperCase()} ${row[index] ?? '—'}`).join(' · ');
+    const identityLines = wrapPlainWords(identity, Math.max(10, width - 3));
+    output.push(`${paint(theme, 'dim', top)} ${paint(theme, 'assistant', identityLines[0] ?? '')}`);
+    for (const continuation of identityLines.slice(1)) {
+      output.push(`${paint(theme, 'dim', side)}${paint(theme, 'assistant', continuation)}`);
+    }
+    const fields = table.headers.slice(identityCount).map((header, index) => {
+      const value = row[index + identityCount] ?? '—';
+      return `${paint(theme, 'source', header.toUpperCase())} ${inlineMarkup(value, theme)}`;
+    });
+    for (const packed of packVisible(fields, Math.max(10, width - 2))) {
+      output.push(`${paint(theme, 'dim', side)}${packed}`);
+    }
+    output.push(paint(theme, 'dim', bottom));
+  }
+  return output;
+}
+
+function compactSportsTable(table: MarkdownTable): MarkdownTable | null {
+  const identities: number[] = [];
+  const groups = new Map<string, Array<{ index: number; label: string }>>();
+  for (const [index, header] of table.headers.entries()) {
+    const key = normalizeTableHeader(header);
+    if (['date', 'game', 'opponent', 'opp', 'player', 'team', 'week'].includes(key)) {
+      identities.push(index);
+      continue;
+    }
+    const descriptor = statDescriptor(key);
+    if (!descriptor) return null;
+    const entries = groups.get(descriptor.group) ?? [];
+    entries.push({ index, label: descriptor.label });
+    groups.set(descriptor.group, entries);
+  }
+  const groupedColumnCount = [...groups.values()].reduce((total, entries) => total + entries.length, 0);
+  if (identities.length === 0 || groupedColumnCount < 3 || groups.size < 1) return null;
+  const groupEntries = [...groups.entries()];
+  return {
+    headers: [
+      ...identities.map((index) => table.headers[index] ?? ''),
+      ...groupEntries.map(([group]) => group),
+    ],
+    alignments: [
+      ...identities.map((index) => table.alignments[index] ?? 'left'),
+      ...groupEntries.map(() => 'left' as const),
+    ],
+    rows: table.rows.map((row) => [
+      ...identities.map((index) => row[index] ?? ''),
+      ...groupEntries.map(([, entries]) => entries.map(({ index, label }) =>
+        formatStatValue(row[index] ?? '', label)).join(' · ')),
+    ]),
+  };
+}
+
+function statDescriptor(key: string): { group: string; label: string } | null {
+  const descriptions: Record<string, { group: string; label: string }> = {
+    carries: { group: 'Rushing', label: 'car' },
+    compatt: { group: 'Passing', label: '' },
+    completionsattempts: { group: 'Passing', label: '' },
+    fantasypts: { group: 'Fantasy', label: 'pts' },
+    int: { group: 'Passing', label: 'INT' },
+    interceptions: { group: 'Passing', label: 'INT' },
+    passtd: { group: 'Passing', label: 'TD' },
+    passingtouchdowns: { group: 'Passing', label: 'TD' },
+    passingyards: { group: 'Passing', label: 'yd' },
+    passyds: { group: 'Passing', label: 'yd' },
+    receptions: { group: 'Receiving', label: 'rec' },
+    rec: { group: 'Receiving', label: 'rec' },
+    receivingtouchdowns: { group: 'Receiving', label: 'TD' },
+    receivingyards: { group: 'Receiving', label: 'yd' },
+    rectd: { group: 'Receiving', label: 'TD' },
+    recyds: { group: 'Receiving', label: 'yd' },
+    rushatt: { group: 'Rushing', label: 'car' },
+    rushtd: { group: 'Rushing', label: 'TD' },
+    rushingtouchdowns: { group: 'Rushing', label: 'TD' },
+    rushingyards: { group: 'Rushing', label: 'yd' },
+    rushyds: { group: 'Rushing', label: 'yd' },
+    targets: { group: 'Receiving', label: 'tgt' },
+  };
+  return descriptions[key] ?? null;
+}
+
+function formatStatValue(value: string, label: string): string {
+  if (!value) return '—';
+  return label ? `${value} ${label}` : value;
+}
+
+function normalizeTableHeader(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/gu, '');
+}
+
+function naturalTableWidth(table: MarkdownTable, theme: SebTheme): number {
+  const widths = table.headers.map((header, index) => Math.max(
+    visibleLength(inlineMarkup(header, theme)),
+    ...table.rows.map((row) => visibleLength(inlineMarkup(row[index] ?? '', theme))),
+  ));
+  return widths.reduce((total, value) => total + value, 0) + (3 * widths.length) + 1;
+}
+
+function fitColumnWidths(
+  table: MarkdownTable,
+  theme: SebTheme,
+  width: number,
+): number[] | null {
+  const available = width - (3 * table.headers.length) - 1;
+  if (available < table.headers.length * 3) return null;
+  const natural = table.headers.map((header, index) => Math.max(
+    visibleLength(inlineMarkup(header, theme)),
+    ...table.rows.map((row) => visibleLength(inlineMarkup(row[index] ?? '', theme))),
+  ));
+  const minimum = natural.map((value, index) => Math.min(
+    value,
+    Math.max(3, Math.min(10, visibleLength(table.headers[index] ?? ''))),
+  ));
+  if (minimum.reduce((total, value) => total + value, 0) > available) {
+    return null;
+  }
+  const fitted = [...natural];
+  while (fitted.reduce((total, value) => total + value, 0) > available) {
+    let widest = -1;
+    let slack = 0;
+    for (const [index, value] of fitted.entries()) {
+      const candidateSlack = value - (minimum[index] ?? 3);
+      if (candidateSlack > slack) {
+        widest = index;
+        slack = candidateSlack;
+      }
+    }
+    if (widest < 0) return null;
+    fitted[widest] = (fitted[widest] ?? 3) - 1;
+  }
+  return fitted;
+}
+
+function inferredAlignments(
+  table: MarkdownTable,
+  row: readonly string[],
+): TableAlignment[] {
+  return table.headers.map((_header, index) => {
+    const configured = table.alignments[index] ?? 'left';
+    if (configured !== 'left') return configured;
+    const column = table.rows.map((candidate) => candidate[index] ?? '').filter(Boolean);
+    const numeric = column.length > 0 && column.every((value) =>
+      /^-?[\d,.]+%?$/u.test(value.trim()));
+    return numeric && /^-?[\d,.]+%?$/u.test((row[index] ?? '').trim()) ? 'right' : 'left';
+  });
+}
+
+function alignVisible(
+  value: string,
+  width: number,
+  alignment: TableAlignment,
+): string {
+  const padding = Math.max(0, width - visibleLength(value));
+  if (alignment === 'right') return `${' '.repeat(padding)}${value}`;
+  if (alignment === 'center') {
+    const left = Math.floor(padding / 2);
+    return `${' '.repeat(left)}${value}${' '.repeat(padding - left)}`;
+  }
+  return `${value}${' '.repeat(padding)}`;
+}
+
+function tableBorderCharacters(theme: SebTheme) {
+  if (theme.iconMode === 'ascii') {
+    return {
+      bottomLeft: '+', bottomMiddle: '+', bottomRight: '+', horizontal: '-',
+      middle: '+', middleLeft: '+', middleRight: '+',
+      topLeft: '+', topMiddle: '+', topRight: '+', vertical: '|',
+    };
+  }
+  return {
+    bottomLeft: '└', bottomMiddle: '┴', bottomRight: '┘', horizontal: '─',
+    middle: '┼', middleLeft: '├', middleRight: '┤',
+    topLeft: '┌', topMiddle: '┬', topRight: '┐', vertical: '│',
+  };
+}
+
+function packVisible(values: readonly string[], width: number): string[] {
+  const separator = '  ·  ';
+  const lines: string[] = [];
+  let line = '';
+  const safeValues = values.flatMap((value) =>
+    visibleLength(value) > width ? wrapTerminalLine(value, width) : [value]);
+  for (const value of safeValues) {
+    if (!line || visibleLength(line) + visibleLength(separator) + visibleLength(value) <= width) {
+      line = line ? `${line}${separator}${value}` : value;
+      continue;
+    }
+    lines.push(line);
+    line = value;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function wrapPlainWords(value: string, width: number): string[] {
+  if (width <= 1 || value.length <= width) return [value];
+  const words = value.split(/\s+/u).filter(Boolean);
+  const lines: string[] = [];
+  let line = '';
+  for (const word of words) {
+    if (word.length > width) {
+      if (line) {
+        lines.push(line);
+        line = '';
+      }
+      const chunks = hardWrap(word, width);
+      lines.push(...chunks.slice(0, -1));
+      line = chunks.at(-1) ?? '';
+      continue;
+    }
+    if (line && line.length + word.length + 1 > width) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length > 0 ? lines : [''];
+}
+
+function hardWrap(value: string, width: number): string[] {
+  if (!value) return [''];
+  const chunks: string[] = [];
+  for (let index = 0; index < value.length; index += width) {
+    chunks.push(value.slice(index, index + width));
+  }
+  return chunks;
 }
 
 export function terminalLink(label: string, url: string, enabled = true): string {

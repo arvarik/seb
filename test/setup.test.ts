@@ -18,7 +18,12 @@ import {
 import {
   applySetupProfile,
   checkGeminiApiKey,
+  connectSleeperSession,
+  disconnectSleeperSession,
   discoverOwnedRosters,
+  focusSessionLeague,
+  refreshAutomaticSession,
+  resolveCurrentNflWeek,
   runFirstRunSetup,
   SetupWizardError,
   type SleeperSetupDiscovery,
@@ -47,46 +52,67 @@ describe('Gemini API key setup check', () => {
   });
 });
 
+describe('automatic NFL week selection', () => {
+  it('uses the first valid Sleeper week value', () => {
+    expect(resolveCurrentNflWeek({
+      display_week: 0,
+      league_season: '2026',
+      leg: 17,
+      season: '2026',
+      season_type: 'post',
+      week: 18,
+    })).toBe(18);
+  });
+});
+
 describe('first-run setup wizard', () => {
-  it('saves a team-independent season profile', async () => {
+  it('saves only the optional Sleeper username', async () => {
     const store = new MemoryProfileStore();
-    const sleeper = new FakeSleeperDiscovery();
-    const getUser = vi.spyOn(sleeper, 'getUser');
 
     const profile = await runFirstRunSetup({
       environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'top-secret-key' },
       now: () => new Date('2026-08-20T12:00:00.000Z'),
-      sleeper,
       store,
+      username: 'arvarik',
     });
 
     expect(profile).toEqual({
       schemaVersion: SETUP_PROFILE_SCHEMA_VERSION,
+      sleeper: { username: 'arvarik' },
       updatedAt: '2026-08-20T12:00:00.000Z',
-      defaults: { season: 2026 },
     });
     expect(store.saved).toEqual(profile);
     expect(JSON.stringify(store.saved)).not.toContain('top-secret-key');
-    expect(getUser).not.toHaveBeenCalled();
+  });
+
+  it('uses the optional environment username and validates its format', async () => {
+    const profile = await runFirstRunSetup({
+      environment: {
+        GOOGLE_GENERATIVE_AI_API_KEY: 'top-secret-key',
+        SEB_SLEEPER_USER: 'arvarik',
+      },
+      store: new MemoryProfileStore(),
+    });
+
+    expect(profile.sleeper).toEqual({ username: 'arvarik' });
+    await expect(runFirstRunSetup({
+      environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'top-secret-key' },
+      store: new MemoryProfileStore(),
+      username: 'invalid user name',
+    })).rejects.toThrow('Use 1 through 100 letters');
   });
 
   it('stops before Sleeper discovery when the Gemini key is absent', async () => {
-    const sleeper = new FakeSleeperDiscovery();
-    const getUser = vi.spyOn(sleeper, 'getUser');
-
     await expect(
       runFirstRunSetup({
         environment: {},
-        sleeper,
         store: new MemoryProfileStore(),
       }),
     ).rejects.toThrow(SetupWizardError);
-    expect(getUser).not.toHaveBeenCalled();
   });
 
-  it('validates the Gemini key before it reads the current season', async () => {
-    const sleeper = new FakeSleeperDiscovery();
-    const getNflState = vi.spyOn(sleeper, 'getNflState');
+  it('validates the Gemini key before it saves the profile', async () => {
+    const store = new MemoryProfileStore();
     const verifyApiKey = vi.fn(async () => {
       throw new Error('invalid credential');
     });
@@ -94,13 +120,12 @@ describe('first-run setup wizard', () => {
     await expect(
       runFirstRunSetup({
         environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'bad-key' },
-        sleeper,
-        store: new MemoryProfileStore(),
+        store,
         verifyApiKey,
       }),
     ).rejects.toThrow('Gemini key validation failed');
     expect(verifyApiKey).toHaveBeenCalledWith('bad-key');
-    expect(getNflState).not.toHaveBeenCalled();
+    expect(store.saved).toBeNull();
   });
 
   it('includes co-owned rosters and excludes unrelated rosters', async () => {
@@ -111,7 +136,7 @@ describe('first-run setup wizard', () => {
     expect(rosters.map((roster) => roster.roster_id)).toEqual([6, 7]);
   });
 
-  it('applies only the season and preserves session-specific teams', () => {
+  it('applies the account without changing automatic NFL context', () => {
     const session = createSessionState(new Date('2026-08-20T12:00:00.000Z'));
     session.user = 'another-user';
     session.leagueId = '999';
@@ -123,10 +148,98 @@ describe('first-run setup wizard', () => {
 
     expect(session).toMatchObject({
       season: 2026,
-      user: 'another-user',
-      leagueId: '999',
-      rosterId: 3,
+      user: 'arvarik',
+      leagueId: null,
+      rosterId: null,
       team: 'SEA',
+      mode: 'fantasy',
+    });
+  });
+
+  it('refreshes NFL time, leagues, rosters, and deadline settings automatically', async () => {
+    const session = createSessionState(new Date('2025-01-01T00:00:00.000Z'));
+    const sleeper = new FakeSleeperDiscovery();
+    vi.spyOn(sleeper, 'getNflState').mockResolvedValue({
+      week: 18,
+      leg: 18,
+      display_week: 1,
+      season: '2026',
+      league_season: '2027',
+      season_type: 'post',
+    });
+    const leagueRequest = vi.spyOn(sleeper, 'getUserLeagues');
+
+    await refreshAutomaticSession(sleeper, session, 'arvarik');
+
+    expect(session).toMatchObject({
+      accountStatus: 'ready',
+      mode: 'fantasy',
+      season: 2026,
+      leagueSeason: 2027,
+      seasonType: 'post',
+      user: 'arvarik',
+      userId: 'user-1',
+      week: 1,
+    });
+    expect(leagueRequest).toHaveBeenCalledWith('user-1', '2027');
+    expect(session.leagues.map((item) => item.name)).toEqual([
+      'First League',
+      'Second League',
+    ]);
+    expect(session.leagues[0]?.deadlines).toContain('Trade deadline: end of NFL Week 11');
+    expect(session.leagueId).toBeNull();
+
+    focusSessionLeague(session, '200');
+    expect(session.leagueId).toBe('200');
+    expect(session.rosterOptions).toEqual([6, 7]);
+
+    disconnectSleeperSession(session);
+    expect(session).toMatchObject({
+      accountStatus: 'disconnected',
+      leagues: [],
+      mode: 'explore',
+      user: null,
+    });
+  });
+
+  it('records an account refresh failure without losing Explore', async () => {
+    const session = createSessionState();
+    const sleeper = new FakeSleeperDiscovery();
+    vi.spyOn(sleeper, 'getUser').mockRejectedValue(new Error('Sleeper unavailable'));
+
+    await expect(connectSleeperSession(sleeper, session, 'arvarik')).rejects.toThrow(
+      'Sleeper unavailable',
+    );
+
+    expect(session).toMatchObject({
+      accountStatus: 'error',
+      accountError: 'Sleeper unavailable',
+      user: 'arvarik',
+    });
+  });
+
+  it('keeps healthy leagues when one roster refresh fails', async () => {
+    const session = createSessionState();
+    const sleeper = new FakeSleeperDiscovery();
+    vi.spyOn(sleeper, 'getLeagueRosters').mockImplementation((leagueId) => {
+      if (leagueId === '100') return Promise.reject(new Error('League unavailable'));
+      return Promise.resolve([roster(6, 'user-1')]);
+    });
+
+    await refreshAutomaticSession(sleeper, session, 'arvarik');
+
+    expect(session.accountStatus).toBe('ready');
+    expect(session.accountError).toContain('1 league roster refresh failed');
+    expect(session.leagues).toHaveLength(2);
+    expect(session.leagues[0]).toMatchObject({
+      leagueId: '100',
+      rosterIds: [],
+      warning: 'League unavailable',
+    });
+    expect(session.leagues[1]).toMatchObject({
+      leagueId: '200',
+      rosterIds: [6],
+      warning: null,
     });
   });
 });
@@ -152,7 +265,7 @@ describe('file setup profile store', () => {
     expect(await store.remove()).toBe(false);
   });
 
-  it('migrates a roster-specific version 1 profile to version 2', async () => {
+  it('migrates a roster-specific version 1 profile to the username-only profile', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'seb-profile-migration-'));
     temporaryDirectories.push(directory);
     const path = join(directory, 'profile.json');
@@ -171,7 +284,7 @@ describe('file setup profile store', () => {
 
     expect(await store.load()).toEqual(exampleProfile());
     const saved = await readFile(path, 'utf8');
-    expect(saved).not.toContain('arvarik');
+    expect(saved).toContain('arvarik');
     expect(saved).not.toContain('leagueId');
   });
 });
@@ -201,7 +314,9 @@ class FakeSleeperDiscovery implements SleeperSetupDiscovery {
     return Promise.resolve({
       week: 1,
       leg: 1,
+      display_week: 3,
       season: '2026',
+      league_season: '2026',
       season_type: 'regular',
     });
   }
@@ -217,7 +332,7 @@ class FakeSleeperDiscovery implements SleeperSetupDiscovery {
     ]);
   }
 
-  getLeagueRosters(): Promise<SleeperRoster[]> {
+  getLeagueRosters(_leagueId: string): Promise<SleeperRoster[]> {
     return Promise.resolve([
       roster(8, 'someone-else'),
       roster(7, 'co-owner', ['user-1']),
@@ -237,7 +352,12 @@ function league(leagueId: string, name: string): SleeperLeague {
     total_rosters: 12,
     roster_positions: [],
     scoring_settings: {},
-    settings: {},
+    settings: {
+      trade_deadline: 11,
+      playoff_week_start: 15,
+      waiver_clear_days: 2,
+      waiver_hour: 5,
+    },
   };
 }
 
@@ -259,7 +379,7 @@ function roster(
 function exampleProfile(): SebSetupProfile {
   return {
     schemaVersion: SETUP_PROFILE_SCHEMA_VERSION,
+    sleeper: { username: 'arvarik' },
     updatedAt: '2026-08-20T12:00:00.000Z',
-    defaults: { season: 2026 },
   };
 }

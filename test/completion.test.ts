@@ -4,7 +4,9 @@ import {
   completeInteractiveInput,
   findInteractiveCommand,
   generateShellCompletion,
+  interactiveCommandArgumentError,
   INTERACTIVE_COMMANDS,
+  parseInteractiveCommandInput,
   searchInteractiveCommands,
 } from '../src/interactive/commands.js';
 
@@ -27,19 +29,60 @@ describe('interactive command completion', () => {
       '/skill weather-watch',
     );
     expect(completeInteractiveInput('/team se')[0]?.value).toBe('/team SEA');
+    expect(completeInteractiveInput('/team SEA ')).toEqual([]);
     expect(
       completeInteractiveInput('/league ', { leagueId: '123456' })[0]?.value,
     ).toBe('/league 123456');
+    expect(completeInteractiveInput('/league 2', {
+      leagueOptions: ['200'],
+      leagues: [{ leagueId: '200', name: 'Home League' }],
+    })[0]).toMatchObject({
+      value: '/league 200',
+      description: 'Focus My Fantasy on Home League.',
+    });
+    expect(completeInteractiveInput('/connect ', { user: 'arvarik' })[0]?.value)
+      .toBe('/connect arvarik');
+    expect(completeInteractiveInput('/leagues arvarik ', {
+      leagueSeason: 2026,
+      user: 'arvarik',
+    })[0]?.value).toBe('/leagues arvarik 2026');
     expect(completeInteractiveInput('/skill player')[0]).toMatchObject({
       value: '/skill player-info',
       description: expect.stringContaining('Player information'),
     });
+    expect(completeInteractiveInput('/export ')).toEqual([]);
+    expect(completeInteractiveInput('/export report ')[0]?.value).toBe(
+      '/export report md',
+    );
   });
 
-  it('closes skill completion after one valid skill', () => {
+  it('closes skill completion after one valid skill or inline question', () => {
     expect(completeInteractiveInput('/skill trade-review')).toEqual([]);
     expect(completeInteractiveInput('/skill trade-review ')).toEqual([]);
-    expect(completeInteractiveInput('/skill trade-review weather-watch')).toEqual([]);
+    expect(completeInteractiveInput('/skill player-info Lamar Jackson')).toEqual([]);
+  });
+
+  it('parses aliases and command arguments through one canonical path', () => {
+    expect(parseInteractiveCommandInput('/STATUS extra value')).toMatchObject({
+      argumentText: 'extra value',
+      arguments: ['extra', 'value'],
+      command: expect.objectContaining({ name: 'context' }),
+      name: 'status',
+    });
+    expect(parseInteractiveCommandInput('not a command')).toBeNull();
+  });
+
+  it('rejects extra arguments for every bounded command', () => {
+    for (const command of INTERACTIVE_COMMANDS) {
+      if (command.maxArguments === undefined) continue;
+      const extras = Array.from(
+        { length: command.maxArguments + 1 },
+        (_, index) => `value-${index + 1}`,
+      ).join(' ');
+      const parsed = parseInteractiveCommandInput(`/${command.name} ${extras}`);
+      expect(parsed).not.toBeNull();
+      expect(interactiveCommandArgumentError(parsed!)).toBe(`Use ${command.usage}.`);
+    }
   });
 
   it('groups commands and places recent commands first', () => {
@@ -48,8 +91,10 @@ describe('interactive command completion', () => {
 
     expect(categories).toEqual(new Set([
       'Essentials',
-      'Context',
-      'Analysis',
+      'Explore',
+      'My Fantasy',
+      'Analyze',
+      'Advanced',
       'Sources',
       'Conversation',
       'Preferences',
@@ -64,11 +109,11 @@ describe('interactive command completion', () => {
 
   it('puts common tasks first and preserves earlier command names as aliases', () => {
     expect(completeInteractiveInput('/').map((completion) => completion.value)).toEqual([
-      '/context',
-      '/skill',
-      '/week',
-      '/team',
-      '/league',
+      '/explore',
+      '/fantasy',
+      '/analyze',
+      '/connect',
+      '/account',
       '/next',
       '/help',
       '/exit',
@@ -80,6 +125,7 @@ describe('interactive command completion', () => {
     expect(findInteractiveCommand('/save')?.name).toBe('export');
     expect(findInteractiveCommand('/completion')?.name).toBe('shell-completion');
     expect(findInteractiveCommand('/quit')?.name).toBe('exit');
+    expect(findInteractiveCommand('/my')?.name).toBe('fantasy');
   });
 
   it.each(['bash', 'fish', 'zsh'] as const)(

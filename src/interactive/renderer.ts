@@ -7,7 +7,12 @@ import {
 } from 'ai';
 
 import type { SourceTracker } from '../sources.js';
-import { completeInteractiveInput, findInteractiveCommand } from './commands.js';
+import {
+  completeInteractiveInput,
+  findInteractiveCommand,
+  interactiveCommandArgumentError,
+  parseInteractiveCommandInput,
+} from './commands.js';
 import { PromptEditor, TerminalKeyParser, type TerminalKey } from './editor.js';
 import type { PromptHistory } from './history.js';
 import {
@@ -20,7 +25,11 @@ import {
   visibleLength,
   wrapTerminalLine,
 } from './presentation.js';
-import { getContextualSuggestions, type SessionState } from './session.js';
+import {
+  experienceTitle,
+  getContextualSuggestions,
+  type SessionState,
+} from './session.js';
 import { getSkill } from './skills.js';
 import {
   createTheme,
@@ -298,6 +307,8 @@ export class SebTerminalRenderer {
       case 'down': this.recallHistory(-1); break;
       case 'page-up': this.scroll(8); break;
       case 'page-down': this.scroll(-8); break;
+      case 'scroll-up': this.scroll(3); break;
+      case 'scroll-down': this.scroll(-3); break;
       case 'ctrl-r': this.reverseSearch(); break;
       case 'ctrl-k': this.menuOpen = true; if (!this.editor.text()) this.editor.set('/'); break;
       case 'ctrl-l': this.paint(true); return;
@@ -319,34 +330,36 @@ export class SebTerminalRenderer {
   private async submitPrompt(resolve: (value: string | undefined) => void): Promise<void> {
     const prompt = this.editor.text().trim();
     if (!prompt) return;
-    const localCommand = prompt.startsWith('/')
-      ? findInteractiveCommand(prompt.split(/\s+/u)[0] ?? '')
-      : null;
+    const parsed = parseInteractiveCommandInput(prompt);
+    const localCommand = parsed?.command ?? null;
     if (localCommand) this.options.uiState.recordCommand(localCommand.name);
-    if (localCommand?.name === 'exit') {
-      if (prompt.split(/\s+/u).length > 1) {
-        this.status = 'Use /exit without arguments';
+    if (parsed) {
+      const argumentError = interactiveCommandArgumentError(parsed);
+      if (argumentError) {
+        this.status = argumentError;
         this.paint();
         return;
       }
+    }
+    if (localCommand?.name === 'exit') {
       this.editor.set('');
       this.stop();
       resolve(undefined);
       return;
     }
-    if (prompt === '/shortcuts') {
+    if (localCommand?.name === 'shortcuts') {
       this.overlay = 'shortcuts';
       this.editor.set('');
       this.paint();
       return;
     }
-    if (prompt === '/edit') {
+    if (localCommand?.name === 'edit') {
       this.editor.set(this.options.uiState.latestPrompt);
       this.status = this.editor.text() ? 'Editing the last prompt' : 'No model prompt is available';
       this.paint();
       return;
     }
-    if (prompt === '/retry') {
+    if (localCommand?.name === 'retry') {
       if (!this.options.uiState.latestPrompt) {
         this.status = 'No model prompt is available';
         this.editor.set('');
@@ -357,7 +370,7 @@ export class SebTerminalRenderer {
       await this.finishSubmission(this.options.uiState.latestPrompt, resolve);
       return;
     }
-    if (prompt === '/copy') {
+    if (localCommand?.name === 'copy') {
       const answer = this.options.uiState.latestAnswer;
       if (answer && this.options.output.isTTY !== false) {
         this.options.output.write(osc52(answer));
@@ -369,8 +382,10 @@ export class SebTerminalRenderer {
       this.paint();
       return;
     }
-    if (prompt === '/history' || prompt === '/history clear') {
-      if (prompt.endsWith('clear')) {
+    if (localCommand?.name === 'history' && (
+      parsed?.arguments.length === 0 || parsed?.arguments[0]?.toLowerCase() === 'clear'
+    )) {
+      if (parsed.arguments[0]?.toLowerCase() === 'clear') {
         try {
           await this.options.history.clear();
           this.status = 'Cleared the private prompt history';
@@ -384,7 +399,9 @@ export class SebTerminalRenderer {
       this.paint();
       return;
     }
-    const theme = prompt.match(/^\/theme\s+(default|high-contrast|contrast|compact)$/u)?.[1];
+    const theme = localCommand?.name === 'theme' && parsed?.arguments.length === 1
+      ? parsed.arguments[0]?.toLowerCase().match(/^(default|high-contrast|contrast|compact)$/u)?.[1]
+      : undefined;
     if (theme) {
       this.options.uiState.theme = parseThemeName(theme);
       this.theme = createTheme(this.options.environment, this.options.uiState);
@@ -393,7 +410,9 @@ export class SebTerminalRenderer {
       this.paint(true);
       return;
     }
-    const icons = prompt.match(/^\/icons\s+(unicode|ascii)$/u)?.[1];
+    const icons = localCommand?.name === 'icons' && parsed?.arguments.length === 1
+      ? parsed.arguments[0]?.toLowerCase().match(/^(unicode|ascii)$/u)?.[1]
+      : undefined;
     if (icons) {
       this.options.uiState.iconMode = parseIconMode(icons);
       this.theme = createTheme(this.options.environment, this.options.uiState);
@@ -409,6 +428,7 @@ export class SebTerminalRenderer {
     prompt: string,
     resolve: (value: string | undefined) => void,
   ): Promise<void> {
+    this.scrollOffset = 0;
     try {
       await this.options.history.add(prompt);
     } catch (error) {
@@ -440,12 +460,18 @@ export class SebTerminalRenderer {
       this.scroll(key.type === 'page-up' ? 8 : 1);
     } else if (key.type === 'page-down' || key.type === 'down') {
       this.scroll(key.type === 'page-down' ? -8 : -1);
+    } else if (key.type === 'scroll-up' || key.type === 'scroll-down') {
+      this.scroll(key.type === 'scroll-up' ? 3 : -3);
     } else if (key.type === 'ctrl-l') {
       this.paint(true);
     }
   }
 
   private renderMessage(message: UIMessage): void {
+    const width = Math.max(40, this.options.output.columns ?? 80);
+    const previousBodyLength = this.scrollOffset > 0
+      ? this.renderBody(width).length
+      : null;
     const active = new Set<string>();
     for (const [index, part] of message.parts.entries()) {
       const id = `${message.id}:${index}`;
@@ -487,6 +513,12 @@ export class SebTerminalRenderer {
     }
     this.sections = this.sections.filter((section) =>
       !section.id.startsWith(`${message.id}:`) || active.has(section.id));
+    if (previousBodyLength !== null) {
+      this.scrollOffset = Math.max(
+        0,
+        this.scrollOffset + this.renderBody(width).length - previousBodyLength,
+      );
+    }
     this.paint();
   }
 
@@ -550,13 +582,12 @@ export class SebTerminalRenderer {
     const index = this.sections.findIndex((candidate) => candidate.id === section.id);
     if (index >= 0) this.sections[index] = section;
     else this.sections.push(section);
-    if (this.scrollOffset === 0) this.scrollOffset = 0;
   }
 
   private start(): void {
     if (this.active) return;
     this.active = true;
-    this.options.output.write('\x1b[?1049h\x1b[?25l\x1b[?2004h');
+    this.options.output.write('\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[?1000h\x1b[?1006h');
     if (this.options.input.isTTY) {
       this.options.input.setRawMode?.(true);
       this.options.input.resume();
@@ -574,7 +605,7 @@ export class SebTerminalRenderer {
       this.options.input.pause();
     }
     if (this.onResize) this.options.output.off('resize', this.onResize);
-    this.options.output.write('\x1b[?2004l\x1b[?25h\x1b[?1049l');
+    this.options.output.write('\x1b[?1006l\x1b[?1000l\x1b[?2004l\x1b[?25h\x1b[?1049l');
     this.active = false;
   }
 
@@ -619,11 +650,12 @@ export class SebTerminalRenderer {
     const width = Math.max(40, this.options.output.columns ?? 80);
     const height = Math.max(16, this.options.output.rows ?? 24);
     const header = this.renderHeader(width);
-    const footer = this.renderFooter(width);
-    const bodyHeight = Math.max(3, height - header.length - footer.length);
+    const footerHeight = this.renderFooter(width).length;
+    const bodyHeight = Math.max(3, height - header.length - footerHeight);
     const body = this.renderBody(width);
     const maximumOffset = Math.max(0, body.length - bodyHeight);
     this.scrollOffset = Math.min(this.scrollOffset, maximumOffset);
+    const footer = this.renderFooter(width);
     const end = body.length - this.scrollOffset;
     const visible = body.slice(Math.max(0, end - bodyHeight), end);
     while (visible.length < bodyHeight) visible.unshift('');
@@ -639,15 +671,23 @@ export class SebTerminalRenderer {
 
   private renderHeader(width: number): string[] {
     const session = this.options.session;
-    const skill = getSkill(session.skillId);
     const recentSource = this.options.sources.list()[0];
     const source = recentSource ? sourceBadge(recentSource) : 'NO SOURCE YET';
-    const title = ` SEB ${this.options.version}  ${session.season} W${session.week ?? '—'}  ${this.options.model}`;
+    const phase = session.seasonType?.toUpperCase() ?? 'NFL';
+    const title = ` SEB ${this.options.version}  ${experienceTitle(session.mode).toUpperCase()}  ${session.season} ${phase}${session.week ? ` W${session.week}` : ''}`;
     const context = [
-      `LEAGUE ${session.leagueId ?? '—'}`,
-      `ROSTER ${session.rosterId ?? '—'}`,
-      `TEAM ${session.team ?? '—'}`,
-      `SKILL ${skill.id}`,
+      ...(session.user
+        ? [`SLEEPER @${session.user} · ${session.leagues.length} LEAGUE${session.leagues.length === 1 ? '' : 'S'}`]
+        : ['SLEEPER NOT CONNECTED']),
+      ...(session.leagueId
+        ? [`FOCUS ${session.leagues.find((league) => league.leagueId === session.leagueId)?.name ?? session.leagueId}`]
+        : []),
+      ...(session.player ? [`PLAYER ${session.player}`] : []),
+      ...(!session.player && session.team ? [`TEAM ${session.team}`] : []),
+      ...(session.skillId !== 'general'
+        ? [`WORKFLOW ${getSkill(session.skillId).title}`]
+        : []),
+      ...(session.accountError ? [`ACCOUNT WARNING ${session.accountError}`] : []),
       `SOURCE ${source}`,
     ];
     const contextRows = packRows(context, width - 1).map((row) =>
@@ -668,9 +708,15 @@ export class SebTerminalRenderer {
       const color = section.kind === 'error' ? 'danger' : section.kind === 'tool' ? 'tool' : section.kind === 'assistant' ? 'assistant' : 'accent';
       lines.push(paint(this.theme, color, `${section.kind === 'assistant' ? symbol(this.theme, 'assistant') : symbol(this.theme, 'bullet')} ${section.title}`));
       const rendered = section.kind === 'assistant'
-        ? renderAnalysisText(stripSuggestionFooter(section.content), this.theme)
+        ? renderAnalysisText(
+          stripSuggestionFooter(section.content),
+          this.theme,
+          Math.max(20, width - 2),
+        )
         : section.content;
-      for (const line of rendered.split('\n')) lines.push(...wrapTerminalLine(`  ${line}`, width));
+      for (const line of rendered.split('\n')) {
+        lines.push(...wrapTerminalLine(line, Math.max(20, width - 2)).map((part) => `  ${part}`));
+      }
       if (!this.theme.compact) lines.push('');
     }
     return lines;
@@ -681,15 +727,19 @@ export class SebTerminalRenderer {
       ? this.renderMenu(width)
       : [];
     const suggestions = !this.editor.text() && menu.length === 0
-      ? this.suggestions().map((value, index) => `${index + 1} ${value}`).join('   ')
-      : '';
+      ? this.suggestions()
+      : [];
     const promptLines = renderEditor(this.editor, width - 4, this.theme);
+    const status = this.scrollOffset > 0
+      ? `Viewing earlier transcript · ${this.scrollOffset} lines above latest · scroll down to return`
+      : this.status;
     return [
       ...menu,
-      suggestions ? paint(this.theme, 'source', fit(` ${suggestions}`, width)) : '',
+      ...suggestions.map((value, index) =>
+        paint(this.theme, 'source', fit(` ${index + 1}  ${value}`, width))),
       paint(this.theme, 'dim', '─'.repeat(width)),
       ...promptLines.map((line, index) => `${index === 0 ? `${symbol(this.theme, 'prompt')} ` : '  '}${line}`),
-      paint(this.theme, 'dim', fit(` ${this.status} · Ctrl+K commands · /exit quit · ? shortcuts`, width)),
+      paint(this.theme, 'dim', fit(` ${status} · Ctrl+K commands · /exit quit · ? shortcuts`, width)),
     ];
   }
 
@@ -716,21 +766,26 @@ export class SebTerminalRenderer {
   }
 
   private home(width: number): string[] {
-    const skill = getSkill(this.options.session.skillId);
+    const session = this.options.session;
+    const fantasy = session.user
+      ? session.accountError
+        ? `Connected as @${session.user}. Refresh warning: ${session.accountError}`
+        : `Connected as @${session.user} with ${session.leagues.length} discovered league${session.leagues.length === 1 ? '' : 's'}.`
+      : 'Optional. Run /connect <Sleeper username> once for automatic league context.';
     return [
       '',
-      paint(this.theme, 'assistant', `${symbol(this.theme, 'assistant')} Fantasy decisions with current, traceable data`),
+      paint(this.theme, 'assistant', `${symbol(this.theme, 'assistant')} Ask naturally. Seb selects the current NFL week and the right data.`),
       '',
-      `  Season: ${this.options.session.season}`,
-      `  Week: ${this.options.session.week ?? 'not set'}`,
-      `  Model: ${this.options.model}`,
-      `  Skill: ${skill.title}`,
-      `  Source health: ${this.options.sources.list().length === 0 ? 'ready' : 'active'}`,
+      paint(this.theme, 'accent', 'EXPLORE'),
+      '  Player profiles, team information, statistics, schedules, and verified news.',
       '',
-      paint(this.theme, 'accent', 'TRY AN EXAMPLE'),
-      ...this.suggestions().map((suggestion, index) => fit(`  ${index + 1}. ${suggestion}`, width)),
+      paint(this.theme, 'accent', 'MY FANTASY'),
+      `  ${fantasy}`,
       '',
-      paint(this.theme, 'dim', 'Press 1, 2, or 3 to select an example. Press Ctrl+K for all commands.'),
+      paint(this.theme, 'accent', 'ANALYZE'),
+      '  Compare players, then add matchup, usage, roster, news, and weather context.',
+      '',
+      paint(this.theme, 'dim', 'Use the numbered actions below, or type any question.'),
     ];
   }
 
@@ -751,6 +806,7 @@ export class SebTerminalRenderer {
       '  ↑ / ↓        Read prompt history',
       '  Ctrl+R       Search prompt history',
       '  PgUp/PgDn    Scroll the transcript',
+      '  Mouse wheel   Scroll the transcript',
       '  Escape       Close a panel or stop a request',
       '  Ctrl+C       Exit Seb',
       '  /exit        Exit Seb',

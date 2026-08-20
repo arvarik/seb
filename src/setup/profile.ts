@@ -3,14 +3,14 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promi
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 
-export const SETUP_PROFILE_SCHEMA_VERSION = 2;
+export const SETUP_PROFILE_SCHEMA_VERSION = 3;
 const MAX_PROFILE_BYTES = 64 * 1024;
 
 export interface SebSetupProfile {
-  defaults: {
-    season: number;
-  };
   schemaVersion: typeof SETUP_PROFILE_SCHEMA_VERSION;
+  sleeper: {
+    username: string;
+  } | null;
   updatedAt: string;
 }
 
@@ -135,32 +135,25 @@ export function validateSetupProfile(value: unknown): SebSetupProfile {
   if (!isIsoDate(value.updatedAt)) {
     throw new SetupProfileValidationError('The setup profile needs a valid updatedAt value.');
   }
-  if (!isRecord(value.defaults)) {
-    throw new SetupProfileValidationError('The setup profile needs default values.');
-  }
-  if (!isInteger(value.defaults.season, 1999, 2100)) {
-    throw new SetupProfileValidationError('The default NFL season is invalid.');
-  }
+  const sleeper = readSleeperAccount(value.sleeper);
 
   return {
     schemaVersion: SETUP_PROFILE_SCHEMA_VERSION,
+    sleeper,
     updatedAt: value.updatedAt,
-    defaults: {
-      season: value.defaults.season,
-    },
   };
 }
 
 export function formatSetupProfile(profile: SebSetupProfile, path?: string): string {
   return [
-    '## Seb setup profile',
+    '## Seb preferences',
     '',
-    `- Default NFL season: ${profile.defaults.season}`,
+    `- Sleeper account: ${profile.sleeper ? `@${profile.sleeper.username}` : 'not connected'}`,
     `- Updated: ${profile.updatedAt}`,
     ...(path ? [`- File: \`${path}\``] : []),
     '- Gemini keys stay in the environment. Seb never saves them in this profile.',
-    '- Sleeper users, leagues, rosters, and NFL teams remain session-specific.',
-    '- Type `/` in interactive mode to select a context command.',
+    '- Seb refreshes the NFL week, leagues, and owned rosters when chat starts.',
+    '- Run `/connect USERNAME` or `/disconnect` to change the Sleeper account.',
   ].join('\n');
 }
 
@@ -172,19 +165,47 @@ function readSetupProfile(value: unknown): {
     if (!isIsoDate(value.updatedAt)) {
       throw new SetupProfileValidationError('The legacy setup profile needs a valid updatedAt value.');
     }
-    if (!isInteger(value.defaults.season, 1999, 2100)) {
-      throw new SetupProfileValidationError('The legacy setup profile has an invalid NFL season.');
+    return {
+      migrated: true,
+      profile: {
+        schemaVersion: SETUP_PROFILE_SCHEMA_VERSION,
+        sleeper: readLegacySleeperAccount(value.sleeper),
+        updatedAt: value.updatedAt,
+      },
+    };
+  }
+  if (isRecord(value) && value.schemaVersion === 2 && isRecord(value.defaults)) {
+    if (!isIsoDate(value.updatedAt)) {
+      throw new SetupProfileValidationError('The legacy setup profile needs a valid updatedAt value.');
     }
     return {
       migrated: true,
       profile: {
         schemaVersion: SETUP_PROFILE_SCHEMA_VERSION,
+        sleeper: null,
         updatedAt: value.updatedAt,
-        defaults: { season: value.defaults.season },
       },
     };
   }
   return { migrated: false, profile: validateSetupProfile(value) };
+}
+
+function readSleeperAccount(value: unknown): SebSetupProfile['sleeper'] {
+  if (value === null) return null;
+  if (!isRecord(value) || !validUsername(value.username)) {
+    throw new SetupProfileValidationError('The Sleeper account needs a valid username or null.');
+  }
+  return { username: value.username.trim() };
+}
+
+function readLegacySleeperAccount(value: unknown): SebSetupProfile['sleeper'] {
+  return isRecord(value) && validUsername(value.username)
+    ? { username: value.username.trim() }
+    : null;
+}
+
+function validUsername(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_.-]{1,100}$/u.test(value.trim());
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -193,10 +214,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isIsoDate(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
-}
-
-function isInteger(value: unknown, minimum: number, maximum: number): value is number {
-  return Number.isInteger(value) && (value as number) >= minimum && (value as number) <= maximum;
 }
 
 function isReadOnlyFileError(error: unknown): boolean {

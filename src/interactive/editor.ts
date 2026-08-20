@@ -82,6 +82,7 @@ export type TerminalKey =
   | { type: 'left' | 'right' | 'word-left' | 'word-right' }
   | { type: 'home' | 'end' | 'up' | 'down' }
   | { type: 'page-up' | 'page-down' }
+  | { type: 'scroll-up' | 'scroll-down' }
   | { type: 'ctrl-a' | 'ctrl-c' | 'ctrl-e' | 'ctrl-k' | 'ctrl-l' | 'ctrl-r' | 'ctrl-u' | 'ctrl-w' }
   | { type: 'escape' | 'tab' | 'ignore' };
 
@@ -109,6 +110,23 @@ export class TerminalKeyParser {
 }
 
 function parseOne(value: string): { key: TerminalKey; length: number } | null {
+  const sgrMouse = value.match(/^\x1b\[<(\d+);\d+;\d+([Mm])/u);
+  if (sgrMouse) {
+    const button = Number(sgrMouse[1]);
+    const wheel = mouseWheelKey(button);
+    return {
+      key: wheel ?? { type: 'ignore' },
+      length: sgrMouse[0].length,
+    };
+  }
+  if (value.startsWith('\x1b[M')) {
+    if (value.length < 6) return null;
+    const button = value.charCodeAt(3) - 32;
+    return {
+      key: mouseWheelKey(button) ?? { type: 'ignore' },
+      length: 6,
+    };
+  }
   const sequences: Array<[string, TerminalKey]> = [
     ['\x1b[1;3D', { type: 'word-left' }],
     ['\x1b[1;3C', { type: 'word-right' }],
@@ -133,10 +151,10 @@ function parseOne(value: string): { key: TerminalKey; length: number } | null {
   for (const [sequence, key] of sequences) {
     if (value.startsWith(sequence)) return { key, length: sequence.length };
   }
-  if (value.startsWith('\x1b[') && !/^\x1b\[[0-9;?]*[ -/]*[@-~]/u.test(value)) {
+  if (value.startsWith('\x1b[') && !/^\x1b\[[0-?]*[ -/]*[@-~]/u.test(value)) {
     return null;
   }
-  const unknownEscape = value.match(/^\x1b(?:\[[0-9;?]*[ -/]*[@-~]|O.)/u)?.[0];
+  const unknownEscape = value.match(/^\x1b(?:\[[0-?]*[ -/]*[@-~]|O.)/u)?.[0];
   if (unknownEscape) return { key: { type: 'ignore' }, length: unknownEscape.length };
   const controls: Record<string, TerminalKey> = {
     '\u0001': { type: 'ctrl-a' },
@@ -162,6 +180,11 @@ function parseOne(value: string): { key: TerminalKey; length: number } | null {
     key: character >= ' ' ? { type: 'character', value: character } : { type: 'ignore' },
     length: character.length,
   };
+}
+
+function mouseWheelKey(button: number): TerminalKey | null {
+  if ((button & 64) === 0) return null;
+  return { type: (button & 1) === 0 ? 'scroll-up' : 'scroll-down' };
 }
 
 function previousCodePointIndex(value: string, index: number): number {

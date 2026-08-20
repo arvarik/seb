@@ -1,7 +1,7 @@
 export type CliCommand =
   | { name: 'help' }
   | { name: 'version' }
-  | { name: 'setup' }
+  | { name: 'setup'; username?: string }
   | { name: 'completion'; shell: 'bash' | 'fish' | 'zsh' }
   | { name: 'cache'; action: 'clear' | 'status'; json: boolean }
   | {
@@ -44,7 +44,7 @@ Usage:
   seb chat [--model MODEL]
   seb ask [OPTIONS] [QUESTION]
   seb doctor [--offline] [--json]
-  seb setup
+  seb setup [SLEEPER_USERNAME]
   seb completion bash|fish|zsh
   seb cache [status|clear] [--json]
   seb snapshots [--kind KIND] [--entity KEY] [--id ID] [--limit N] [--json]
@@ -54,7 +54,7 @@ Commands:
   chat       Start an interactive terminal session. This is the default.
   ask        Ask one question. Seb also reads the question from standard input.
   doctor     Verify Node.js, Gemini, Sleeper, nflverse, and weather.
-  setup      Validate Gemini and save team-independent defaults.
+  setup      Validate Gemini and save one optional Sleeper username.
   completion Print a shell completion script.
   cache      Inspect or clear the local SQLite cache.
   snapshots  List versioned source snapshots.
@@ -85,7 +85,7 @@ Run without npm link:
 Interactive controls:
   Type / to open commands. Arrow keys select. Tab or Right Arrow fills.
   Enter sends. Escape closes the menu. Escape again or Ctrl+C exits.
-  Run /help for context, source, skill, DevTools, cache, and export commands.
+  Run /help for Explore, My Fantasy, Analyze, source, and advanced commands.
 `;
 
 export function parseCliArguments(arguments_: readonly string[]): CliCommand {
@@ -112,8 +112,10 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
     case 'doctor':
       return parseDoctorArguments(rest);
     case 'setup':
-      requireNoArguments(rest, first);
-      return { name: 'setup' };
+      if (rest.length > 1) {
+        throw new CliUsageError('Use seb setup [SLEEPER_USERNAME].');
+      }
+      return rest[0] ? { name: 'setup', username: rest[0] } : { name: 'setup' };
     case 'completion':
       return parseCompletionArguments(rest);
     case 'cache':

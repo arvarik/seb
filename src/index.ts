@@ -55,7 +55,14 @@ export type {
   NwsHourlyForecast,
   NwsPointMetadata,
 } from './weather/types.js';
-export { SEB_SKILLS, findSkill, getSkill } from './interactive/skills.js';
+export {
+  SEB_SKILLS,
+  findSkill,
+  getSkill,
+  parseSkillInvocation,
+  type SebSkill,
+  type SebSkillInvocation,
+} from './interactive/skills.js';
 export * from './identity/index.js';
 export * from './provenance/index.js';
 export * from './evaluation/index.js';
@@ -93,8 +100,13 @@ export {
 export {
   applySetupProfile,
   checkGeminiApiKey,
+  connectSleeperSession,
   createSetupProfile,
+  disconnectSleeperSession,
   discoverOwnedRosters,
   discoverSleeperAccount,
+  focusSessionLeague,
+  refreshAutomaticSession,
+  resolveCurrentNflWeek,
   runFirstRunSetup,
 } from './setup/wizard.js';

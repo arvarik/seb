@@ -1,6 +1,6 @@
 # Terminal interface guide
 
-Seb `0.0.4` includes a local terminal renderer for interactive research.
+Seb `0.0.5` includes a local terminal renderer for interactive research.
 
 The AI SDK still controls the agent message loop and tool transport.
 
@@ -15,11 +15,19 @@ seb
 npm run seb
 ```
 
-The home screen shows the season, week, model, skill, and source health.
+The home screen shows the current NFL state and the active Seb experience.
+
+Explore covers player, team, league, statistic, schedule, result, and news questions.
+
+My Fantasy uses one optional Sleeper username.
+
+Analyze continues from the active subject with comparison and decision context.
 
 It also shows up to three useful next actions.
 
 Press `1`, `2`, or `3` to select one action.
+
+Seb shows each action on a separate footer row.
 
 Seb submits a complete action immediately.
 
@@ -54,14 +62,16 @@ Press `Ctrl+K` to open the palette.
 
 You can also type `/` at the start of a prompt.
 
-The palette groups commands into seven categories.
+The palette groups commands into nine categories.
 
 - Essentials
-- Context
-- Analysis
+- Explore
+- My Fantasy
+- Analyze
 - Sources
 - Conversation
 - Preferences
+- Advanced
 - Diagnostics
 
 The empty palette shows common tasks before advanced tools.
@@ -70,7 +80,7 @@ The palette searches command names and descriptions.
 
 It places recent commands before equally relevant commands.
 
-Context commands show their active value when one exists.
+Advanced override commands show their active value when one exists.
 
 The bottom row describes the selected command effect.
 
@@ -150,16 +160,17 @@ Seb prints a normal URL when terminal links are unavailable.
 The first header row shows these values.
 
 - Seb version
+- Active experience
 - NFL season and week
-- Active Gemini model
 
-The second row shows persistent context badges.
+The following rows show only useful active context.
 
-- Sleeper league
-- Sleeper roster
-- NFL team
-- Analysis skill
+- Connected Sleeper username and discovered league count
+- Focused fantasy league, when one league has focus
+- Active NFL player or team
 - Latest source state
+
+Seb hides empty league, roster, team, and workflow placeholders.
 
 Source states include `LIVE`, `WEB`, `CACHED 4m`, `2025 STATS`, and `STALE`.
 
@@ -172,6 +183,16 @@ Run `/sources` for exact links, retrieval times, and cache outcomes.
 ## Read analysis presentation
 
 Seb highlights a `Decision` section when the answer includes one.
+
+Seb converts Markdown tables into bordered terminal tables.
+
+Wide NFL stat tables group passing, rushing, receiving, and fantasy fields.
+
+Seb uses labeled record cards when another wide table cannot fit safely.
+
+The renderer keeps every table value in both layouts.
+
+Headings, nested lists, numbered lists, labeled metrics, quotes, and code blocks use distinct terminal styles.
 
 A percentage on a `Confidence` line becomes a ten-cell bar.
 
@@ -212,6 +233,12 @@ Press `Ctrl+C` to stop the request and exit Seb.
 Run `/exit`, `/quit`, or `/q` from the prompt to exit Seb.
 
 Use `Page Up` and `Page Down` to scroll the transcript.
+
+Use the mouse wheel or a trackpad gesture to scroll the transcript.
+
+The footer shows when the screen displays earlier transcript rows.
+
+Mouse scrolling does not select an older prompt from history.
 
 Use `Ctrl+L` to repaint the complete screen.
 

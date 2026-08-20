@@ -41,7 +41,7 @@ GOOGLE_GENERATIVE_AI_API_KEY=your-key
 Add a contact value to the NWS user agent.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.0.4 (you@example.com)
+NWS_USER_AGENT=seb/0.0.5 (you@example.com)
 ```
 
 The default value identifies the public Seb repository. A direct contact value helps the NWS contact you about request problems.
@@ -124,12 +124,18 @@ npm run ask -- "Show the current NFL state."
 
 One-shot requests use `GEMINI_MODEL` first. They use `GEMINI_FALLBACK_MODEL` after a temporary capacity or rate-limit error.
 
-## 5. Create the team-independent profile
+## 5. Save the optional Sleeper account
 
-Run setup.
+Run setup without a username when you only want to validate Gemini.
 
 ```bash
 npm run seb -- setup
+```
+
+Add one Sleeper username when you want automatic fantasy context.
+
+```bash
+npm run seb -- setup your-sleeper-name
 ```
 
 Setup checks that the Gemini key exists.
@@ -138,13 +144,11 @@ It sends one small Gemini request to validate the key and configured models.
 
 It does not save the key value.
 
-It reads the current NFL season from Sleeper.
+Seb saves only the optional Sleeper username and the update time.
 
-Seb saves only that season and the update time.
+The preferences file contains no league, roster, NFL team, season, or week.
 
-The profile contains no Sleeper user, league, roster, or NFL team.
-
-Starting `seb` without a profile runs the same team-independent setup automatically.
+Starting `seb` without preferences validates Gemini and creates an empty preferences file.
 
 The setup command accepts no interactive answers, so scripts can also run it.
 
@@ -170,45 +174,41 @@ npm run seb
 
 Read the [command-line guide](CLI.md) for pipes, JSON output, and exit codes.
 
-## 7. Ask league questions
+## 7. Use the three Seb experiences
 
-Include the Sleeper league ID in each league request.
-
-```bash
-npm run ask -- "Analyze every roster in Sleeper league 123456789."
-```
-
-Use a user name when you do not know the league ID.
+Explore needs no Sleeper account.
 
 ```bash
-npm run ask -- "Find the Sleeper user arvind and list the user's 2026 NFL leagues."
+npm run ask -- "Show Derrick Henry's profile, recent statistics, and news."
 ```
 
-Interactive chat can discover and select context without changing the setup profile.
+My Fantasy uses one saved Sleeper username.
+
+```text
+/connect your-sleeper-name
+What needs my attention across my leagues?
+```
+
+Seb refreshes the current NFL state when the session starts.
+
+It discovers every current league and owned roster for the saved account.
+
+Analyze continues from the active player, team, or fantasy subject.
+
+```text
+Show Derrick Henry's current profile and news.
+Compare him with Saquon Barkley for this matchup.
+```
+
+You do not need to select a season, week, league, roster, or NFL team first.
 
 Press `Ctrl+K` or type `/` to open the command palette.
 
-Discover a user's leagues.
-
-```text
-/leagues your-sleeper-name
-```
-
-Select one returned league and list its rosters.
+Use an advanced override only when you want another period or one league.
 
 ```text
 /league 123456789
-/rosters
-```
-
-Set repeated values once inside interactive chat.
-
-```text
 /season 2026
-/week current
-/league 123456789
-/roster 4
-/team SEA
 ```
 
 Run `/help` inside chat for the complete command list.
@@ -217,9 +217,9 @@ Run `/profile show` to show the active profile and file path.
 
 Run `/profile clear` to remove the profile.
 
-Run `/setup` inside chat to save the active season as the global default.
+Run `/disconnect` to remove the saved Sleeper username.
 
-Team context remains in memory for the current interactive session.
+Player and team subjects remain in memory for natural follow-up questions.
 
 ## 8. Install shell completion
 
@@ -331,7 +331,8 @@ The response lists each enabled connector and the selected state adapter.
 | `GEMINI_FALLBACK_MODEL` | No | Selects the capacity fallback model. |
 | `NWS_USER_AGENT` | Recommended | Identifies Seb and gives the NWS a contact value. |
 | `SEB_DEVTOOLS` | No | Records local AI SDK traces when it equals `true` or `1`. |
-| `SEB_PROFILE_FILE` | No | Selects the complete setup profile path. |
+| `SEB_SLEEPER_USER` | No | Supplies the optional Sleeper username during setup. |
+| `SEB_PROFILE_FILE` | No | Selects the complete preferences file path. |
 | `SEB_CONFIG_HOME` | No | Selects the directory that contains `profile.json`. |
 | `SEB_CONNECTORS` | Usually | Lists `slack`, `discord`, or `telegram`. |
 | `SEB_BOT_NAME` | No | Sets the common bot name. The default is `seb`. |
@@ -343,9 +344,9 @@ Seb can auto-detect a connector from complete platform credentials.
 
 Set `SEB_CONNECTORS` explicitly in production. This setting prevents an unused credential from enabling a platform.
 
-## Profile path and security
+## Preferences path and security
 
-Seb selects the profile path in this order.
+Seb selects the preferences path in this order.
 
 1. `SEB_PROFILE_FILE` selects the complete file path.
 2. `SEB_CONFIG_HOME` selects `DIRECTORY/profile.json`.
@@ -354,13 +355,13 @@ Seb selects the profile path in this order.
 
 Use an absolute path for `SEB_PROFILE_FILE` in scripts.
 
-Do not set both Seb profile variables.
+Do not set both Seb preferences variables.
 
 `SEB_PROFILE_FILE` has priority when both values exist.
 
-Seb creates the profile directory with mode `0700`.
+Seb creates the preferences directory with mode `0700`.
 
-Seb writes the profile with mode `0600`.
+Seb writes the preferences file with mode `0600`.
 
 It writes a temporary file before an atomic rename.
 
@@ -368,15 +369,17 @@ It rejects a file larger than 64 KiB.
 
 It validates the schema, identifiers, ranges, and update time on every load.
 
-The profile contains only the default NFL season, schema version, and update time.
+The file contains only the optional Sleeper username, schema version, and update time.
 
-Seb migrates a version 1 profile to version 2 when it loads the file.
+Seb migrates version 1 and version 2 files to version 3 when it loads them.
 
-The migration removes the saved Sleeper user, league, and roster values.
+Version 1 migration keeps a valid Sleeper username.
 
-The profile does not contain the Gemini key or connector credentials.
+All migrations remove saved league, roster, season, and week values.
 
-Only interactive chat loads this profile automatically.
+The preferences file does not contain the Gemini key or connector credentials.
+
+Interactive chat and one-shot requests load these preferences automatically.
 
 One-shot and connector requests do not apply interactive team context.
 
@@ -390,21 +393,23 @@ Add the key to `.env`. Then restart the command.
 
 ### Sleeper finds no league
 
-Confirm the Sleeper username in `/leagues USERNAME`.
+Confirm the saved Sleeper username with `/account`.
 
-Confirm that the user has an NFL league for the selected season.
+Confirm that the user has an NFL league for the current Sleeper league season.
 
-Run `/season YEAR`, then run `/leagues USERNAME` again.
+Run `/connect USERNAME` again to refresh the account.
 
 ### Sleeper does not list the expected roster
 
-Run `/rosters LEAGUE_ID` to list every roster in the league.
+Run `/account` to confirm that Seb found the owned roster.
+
+Run `/rosters LEAGUE_ID` to inspect every roster in one league.
 
 Select the required roster with `/roster ID`.
 
-### The profile contains invalid JSON
+### The preferences file contains invalid JSON
 
-Run `/profile clear` from chat when the profile still loads far enough to start.
+Run `/profile clear` from chat when the file still loads far enough to start.
 
 Otherwise, inspect the file at the configured profile path.
 
@@ -412,7 +417,7 @@ Move the invalid file to a private backup location.
 
 Then run `seb setup` to create a validated profile.
 
-### The profile has unsafe permissions
+### The preferences file has unsafe permissions
 
 Restrict the directory and file on Unix systems.
 

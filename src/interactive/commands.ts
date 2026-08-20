@@ -4,8 +4,10 @@ export type CompletionShell = 'bash' | 'fish' | 'zsh';
 
 export type InteractiveCommandCategory =
   | 'Essentials'
-  | 'Context'
-  | 'Analysis'
+  | 'Explore'
+  | 'My Fantasy'
+  | 'Analyze'
+  | 'Advanced'
   | 'Sources'
   | 'Conversation'
   | 'Preferences'
@@ -28,9 +30,19 @@ export interface InteractiveCompletion {
   value: string;
 }
 
+export interface ParsedInteractiveCommandInput {
+  argumentText: string;
+  arguments: string[];
+  command: InteractiveCommand | null;
+  name: string;
+}
+
 export interface CompletionContext {
   leagueId?: string | null;
+  leagueSeason?: number;
+  leagues?: readonly { leagueId: string; name: string }[];
   leagueOptions?: readonly string[];
+  mode?: 'analyze' | 'explore' | 'fantasy';
   rosterId?: number | null;
   rosterOptions?: readonly number[];
   season?: number;
@@ -49,11 +61,11 @@ const NFL_TEAMS = [
 ] as const;
 
 const DEFAULT_COMMAND_ORDER = [
-  'context',
-  'skill',
-  'week',
-  'team',
-  'league',
+  'explore',
+  'fantasy',
+  'analyze',
+  'connect',
+  'account',
   'next',
   'help',
   'exit',
@@ -61,64 +73,70 @@ const DEFAULT_COMMAND_ORDER = [
 
 const COMMAND_CATEGORY_ORDER: readonly InteractiveCommandCategory[] = [
   'Essentials',
-  'Context',
-  'Analysis',
+  'Explore',
+  'My Fantasy',
+  'Analyze',
   'Sources',
   'Conversation',
   'Preferences',
+  'Advanced',
   'Diagnostics',
 ];
 
 export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
-  command('help', '/help', 'Show every interactive command.', 'Essentials', 'Print the complete command guide.', ['?']),
+  command('help', '/help', 'Show every interactive command.', 'Essentials', 'Print the complete command guide.', ['?'], undefined, undefined, 0),
+  command('explore', '/explore [QUESTION]', 'Find player, team, league, statistic, and news information.', 'Explore', 'Open Explore or ask one Explore question.'),
+  command('fantasy', '/fantasy [QUESTION]', 'Use connected Sleeper leagues, rosters, deadlines, and player news.', 'My Fantasy', 'Open My Fantasy or ask one account-aware question.', ['my']),
+  command('analyze', '/analyze [QUESTION]', 'Compare players and add matchup, weather, usage, or roster context.', 'Analyze', 'Open Analyze or ask one analysis question.'),
+  command('connect', '/connect SLEEPER_USERNAME', 'Connect one Sleeper account and discover its fantasy context.', 'My Fantasy', 'Save the username and refresh leagues and owned rosters.', undefined, undefined, undefined, 1),
+  command('account', '/account', 'Show the connected Sleeper account and discovered leagues.', 'My Fantasy', 'Open the automatic fantasy dashboard.', undefined, undefined, undefined, 0),
+  command('disconnect', '/disconnect', 'Disconnect the saved Sleeper username.', 'My Fantasy', 'Remove the username and return to Explore.', undefined, undefined, true, 0),
   command('commands', '/commands [SEARCH]', 'Search the command catalog.', 'Essentials', 'Search command names and descriptions.'),
   command('complete', '/complete INPUT', 'Show completions for partial input.', 'Essentials', 'Print matching command completions.'),
-  command('shortcuts', '/shortcuts', 'Show the keyboard guide.', 'Essentials', 'Open the keyboard shortcut guide.'),
-  command('context', '/context', 'Show the active season, league, team, and skill.', 'Context', 'Print every active context value.', ['status']),
-  command('season', '/season YEAR|current', 'Set the NFL season.', 'Context', 'Change the season for later requests.', undefined, ['current']),
-  command('week', '/week NUMBER|current|clear', 'Set or clear the NFL week.', 'Context', 'Change the week for later requests.', undefined, ['current', 'clear']),
-  command('user', '/user NAME|clear', 'Set or clear the Sleeper user.', 'Context', 'Change the Sleeper user for discovery.', undefined, ['clear']),
-  command('leagues', '/leagues [SLEEPER_USER]', 'Discover Sleeper leagues for the active season.', 'Context', 'Read the user leagues from Sleeper.'),
-  command('league', '/league ID|clear', 'Set or clear the Sleeper league.', 'Context', 'Change the active Sleeper league.', undefined, ['clear']),
-  command('rosters', '/rosters [LEAGUE_ID]', 'List every roster in a Sleeper league.', 'Context', 'Read the league rosters from Sleeper.'),
-  command('roster', '/roster ID|clear', 'Set or clear the Sleeper roster.', 'Context', 'Change the active fantasy roster.', undefined, ['clear']),
-  command('team', '/team CODE|clear', 'Set or clear the NFL team.', 'Context', 'Change the active NFL team.', undefined, [...NFL_TEAMS, 'clear']),
-  command('skills', '/skills', 'List all analysis skills.', 'Analysis', 'Print every focused analysis skill.'),
+  command('shortcuts', '/shortcuts', 'Show the keyboard guide.', 'Essentials', 'Open the keyboard shortcut guide.', undefined, undefined, undefined, 0),
+  command('context', '/context', 'Show the context that Seb selected automatically.', 'Advanced', 'Print current NFL, Sleeper, and subject context.', ['status'], undefined, undefined, 0),
+  command('season', '/season YEAR|current', 'Override the automatic NFL season.', 'Advanced', 'Change the season for later requests.', undefined, ['current'], undefined, 1),
+  command('week', '/week NUMBER|current|clear', 'Override the automatic NFL week.', 'Advanced', 'Change the week for later requests.', undefined, ['current', 'clear'], undefined, 1),
+  command('user', '/user NAME|clear', 'Legacy account connection command.', 'Advanced', 'Connect or disconnect a Sleeper account.', undefined, ['clear'], undefined, 1),
+  command('leagues', '/leagues [SLEEPER_USER] [YEAR]', 'Read current or historical leagues for one Sleeper user.', 'Advanced', 'Refresh the connected user and optionally select a league season.', undefined, undefined, undefined, 2),
+  command('league', '/league ID|all', 'Focus My Fantasy on one discovered league.', 'My Fantasy', 'Focus one league or return to all leagues.', undefined, ['all', 'clear'], undefined, 1),
+  command('rosters', '/rosters [LEAGUE_ID]', 'List rosters for one league.', 'Advanced', 'Read the league rosters from Sleeper.', undefined, undefined, undefined, 1),
+  command('roster', '/roster ID|clear', 'Override the automatic owned roster.', 'Advanced', 'Change the focused fantasy roster.', undefined, ['clear'], undefined, 1),
+  command('team', '/team CODE|clear', 'Focus Explore on one NFL team.', 'Advanced', 'Change the current NFL team subject.', undefined, [...NFL_TEAMS, 'clear']),
+  command('skills', '/skills', 'List advanced analysis workflows.', 'Advanced', 'Print every focused analysis workflow.', undefined, undefined, undefined, 0),
   command(
     'skill',
-    '/skill NAME|list',
-    'Select one analysis skill.',
-    'Analysis',
-    'Change the instructions for later analysis.',
+    '/skill NAME [QUESTION]',
+    'Select one analysis skill, or run it with a question.',
+    'Advanced',
+    'Change the active instructions and optionally run one question.',
     undefined,
     [...SEB_SKILLS.map((skill) => skill.id), 'list'],
-    undefined,
-    1,
   ),
-  command('retry', '/retry', 'Run the last question again.', 'Conversation', 'Submit the last non-command prompt again.'),
-  command('edit', '/edit', 'Edit the last question.', 'Conversation', 'Place the last prompt in the editor.'),
-  command('setup', '/setup', 'Save team-independent defaults for interactive sessions.', 'Context', 'Save a local team-independent profile.'),
-  command('profile', '/profile [show|load|clear]', 'Show, load, or clear the local setup profile.', 'Context', 'Read or change the local setup profile.', undefined, ['show', 'load', 'clear']),
-  command('sources', '/sources', 'Show sources used in this session.', 'Sources', 'Print recent source links and freshness.'),
-  command('source', '/source INDEX', 'Show one numbered source link.', 'Sources', 'Print one validated source as a clickable link.', ['open']),
-  command('cache', '/cache', 'Show the local data cache status.', 'Sources', 'Print local cache and snapshot counts.'),
-  command('snapshots', '/snapshots [KIND]', 'List recent source snapshots.', 'Sources', 'Read recent immutable source snapshots.'),
-  command('provenance', '/provenance SNAPSHOT_ID', 'Inspect one snapshot source trail.', 'Sources', 'Print the source lineage for one snapshot.'),
-  command('replay', '/replay [SEASON] [THROUGH_WEEK]', 'Run the nflverse baseline replay.', 'Analysis', 'Measure the baseline against past results.'),
-  command('refresh', '/refresh [all|sleeper|nflverse|weather]', 'Refresh source data on the next read.', 'Sources', 'Delete selected cache entries before the next read.', undefined, ['all', 'sleeper', 'nflverse', 'weather'], true),
-  command('new', '/new', 'Start a new conversation context.', 'Conversation', 'Exclude earlier messages from the next model call.', ['clear'], undefined, true),
-  command('history', '/history [clear]', 'Show or clear question history.', 'Conversation', 'Read or delete the private prompt history.', undefined, ['clear']),
-  command('copy', '/copy', 'Copy the latest Seb answer.', 'Conversation', 'Send the latest answer to the terminal clipboard.'),
-  command('export', '/export [NAME] [md|json]', 'Export the conversation under exports/.', 'Conversation', 'Create a transcript file under exports/.', ['save'], ['md', 'json']),
-  command('theme', '/theme default|high-contrast|compact', 'Select the terminal theme.', 'Preferences', 'Change colors and terminal spacing.', undefined, ['default', 'high-contrast', 'compact']),
-  command('icons', '/icons unicode|ascii', 'Select Unicode or ASCII symbols.', 'Preferences', 'Change terminal symbols for this session.', undefined, ['unicode', 'ascii']),
-  command('doctor', '/doctor [offline]', 'Check the local setup and connected services.', 'Diagnostics', 'Run local and optional network checks.', undefined, ['offline', '--offline']),
-  command('devtools', '/devtools', 'Show local AI SDK DevTools status.', 'Diagnostics', 'Print local AI SDK trace settings.'),
-  command('usage', '/usage', 'Show model token use for this session.', 'Diagnostics', 'Print the session token counters.', ['cost']),
-  command('next', '/next', 'Show useful next actions.', 'Essentials', 'Print useful actions for the active context.', ['suggest', 'suggestions']),
-  command('shell-completion', '/shell-completion bash|fish|zsh', 'Print a shell completion script.', 'Preferences', 'Print a completion script for the selected shell.', ['completion'], ['bash', 'fish', 'zsh']),
-  command('version', '/version', 'Show the Seb and Gemini model versions.', 'Diagnostics', 'Print the active Seb and model versions.'),
-  command('exit', '/exit', 'Exit interactive mode.', 'Essentials', 'Close Seb and restore the terminal.', ['quit', 'q']),
+  command('retry', '/retry', 'Run the last question again.', 'Conversation', 'Submit the last non-command prompt again.', undefined, undefined, undefined, 0),
+  command('edit', '/edit', 'Edit the last question.', 'Conversation', 'Place the last prompt in the editor.', undefined, undefined, undefined, 0),
+  command('setup', '/setup [SLEEPER_USERNAME]', 'Save the local account profile.', 'Advanced', 'Save the current or supplied Sleeper username.', undefined, undefined, undefined, 1),
+  command('profile', '/profile [show|load|clear]', 'Inspect the local account profile file.', 'Advanced', 'Read or change the local profile file.', undefined, ['show', 'load', 'clear'], undefined, 1),
+  command('sources', '/sources', 'Show sources used in this session.', 'Sources', 'Print recent source links and freshness.', undefined, undefined, undefined, 0),
+  command('source', '/source INDEX', 'Show one numbered source link.', 'Sources', 'Print one validated source as a clickable link.', ['open'], undefined, undefined, 1),
+  command('cache', '/cache', 'Show the local data cache status.', 'Sources', 'Print local cache and snapshot counts.', undefined, undefined, undefined, 0),
+  command('snapshots', '/snapshots [KIND]', 'List recent source snapshots.', 'Sources', 'Read recent immutable source snapshots.', undefined, undefined, undefined, 1),
+  command('provenance', '/provenance SNAPSHOT_ID', 'Inspect one snapshot source trail.', 'Sources', 'Print the source lineage for one snapshot.', undefined, undefined, undefined, 1),
+  command('replay', '/replay [SEASON] [THROUGH_WEEK]', 'Run the nflverse baseline replay.', 'Analyze', 'Measure the baseline against past results.', undefined, undefined, undefined, 2),
+  command('refresh', '/refresh [all|sleeper|nflverse|weather]', 'Refresh source data on the next read.', 'Sources', 'Delete selected cache entries before the next read.', undefined, ['all', 'sleeper', 'nflverse', 'weather'], true, 1),
+  command('new', '/new', 'Start a new conversation context.', 'Conversation', 'Exclude earlier messages from the next model call.', ['clear'], undefined, true, 0),
+  command('history', '/history [clear]', 'Show or clear question history.', 'Conversation', 'Read or delete the private prompt history.', undefined, ['clear'], undefined, 1),
+  command('copy', '/copy', 'Copy the latest Seb answer.', 'Conversation', 'Send the latest answer to the terminal clipboard.', undefined, undefined, undefined, 0),
+  command('export', '/export [NAME] [md|json]', 'Export the conversation under exports/.', 'Conversation', 'Create a transcript file under exports/.', ['save'], ['md', 'json'], undefined, 2),
+  command('theme', '/theme default|high-contrast|compact', 'Select the terminal theme.', 'Preferences', 'Change colors and terminal spacing.', undefined, ['default', 'high-contrast', 'compact'], undefined, 1),
+  command('icons', '/icons unicode|ascii', 'Select Unicode or ASCII symbols.', 'Preferences', 'Change terminal symbols for this session.', undefined, ['unicode', 'ascii'], undefined, 1),
+  command('doctor', '/doctor [offline]', 'Check the local setup and connected services.', 'Diagnostics', 'Run local and optional network checks.', undefined, ['offline', '--offline'], undefined, 1),
+  command('devtools', '/devtools', 'Show local AI SDK DevTools status.', 'Diagnostics', 'Print local AI SDK trace settings.', undefined, undefined, undefined, 0),
+  command('usage', '/usage', 'Show model token use for this session.', 'Diagnostics', 'Print the session token counters.', ['cost'], undefined, undefined, 0),
+  command('next', '/next', 'Show useful next actions.', 'Essentials', 'Print useful actions for the active context.', ['suggest', 'suggestions'], undefined, undefined, 0),
+  command('shell-completion', '/shell-completion bash|fish|zsh', 'Print a shell completion script.', 'Preferences', 'Print a completion script for the selected shell.', ['completion'], ['bash', 'fish', 'zsh'], undefined, 1),
+  command('version', '/version', 'Show the Seb and Gemini model versions.', 'Diagnostics', 'Print the active Seb and model versions.', undefined, undefined, undefined, 0),
+  command('exit', '/exit', 'Exit interactive mode.', 'Essentials', 'Close Seb and restore the terminal.', ['quit', 'q'], undefined, undefined, 0),
 ] as const;
 
 export function findInteractiveCommand(name: string): InteractiveCommand | null {
@@ -126,6 +144,35 @@ export function findInteractiveCommand(name: string): InteractiveCommand | null 
   return INTERACTIVE_COMMANDS.find(
     (candidate) => candidate.name === normalized || candidate.aliases?.includes(normalized),
   ) ?? null;
+}
+
+export function parseInteractiveCommandInput(
+  input: string,
+): ParsedInteractiveCommandInput | null {
+  const normalized = input.trim();
+  if (!normalized.startsWith('/')) {
+    return null;
+  }
+  const body = normalized.slice(1).trim();
+  const separator = body.search(/\s/u);
+  const name = (separator < 0 ? body : body.slice(0, separator)).toLowerCase();
+  const argumentText = separator < 0 ? '' : body.slice(separator).trim();
+  return {
+    argumentText,
+    arguments: argumentText ? argumentText.split(/\s+/u) : [],
+    command: findInteractiveCommand(name),
+    name,
+  };
+}
+
+export function interactiveCommandArgumentError(
+  parsed: ParsedInteractiveCommandInput,
+): string | null {
+  const maximum = parsed.command?.maxArguments;
+  if (maximum === undefined || parsed.arguments.length <= maximum) {
+    return null;
+  }
+  return `Use ${parsed.command?.usage ?? `/${parsed.name}`}.`;
 }
 
 export function searchInteractiveCommands(
@@ -180,14 +227,14 @@ export function completeInteractiveInput(
   }
 
   const argumentInput = withoutSlash.slice(firstWhitespace).trimStart();
-  const values = argumentSuggestions(candidate, context);
+  const values = argumentSuggestions(candidate, context, argumentInput);
   if (completionIsFinished(candidate, argumentInput, values)) {
     return [];
   }
   const argumentPrefix = argumentInput.split(/\s+/).at(-1)?.toLowerCase() ?? '';
   return rankValues(values, argumentPrefix, limit).map((value) => ({
     value: `/${candidate.name} ${replaceLastArgument(argumentInput, value)}`.trimEnd(),
-    description: argumentCompletionDescription(candidate, value),
+    description: argumentCompletionDescription(candidate, value, context),
   }));
 }
 
@@ -218,6 +265,7 @@ export function formatCommandCatalog(query = ''): string {
 function argumentCompletionDescription(
   candidate: InteractiveCommand,
   value: string,
+  context: CompletionContext,
 ): string {
   if (candidate.name === 'skill') {
     const skill = findSkill(value);
@@ -227,6 +275,13 @@ function argumentCompletionDescription(
   }
   if (candidate.name === 'team') {
     return value === 'clear' ? 'Clear the active NFL team.' : `Set the NFL team to ${value}.`;
+  }
+  if (candidate.name === 'league') {
+    if (['all', 'clear'].includes(value)) return 'Use every discovered fantasy league.';
+    const league = context.leagues?.find((candidate) => candidate.leagueId === value);
+    return league
+      ? `Focus My Fantasy on ${league.name}.`
+      : `Focus My Fantasy on league ${value}.`;
   }
   return `Complete ${candidate.usage}.`;
 }
@@ -280,7 +335,7 @@ function command(
     ...(aliases ? { aliases } : {}),
     ...(argumentValues ? { argumentValues } : {}),
     ...(danger ? { danger } : {}),
-    ...(maxArguments ? { maxArguments } : {}),
+    ...(maxArguments !== undefined ? { maxArguments } : {}),
   };
 }
 
@@ -289,6 +344,18 @@ function completionIsFinished(
   argumentInput: string,
   values: readonly string[],
 ): boolean {
+  if (candidate.name === 'skill' && hasSkillPrefix(argumentInput)) {
+    return true;
+  }
+  if (candidate.name === 'team') {
+    const arguments_ = argumentInput.trim().split(/\s+/u).filter(Boolean);
+    const exactTeam = values.some(
+      (value) => value.toLowerCase() === arguments_[0]?.toLowerCase(),
+    );
+    if (exactTeam && (arguments_.length > 1 || /\s$/u.test(argumentInput))) {
+      return true;
+    }
+  }
   if (candidate.maxArguments === undefined) {
     return false;
   }
@@ -301,9 +368,17 @@ function completionIsFinished(
   if (arguments_.length < candidate.maxArguments) {
     return false;
   }
-  const lastArgument = arguments_.at(-1)?.toLowerCase() ?? '';
-  const exactValue = values.some((value) => value.toLowerCase() === lastArgument);
-  return /\s$/.test(argumentInput) || exactValue;
+  return /\s$/.test(argumentInput);
+}
+
+function hasSkillPrefix(value: string): boolean {
+  const parts = value.trim().split(/\s+/u).filter(Boolean);
+  for (let length = parts.length; length > 0; length -= 1) {
+    if (findSkill(parts.slice(0, length).join(' '))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function recentScore(
@@ -327,6 +402,12 @@ function activeCommandValue(
   context: CompletionContext,
 ): string | null {
   switch (name) {
+    case 'explore': return context.mode === 'explore' ? 'selected' : null;
+    case 'fantasy': return context.mode === 'fantasy' ? 'selected' : null;
+    case 'analyze': return context.mode === 'analyze' ? 'selected' : null;
+    case 'connect':
+    case 'account':
+    case 'disconnect': return context.user ? `@${context.user}` : 'not connected';
     case 'season': return context.season ? String(context.season) : null;
     case 'week': return context.week ? String(context.week) : 'unset';
     case 'user': return context.user ?? 'unset';
@@ -375,9 +456,16 @@ function fuzzyScore(value: string, query: string): number {
 function argumentSuggestions(
   candidate: InteractiveCommand,
   context: CompletionContext,
+  argumentInput: string,
 ): string[] {
   const values = [...(candidate.argumentValues ?? [])];
   switch (candidate.name) {
+    case 'export': {
+      const arguments_ = argumentInput.trim().split(/\s+/u).filter(Boolean);
+      return arguments_.length > 1 || (arguments_.length === 1 && /\s$/u.test(argumentInput))
+        ? values
+        : [];
+    }
     case 'season':
       if (context.season) values.unshift(String(context.season));
       break;
@@ -385,10 +473,16 @@ function argumentSuggestions(
       if (context.week) values.unshift(String(context.week));
       break;
     case 'user':
+    case 'connect':
+    case 'setup':
       if (context.user) values.unshift(context.user);
       break;
     case 'leagues':
-      if (context.user) values.unshift(context.user);
+      if (/\s$/u.test(argumentInput) || argumentInput.trim().split(/\s+/u).length > 1) {
+        if (context.leagueSeason) values.unshift(String(context.leagueSeason));
+      } else if (context.user) {
+        values.unshift(context.user);
+      }
       break;
     case 'league':
       values.unshift(...(context.leagueOptions ?? []));

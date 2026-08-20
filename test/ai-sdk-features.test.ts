@@ -67,6 +67,9 @@ describe('AI SDK feature integration', () => {
     expect(playerTool.description).toContain('Valid input examples:');
     expect(playerTool.description).toContain('Justin Jefferson');
     expect(JSON.stringify(playerTool)).not.toContain('inputExamples');
+    expect(model.doGenerateCalls[0]?.tools?.some(
+      (candidate) => candidate.type === 'function' && candidate.name === 'getTeamPlayers',
+    )).toBe(true);
   });
 
   it('returns a validated structured fantasy analysis', async () => {

@@ -1,5 +1,7 @@
 import { getSkill } from './skills.js';
 
+export type SessionSeasonType = 'post' | 'pre' | 'regular' | null;
+
 export interface SessionUsage {
   inputTokens: number;
   outputTokens: number;
@@ -14,6 +16,7 @@ export interface SessionState {
   rosterId: number | null;
   rosterOptions: number[];
   season: number;
+  seasonType: SessionSeasonType;
   skillId: string;
   team: string | null;
   usage: SessionUsage;
@@ -29,6 +32,7 @@ export function createSessionState(now = new Date()): SessionState {
     rosterId: null,
     rosterOptions: [],
     season: nflSeason(now),
+    seasonType: null,
     skillId: 'general',
     team: null,
     usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, requests: 0 },
@@ -57,6 +61,7 @@ export function formatSessionContext(state: SessionState): string {
     `Active skill: ${skill.id} (${skill.title}).`,
     `Skill instructions: ${skill.instructions}`,
     `NFL season: ${state.season}.`,
+    `NFL season type: ${state.seasonType ?? 'not set'}.`,
     `NFL week: ${state.week ?? 'not set'}.`,
     `Sleeper user: ${state.user ?? 'not set'}.`,
     `Sleeper league ID: ${state.leagueId ?? 'not set'}.`,
@@ -75,6 +80,7 @@ export function formatSessionStatus(state: SessionState): string {
     '',
     `- Skill: \`${skill.id}\` (${skill.title})`,
     `- Season: ${state.season}`,
+    `- Season type: ${state.seasonType ?? 'not set'}`,
     `- Week: ${state.week ?? 'not set'}`,
     `- Sleeper user: ${state.user ?? 'not set'}`,
     `- League ID: ${state.leagueId ?? 'not set'}`,
@@ -86,22 +92,54 @@ export function formatSessionStatus(state: SessionState): string {
 }
 
 export function getContextualSuggestions(state: SessionState): string[] {
-  const suggestions: string[] = [];
+  const contextSuggestions: string[] = [];
   if (!state.week) {
-    suggestions.push(`/week <number>`);
+    contextSuggestions.push('/week <number>');
   }
   if (!state.user) {
-    suggestions.push('/leagues <Sleeper user>');
+    contextSuggestions.push('/leagues <Sleeper user>');
   } else if (!state.leagueId) {
-    suggestions.push(`/leagues ${state.user}`);
+    contextSuggestions.push(`/leagues ${state.user}`);
   } else if (!state.rosterId) {
-    suggestions.push(`/rosters ${state.leagueId}`);
+    contextSuggestions.push(`/rosters ${state.leagueId}`);
   }
   if (!state.team) {
-    suggestions.push(`/team <NFL code>`);
+    contextSuggestions.push('/team <NFL code>');
   }
-  suggestions.push(...getSkill(state.skillId).suggestions);
+  const skillSuggestions = getSkill(state.skillId).suggestions.map((suggestion) =>
+    fillSuggestionContext(suggestion, state),
+  );
+  const suggestions = state.skillId === 'general'
+    ? [...contextSuggestions, ...skillSuggestions]
+    : [...skillSuggestions, ...contextSuggestions];
   return suggestions.slice(0, 4);
+}
+
+export function normalizeSessionSeasonType(
+  value: string | undefined,
+): SessionSeasonType {
+  switch (value?.trim().toLowerCase()) {
+    case 'pre':
+    case 'preseason':
+      return 'pre';
+    case 'regular':
+    case 'reg':
+      return 'regular';
+    case 'post':
+    case 'postseason':
+      return 'post';
+    default:
+      return null;
+  }
+}
+
+function fillSuggestionContext(
+  suggestion: string,
+  state: SessionState,
+): string {
+  return suggestion
+    .replaceAll('<NFL team>', state.team ?? '<NFL team>')
+    .replaceAll('<number>', state.week === null ? '<number>' : String(state.week));
 }
 
 function nflSeason(now: Date): number {

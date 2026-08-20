@@ -67,6 +67,18 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(terminal.output.text()).toContain('\x1b[?1049l');
   });
 
+  it.each(['/exit', '/quit', '/q'])('exits interactive mode with %s', async (command) => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type(`${command}\r`);
+
+    await expect(prompt).resolves.toBeUndefined();
+    expect(terminal.input.rawModes.at(-1)).toBe(false);
+    expect(terminal.output.text()).toContain('\x1b[?1049l');
+  });
+
   it('continues when the history file cannot accept a prompt', async () => {
     const history: PromptHistory = {
       add: () => Promise.reject(new Error('history is read-only')),
@@ -158,7 +170,7 @@ function createRenderer(
     session: createSessionState(new Date('2026-08-20T12:00:00Z')),
     sources: new SourceTracker(),
     uiState,
-    version: '0.0.3',
+    version: '0.0.4',
   });
 }
 

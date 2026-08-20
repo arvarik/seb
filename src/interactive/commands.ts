@@ -1,12 +1,14 @@
-import { SEB_SKILLS } from './skills.js';
+import { findSkill, SEB_SKILLS } from './skills.js';
 
 export type CompletionShell = 'bash' | 'fish' | 'zsh';
 
 export type InteractiveCommandCategory =
+  | 'Essentials'
   | 'Context'
   | 'Analysis'
-  | 'Data'
-  | 'Session'
+  | 'Sources'
+  | 'Conversation'
+  | 'Preferences'
   | 'Diagnostics';
 
 export interface InteractiveCommand {
@@ -15,6 +17,7 @@ export interface InteractiveCommand {
   category: InteractiveCommandCategory;
   danger?: boolean;
   description: string;
+  maxArguments?: number;
   name: string;
   preview: string;
   usage: string;
@@ -45,12 +48,33 @@ const NFL_TEAMS = [
   'NYJ', 'PHI', 'PIT', 'SEA', 'SF', 'TB', 'TEN', 'WAS',
 ] as const;
 
+const DEFAULT_COMMAND_ORDER = [
+  'context',
+  'skill',
+  'week',
+  'team',
+  'league',
+  'next',
+  'help',
+  'exit',
+] as const;
+
+const COMMAND_CATEGORY_ORDER: readonly InteractiveCommandCategory[] = [
+  'Essentials',
+  'Context',
+  'Analysis',
+  'Sources',
+  'Conversation',
+  'Preferences',
+  'Diagnostics',
+];
+
 export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
-  command('help', '/help', 'Show every interactive command.', 'Session', 'Print the complete command guide.', ['?']),
-  command('commands', '/commands [SEARCH]', 'Search the interactive command catalog.', 'Session', 'Search command names and descriptions.'),
-  command('complete', '/complete INPUT', 'Suggest commands and arguments for partial input.', 'Session', 'Print matching command completions.'),
-  command('shortcuts', '/shortcuts', 'Show the interactive keyboard guide.', 'Session', 'Open the keyboard shortcut guide.'),
-  command('status', '/status', 'Show the active session values.', 'Context', 'Print the active fantasy context.', ['context']),
+  command('help', '/help', 'Show every interactive command.', 'Essentials', 'Print the complete command guide.', ['?']),
+  command('commands', '/commands [SEARCH]', 'Search the command catalog.', 'Essentials', 'Search command names and descriptions.'),
+  command('complete', '/complete INPUT', 'Show completions for partial input.', 'Essentials', 'Print matching command completions.'),
+  command('shortcuts', '/shortcuts', 'Show the keyboard guide.', 'Essentials', 'Open the keyboard shortcut guide.'),
+  command('context', '/context', 'Show the active season, league, team, and skill.', 'Context', 'Print every active context value.', ['status']),
   command('season', '/season YEAR|current', 'Set the NFL season.', 'Context', 'Change the season for later requests.', undefined, ['current']),
   command('week', '/week NUMBER|current|clear', 'Set or clear the NFL week.', 'Context', 'Change the week for later requests.', undefined, ['current', 'clear']),
   command('user', '/user NAME|clear', 'Set or clear the Sleeper user.', 'Context', 'Change the Sleeper user for discovery.', undefined, ['clear']),
@@ -60,33 +84,41 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('roster', '/roster ID|clear', 'Set or clear the Sleeper roster.', 'Context', 'Change the active fantasy roster.', undefined, ['clear']),
   command('team', '/team CODE|clear', 'Set or clear the NFL team.', 'Context', 'Change the active NFL team.', undefined, [...NFL_TEAMS, 'clear']),
   command('skills', '/skills', 'List all analysis skills.', 'Analysis', 'Print every focused analysis skill.'),
-  command('skill', '/skill NAME|list', 'Select one analysis skill.', 'Analysis', 'Change the instructions for later analysis.', undefined, [
-    ...SEB_SKILLS.map((skill) => skill.id),
-    'list',
-  ]),
-  command('retry', '/retry', 'Run the last model prompt again.', 'Analysis', 'Submit the last non-command prompt again.'),
-  command('edit', '/edit', 'Edit the last model prompt.', 'Analysis', 'Place the last prompt in the editor.'),
+  command(
+    'skill',
+    '/skill NAME|list',
+    'Select one analysis skill.',
+    'Analysis',
+    'Change the instructions for later analysis.',
+    undefined,
+    [...SEB_SKILLS.map((skill) => skill.id), 'list'],
+    undefined,
+    1,
+  ),
+  command('retry', '/retry', 'Run the last question again.', 'Conversation', 'Submit the last non-command prompt again.'),
+  command('edit', '/edit', 'Edit the last question.', 'Conversation', 'Place the last prompt in the editor.'),
   command('setup', '/setup', 'Save team-independent defaults for interactive sessions.', 'Context', 'Save a local team-independent profile.'),
   command('profile', '/profile [show|load|clear]', 'Show, load, or clear the local setup profile.', 'Context', 'Read or change the local setup profile.', undefined, ['show', 'load', 'clear']),
-  command('sources', '/sources', 'Show sources used in this session.', 'Data', 'Print recent source links and freshness.'),
-  command('open', '/open INDEX', 'Show one numbered source link.', 'Data', 'Print one validated source as a clickable link.'),
-  command('cache', '/cache', 'Show the SQLite cache and snapshot status.', 'Data', 'Print local cache and snapshot counts.'),
-  command('snapshots', '/snapshots [KIND]', 'List recent source snapshots.', 'Data', 'Read recent immutable source snapshots.'),
-  command('provenance', '/provenance SNAPSHOT_ID', 'Inspect field lineage for one snapshot.', 'Data', 'Print the source lineage for one snapshot.'),
+  command('sources', '/sources', 'Show sources used in this session.', 'Sources', 'Print recent source links and freshness.'),
+  command('source', '/source INDEX', 'Show one numbered source link.', 'Sources', 'Print one validated source as a clickable link.', ['open']),
+  command('cache', '/cache', 'Show the local data cache status.', 'Sources', 'Print local cache and snapshot counts.'),
+  command('snapshots', '/snapshots [KIND]', 'List recent source snapshots.', 'Sources', 'Read recent immutable source snapshots.'),
+  command('provenance', '/provenance SNAPSHOT_ID', 'Inspect one snapshot source trail.', 'Sources', 'Print the source lineage for one snapshot.'),
   command('replay', '/replay [SEASON] [THROUGH_WEEK]', 'Run the nflverse baseline replay.', 'Analysis', 'Measure the baseline against past results.'),
-  command('refresh', '/refresh [all|sleeper|nflverse|weather]', 'Clear safe local data caches.', 'Data', 'Delete selected cache entries before the next read.', undefined, ['all', 'sleeper', 'nflverse', 'weather'], true),
-  command('new', '/new', 'Start a new model context.', 'Session', 'Exclude earlier messages from the next model call.', ['clear'], undefined, true),
-  command('history', '/history [clear]', 'Show or clear local prompt history.', 'Session', 'Read or delete the private prompt history.', undefined, ['clear']),
-  command('copy', '/copy', 'Copy the latest Seb answer.', 'Session', 'Send the latest answer to the terminal clipboard.'),
-  command('theme', '/theme default|high-contrast|compact', 'Select the terminal theme.', 'Session', 'Change colors and terminal spacing.', undefined, ['default', 'high-contrast', 'compact']),
-  command('icons', '/icons unicode|ascii', 'Select Unicode or ASCII symbols.', 'Session', 'Change terminal symbols for this session.', undefined, ['unicode', 'ascii']),
-  command('save', '/save [NAME] [md|json]', 'Save the transcript under exports/.', 'Session', 'Create a transcript file under exports/.', ['export'], ['md', 'json']),
+  command('refresh', '/refresh [all|sleeper|nflverse|weather]', 'Refresh source data on the next read.', 'Sources', 'Delete selected cache entries before the next read.', undefined, ['all', 'sleeper', 'nflverse', 'weather'], true),
+  command('new', '/new', 'Start a new conversation context.', 'Conversation', 'Exclude earlier messages from the next model call.', ['clear'], undefined, true),
+  command('history', '/history [clear]', 'Show or clear question history.', 'Conversation', 'Read or delete the private prompt history.', undefined, ['clear']),
+  command('copy', '/copy', 'Copy the latest Seb answer.', 'Conversation', 'Send the latest answer to the terminal clipboard.'),
+  command('export', '/export [NAME] [md|json]', 'Export the conversation under exports/.', 'Conversation', 'Create a transcript file under exports/.', ['save'], ['md', 'json']),
+  command('theme', '/theme default|high-contrast|compact', 'Select the terminal theme.', 'Preferences', 'Change colors and terminal spacing.', undefined, ['default', 'high-contrast', 'compact']),
+  command('icons', '/icons unicode|ascii', 'Select Unicode or ASCII symbols.', 'Preferences', 'Change terminal symbols for this session.', undefined, ['unicode', 'ascii']),
   command('doctor', '/doctor [offline]', 'Check the local setup and connected services.', 'Diagnostics', 'Run local and optional network checks.', undefined, ['offline', '--offline']),
   command('devtools', '/devtools', 'Show local AI SDK DevTools status.', 'Diagnostics', 'Print local AI SDK trace settings.'),
-  command('cost', '/cost', 'Show model token use for this session.', 'Diagnostics', 'Print the session token counters.'),
-  command('suggest', '/suggest', 'Show contextual next actions.', 'Analysis', 'Print useful actions for the active context.', ['suggestions']),
-  command('completion', '/completion bash|fish|zsh', 'Print a shell completion script.', 'Session', 'Print a completion script for the selected shell.', undefined, ['bash', 'fish', 'zsh']),
+  command('usage', '/usage', 'Show model token use for this session.', 'Diagnostics', 'Print the session token counters.', ['cost']),
+  command('next', '/next', 'Show useful next actions.', 'Essentials', 'Print useful actions for the active context.', ['suggest', 'suggestions']),
+  command('shell-completion', '/shell-completion bash|fish|zsh', 'Print a shell completion script.', 'Preferences', 'Print a completion script for the selected shell.', ['completion'], ['bash', 'fish', 'zsh']),
   command('version', '/version', 'Show the Seb and Gemini model versions.', 'Diagnostics', 'Print the active Seb and model versions.'),
+  command('exit', '/exit', 'Exit interactive mode.', 'Essentials', 'Close Seb and restore the terminal.', ['quit', 'q']),
 ] as const;
 
 export function findInteractiveCommand(name: string): InteractiveCommand | null {
@@ -109,7 +141,10 @@ export function searchInteractiveCommands(
         candidate,
         index,
         matchScore,
-        score: matchScore + recentScore(candidate, recentCommands),
+        score:
+          matchScore +
+          recentScore(candidate, recentCommands) +
+          (normalized.length === 0 ? defaultCommandScore(candidate.name) : 0),
       };
     })
     .filter((result) => result.matchScore > 0 || normalized.length === 0)
@@ -145,11 +180,14 @@ export function completeInteractiveInput(
   }
 
   const argumentInput = withoutSlash.slice(firstWhitespace).trimStart();
-  const argumentPrefix = argumentInput.split(/\s+/).at(-1)?.toLowerCase() ?? '';
   const values = argumentSuggestions(candidate, context);
+  if (completionIsFinished(candidate, argumentInput, values)) {
+    return [];
+  }
+  const argumentPrefix = argumentInput.split(/\s+/).at(-1)?.toLowerCase() ?? '';
   return rankValues(values, argumentPrefix, limit).map((value) => ({
     value: `/${candidate.name} ${replaceLastArgument(argumentInput, value)}`.trimEnd(),
-    description: `Complete ${candidate.usage}.`,
+    description: argumentCompletionDescription(candidate, value),
   }));
 }
 
@@ -159,8 +197,7 @@ export function formatCommandCatalog(query = ''): string {
     return `No interactive command matches \`${query}\`.`;
   }
   const title = query ? `## Commands matching \`${query}\`` : '## Interactive commands';
-  const categories: InteractiveCommandCategory[] = ['Context', 'Analysis', 'Data', 'Session', 'Diagnostics'];
-  const rows = categories.flatMap((category) => {
+  const rows = COMMAND_CATEGORY_ORDER.flatMap((category) => {
     const matches = commands.filter((candidate) => candidate.category === category);
     if (matches.length === 0) return [];
     return [
@@ -176,6 +213,29 @@ export function formatCommandCatalog(query = ''): string {
     ...rows,
     'Run `/complete <partial input>` for command and argument suggestions.',
   ].join('\n');
+}
+
+function argumentCompletionDescription(
+  candidate: InteractiveCommand,
+  value: string,
+): string {
+  if (candidate.name === 'skill') {
+    const skill = findSkill(value);
+    if (skill) {
+      return `${skill.title} · ${skill.description}`;
+    }
+  }
+  if (candidate.name === 'team') {
+    return value === 'clear' ? 'Clear the active NFL team.' : `Set the NFL team to ${value}.`;
+  }
+  return `Complete ${candidate.usage}.`;
+}
+
+function defaultCommandScore(name: string): number {
+  const index = DEFAULT_COMMAND_ORDER.indexOf(
+    name as (typeof DEFAULT_COMMAND_ORDER)[number],
+  );
+  return index < 0 ? 0 : (DEFAULT_COMMAND_ORDER.length - index) * 10;
 }
 
 export function formatCompletions(completions: readonly InteractiveCompletion[]): string {
@@ -209,6 +269,7 @@ function command(
   aliases?: readonly string[],
   argumentValues?: readonly string[],
   danger?: boolean,
+  maxArguments?: number,
 ): InteractiveCommand {
   return {
     name,
@@ -219,7 +280,30 @@ function command(
     ...(aliases ? { aliases } : {}),
     ...(argumentValues ? { argumentValues } : {}),
     ...(danger ? { danger } : {}),
+    ...(maxArguments ? { maxArguments } : {}),
   };
+}
+
+function completionIsFinished(
+  candidate: InteractiveCommand,
+  argumentInput: string,
+  values: readonly string[],
+): boolean {
+  if (candidate.maxArguments === undefined) {
+    return false;
+  }
+  const arguments_ = argumentInput.trim()
+    ? argumentInput.trim().split(/\s+/)
+    : [];
+  if (arguments_.length > candidate.maxArguments) {
+    return true;
+  }
+  if (arguments_.length < candidate.maxArguments) {
+    return false;
+  }
+  const lastArgument = arguments_.at(-1)?.toLowerCase() ?? '';
+  const exactValue = values.some((value) => value.toLowerCase() === lastArgument);
+  return /\s$/.test(argumentInput) || exactValue;
 }
 
 function recentScore(
@@ -227,7 +311,7 @@ function recentScore(
   recentCommands: readonly string[],
 ): number {
   const index = recentCommands.findIndex((name) => name === candidate.name);
-  return index < 0 ? 0 : Math.max(1, 40 - index);
+  return index < 0 ? 0 : Math.max(1, 100 - index);
 }
 
 function completionDescription(

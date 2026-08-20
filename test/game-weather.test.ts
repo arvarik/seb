@@ -86,6 +86,32 @@ describe('GameWeatherService', () => {
     expect(result.reason).toContain('neutral venue');
     expect(weather.getHourlyForecast).not.toHaveBeenCalled();
   });
+
+  it('selects a preseason schedule when the caller passes PRE', async () => {
+    const getSchedule = vi.fn().mockResolvedValue([game({
+      gameType: 'PRE',
+      roof: 'closed',
+      week: 2,
+    })]);
+    const service = new GameWeatherService(
+      { getSchedule } as unknown as NflverseClient,
+      { getHourlyForecast: vi.fn(), getActiveAlerts: vi.fn() } as unknown as WeatherClient,
+    );
+
+    await service.getGameWeather({
+      season: 2026,
+      week: 2,
+      team: 'KC',
+      gameType: 'PRE',
+    });
+
+    expect(getSchedule).toHaveBeenCalledWith({
+      season: 2026,
+      week: 2,
+      team: 'KC',
+      gameType: 'PRE',
+    });
+  });
 });
 
 function nflverseWithGame(value: NflverseGame): NflverseClient {

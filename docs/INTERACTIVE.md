@@ -1,6 +1,6 @@
 # Interactive guide
 
-The interactive interface keeps a conversation and active fantasy context.
+The interactive interface keeps a conversation and active NFL or fantasy context.
 
 Start it with either command.
 
@@ -25,7 +25,7 @@ Sleeper users, leagues, rosters, and NFL teams remain session-specific.
 
    ```text
    /profile show
-   /status
+   /context
    ```
 
 2. Set the current week.
@@ -72,7 +72,17 @@ Press `Ctrl+K` or type `/` to open the command palette.
 
 The menu filters commands after each character.
 
-It groups commands by context, analysis, data, session, and diagnostics.
+It groups commands into seven clear sections.
+
+- Essentials
+- Context
+- Analysis
+- Sources
+- Conversation
+- Preferences
+- Diagnostics
+
+The empty palette starts with the most common context, skill, and navigation commands.
 
 It shows active context values and the selected command effect.
 
@@ -109,6 +119,10 @@ Run `/complete INPUT` to suggest a command or argument.
 
 The argument suggestions include skills, NFL teams, and active context values.
 
+The menu closes after you complete one valid `/skill` value.
+
+Seb never appends a second skill to the same command.
+
 After `/leagues` or `/rosters`, the menu also suggests the discovered IDs.
 
 Unknown commands show up to three likely command names.
@@ -123,7 +137,7 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/commands [SEARCH]` | Searches the command catalog. |
 | `/complete INPUT` | Suggests commands and arguments. |
 | `/shortcuts` | Shows the keyboard shortcut guide. |
-| `/status` or `/context` | Shows the active session values. |
+| `/context` or `/status` | Shows the active session values. |
 | `/season YEAR|current` | Sets the active season. |
 | `/week NUMBER|current|clear` | Sets or clears the active week. |
 | `/user NAME|clear` | Sets or clears the Sleeper user. |
@@ -139,7 +153,7 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/setup` | Saves team-independent defaults. |
 | `/profile [show|load|clear]` | Reads or removes the setup profile. |
 | `/sources` | Shows source URLs and cache outcomes. |
-| `/open INDEX` | Shows one numbered source link. |
+| `/source INDEX` | Shows one numbered source link. |
 | `/cache` | Shows SQLite cache and snapshot counts. |
 | `/snapshots [KIND]` | Lists recent source snapshots. |
 | `/provenance SNAPSHOT_ID` | Shows stored field lineage. |
@@ -150,20 +164,32 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/copy` | Copies the latest Seb answer. |
 | `/theme NAME` | Selects a display theme. |
 | `/icons MODE` | Selects Unicode or ASCII symbols. |
-| `/save [NAME] [md|json]` | Saves the transcript. |
+| `/export [NAME] [md|json]` | Exports the transcript. |
 | `/doctor [offline]` | Checks configuration and services. |
 | `/devtools` | Shows local AI SDK DevTools status and commands. |
-| `/cost` | Shows session token counts. |
-| `/suggest` or `/suggestions` | Shows contextual next actions. |
-| `/completion SHELL` | Prints a shell completion script. |
+| `/usage` | Shows session token counts. |
+| `/next` | Shows contextual next actions. |
+| `/shell-completion SHELL` | Prints a shell completion script. |
 | `/version` | Shows the Seb and Gemini versions. |
+| `/exit` or `/quit` | Exits interactive mode. |
+
+Earlier command names remain available as aliases.
+
+| Earlier name | Primary name |
+| --- | --- |
+| `/status` | `/context` |
+| `/open` | `/source` |
+| `/cost` | `/usage` |
+| `/suggest` | `/next` |
+| `/save` | `/export` |
+| `/completion` | `/shell-completion` |
 
 ## Context commands
 
 | Command | Result |
 | --- | --- |
-| `/status` | Shows every active value and token total. |
-| `/context` | Runs the same action as `/status`. |
+| `/context` | Shows every active value and token total. |
+| `/status` | Runs the same action as `/context`. |
 | `/season YEAR` | Sets the NFL season. |
 | `/season current` | Reads the current season from Sleeper. |
 | `/week NUMBER` | Sets an NFL week from 1 through 22. |
@@ -243,9 +269,16 @@ Run `/skill NAME` to select one skill.
 /skill waiver-scout
 /skill weather-watch
 /skill usage-trends
+/skill player-info
+/skill team-info
+/skill nfl-stats
 ```
 
 The skill changes the analysis instructions. It does not hide any read-only data tool.
+
+The home screen shows actions for the active skill before optional setup actions.
+
+An action with missing values stays in the editor for completion.
 
 Read the [skill guide](SKILLS.md) for all available workflows.
 
@@ -269,7 +302,7 @@ The header shows a short source state for the latest source.
 
 The states include `LIVE`, `WEB`, `CACHED`, `STATS`, and `STALE`.
 
-Run `/open INDEX` to print one numbered source as a clickable link.
+Run `/source INDEX` to print one numbered source as a clickable link.
 
 ## Prompt editing and history
 
@@ -388,15 +421,15 @@ Seb uses Week 18 when you omit the final week.
 
 Read the [evaluation guide](EVALUATION.md) for leakage rules and metrics.
 
-## Suggestions and token use
+## Next actions and token use
 
 Seb adds contextual next actions after each answer.
 
-Run `/suggest` when you want only the current action list.
+Run `/next` when you want only the current action list.
 
 The suggestions use the active skill and the missing session values.
 
-Run `/cost` to show model requests and token totals.
+Run `/usage` to show model requests and token totals.
 
 The command does not calculate currency cost. Gemini prices can change.
 
@@ -433,7 +466,7 @@ Read the [AI SDK guide](AI_SDK.md) for its privacy rules.
 Print a Bash, Fish, or Zsh completion script inside chat.
 
 ```text
-/completion zsh
+/shell-completion zsh
 ```
 
 Use the top-level command for direct installation.
@@ -446,22 +479,22 @@ Read the [command-line guide](CLI.md) for exact shell installation steps.
 
 ## Transcript exports
 
-Run `/save` to create a Markdown file with an automatic name.
+Run `/export` to create a Markdown file with an automatic name.
 
 ```text
-/save
+/export
 ```
 
-Run `/save NAME md` to select a Markdown name.
+Run `/export NAME md` to select a Markdown name.
 
 ```text
-/save week-1-review md
+/export week-1-review md
 ```
 
-Run `/save NAME json` to store complete UI messages as JSON.
+Run `/export NAME json` to store complete UI messages as JSON.
 
 ```text
-/save week-1-review json
+/export week-1-review json
 ```
 
 Seb writes each file under `exports/`. Git ignores that folder.
@@ -498,6 +531,8 @@ Press Escape during a request to stop only that request.
 
 Press Ctrl+C to exit.
 
+Run `/exit`, `/quit`, or `/q` to exit from an empty prompt.
+
 ## Example workflows
 
 ### Start and sit
@@ -513,10 +548,50 @@ Compare Player A and Player B in PPR. Include usage, opponent, and weather.
 ### Weather watch
 
 ```text
-/season 2026
-/week 12
+/week current
 /skill weather-watch
 Which outdoor games have the highest fantasy weather risk?
+```
+
+`/week current` also loads the preseason, regular-season, or postseason type.
+
+During preseason, nflverse can lack the required game row.
+
+Seb then gives a home-stadium outlook and labels the missing venue and kickoff match.
+
+### Player information
+
+```text
+/skill player-info
+Show Justin Jefferson's player profile and 2025 NFL game log.
+```
+
+This skill does not add fantasy advice unless you request it.
+
+### Team information
+
+```text
+/team SEA
+/skill team-info
+Show the team profile, current player records, schedule, and recent results.
+```
+
+Sleeper player records are not an official NFL roster source.
+
+### NFL facts and stats
+
+```text
+/week 8
+/skill nfl-stats
+Show the complete NFL schedule and recorded results for this week.
+```
+
+### Trade review
+
+```text
+/season 2026
+/skill trade-review
+Compare Player A for Player B. Show production, usage, roster fit, and risk.
 ```
 
 ### League audit

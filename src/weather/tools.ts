@@ -6,12 +6,17 @@ import {
 } from '../nflverse/analytics.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { WeatherClient } from './client.js';
-import { GameWeatherService } from './game-weather.js';
+import {
+  GameScheduleNotFoundError,
+  GameWeatherService,
+  resolveWeatherGameType,
+} from './game-weather.js';
 import { findHomeStadium } from './stadiums.js';
 
 const seasonSchema = z.number().int().min(1999).max(2100);
 const weekSchema = z.number().int().min(1).max(22);
 const teamSchema = z.string().trim().min(2).max(3).transform((value) => value.toUpperCase());
+const gameTypeSchema = z.enum(['PRE', 'REG', 'POST']);
 
 export function createWeatherTools(
   weather: WeatherClient,
@@ -56,36 +61,39 @@ export function createWeatherTools(
 
     getGameWeather: tool({
       description:
-        'Combine an nflverse game and venue with the kickoff-hour National Weather Service forecast and weather risk.',
+        'Combine one nflverse game with the kickoff-hour NWS forecast. PRE returns a home-stadium outlook when nflverse has no preseason row.',
       inputSchema: z.object({
         season: seasonSchema,
         week: weekSchema,
         team: teamSchema,
+        gameType: gameTypeSchema.optional(),
       }),
       inputExamples: [
-        { input: { season: 2026, week: 8, team: 'SEA' } },
+        { input: { season: 2026, week: 8, team: 'SEA', gameType: 'REG' } },
+        { input: { season: 2026, week: 2, team: 'SEA', gameType: 'PRE' } },
       ],
-      execute: async (input) => ({
-        ...(await gameWeather.getGameWeather(input)),
-        sources: [
-          {
-            label: 'nflverse schedules',
-            url: 'https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv.gz',
-          },
-          {
-            label: 'National Weather Service API',
-            url: 'https://www.weather.gov/documentation/services-web-api',
-          },
-        ],
-      }),
+      execute: async (input) => {
+        try {
+          return {
+            ...(await gameWeather.getGameWeather(input)),
+            sources: weatherSources(),
+          };
+        } catch (error) {
+          if (input.gameType !== 'PRE' || !(error instanceof GameScheduleNotFoundError)) {
+            throw error;
+          }
+          return preseasonStadiumForecast(weather, input);
+        }
+      },
     }),
 
     getWeekWeather: tool({
       description:
-        'Screen one NFL week for kickoff weather risk. The tool skips direct field effects for indoor games.',
+        'Screen one NFL week for kickoff weather risk. PRE reports the nflverse source limit. The tool separates indoor games.',
       inputSchema: z.object({
         season: seasonSchema,
         week: weekSchema,
+        gameType: gameTypeSchema.optional(),
         includeIndoor: z.boolean().optional().default(false),
         limit: z.number().int().min(1).max(18).optional().default(18),
       }),
@@ -94,16 +102,18 @@ export function createWeatherTools(
           input: {
             season: 2026,
             week: 8,
+            gameType: 'REG',
             includeIndoor: false,
             limit: 18,
           },
         },
       ],
-      execute: async ({ season, week, includeIndoor, limit }) => {
+      execute: async ({ season, week, gameType, includeIndoor, limit }) => {
+        const selectedGameType = resolveWeatherGameType(week, gameType);
         const games = await nflverse.getSchedule({
           season,
           week,
-          gameType: week <= 18 ? 'REG' : 'POST',
+          gameType: selectedGameType,
         });
         const selected = games
           .filter((game) => includeIndoor || !isIndoorRoof(game.roof))
@@ -114,6 +124,7 @@ export function createWeatherTools(
               season,
               week,
               team: game.homeTeam,
+              gameType: selectedGameType,
             });
           } catch (error) {
             return {
@@ -132,6 +143,10 @@ export function createWeatherTools(
         return {
           season,
           week,
+          gameType: selectedGameType,
+          reason: games.length === 0 && selectedGameType === 'PRE'
+            ? 'The nflverse schedule release has no preseason game rows. Select one team for a home-stadium outlook.'
+            : null,
           totalGames: games.length,
           analyzedGames: results.length,
           highRiskGames: results.filter((result) => result.risk === 'high').length,
@@ -153,11 +168,12 @@ export function createWeatherTools(
 
     getGameEnvironment: tool({
       description:
-        'Compare both NFL teams, the game venue, the schedule line, and kickoff weather in one game analysis.',
+        'Compare both NFL teams, the venue, the schedule line, and kickoff weather for a regular-season or postseason game.',
       inputSchema: z.object({
         season: seasonSchema,
         week: weekSchema,
         team: teamSchema,
+        gameType: gameTypeSchema.optional(),
         analysisSeason: seasonSchema
           .optional()
           .describe('The statistics season. Week 1 defaults to the prior season.'),
@@ -169,17 +185,19 @@ export function createWeatherTools(
             season: 2026,
             week: 8,
             team: 'SEA',
+            gameType: 'REG',
             analysisSeason: 2026,
             throughWeek: 7,
           },
         },
       ],
-      execute: async ({ season, week, team, analysisSeason, throughWeek }) => {
+      execute: async ({ season, week, team, gameType, analysisSeason, throughWeek }) => {
+        const selectedGameType = resolveWeatherGameType(week, gameType);
         const games = await nflverse.getSchedule({
           season,
           week,
           team,
-          gameType: week <= 18 ? 'REG' : 'POST',
+          gameType: selectedGameType,
         });
         const game = games[0];
         if (!game) {
@@ -189,7 +207,7 @@ export function createWeatherTools(
         const lastWeek =
           throughWeek ?? (selectedAnalysisSeason < season ? 18 : Math.max(1, week - 1));
         const weatherRequest = gameWeather
-          .getGameWeather({ season, week, team })
+          .getGameWeather({ season, week, team, gameType: selectedGameType })
           .catch((error) => ({
             alerts: [],
             fantasyImpact: [],
@@ -248,6 +266,56 @@ export function createWeatherTools(
       },
     }),
   };
+}
+
+async function preseasonStadiumForecast(
+  weather: WeatherClient,
+  input: { season: number; team: string; week: number },
+) {
+  const stadium = findHomeStadium(input.team);
+  if (!stadium) {
+    return {
+      season: input.season,
+      week: input.week,
+      gameType: 'PRE' as const,
+      team: input.team,
+      status: 'unavailable' as const,
+      reason: 'The nflverse schedule release has no preseason game row, and Seb has no home-stadium coordinate for this team.',
+      sources: weatherSources(),
+    };
+  }
+  const [forecast, alerts] = await Promise.all([
+    weather.getHourlyForecast(stadium.latitude, stadium.longitude),
+    weather.getActiveAlerts(stadium.latitude, stadium.longitude),
+  ]);
+  return {
+    season: input.season,
+    week: input.week,
+    gameType: 'PRE' as const,
+    team: input.team,
+    status: 'stadium-outlook' as const,
+    reason: 'The nflverse schedule release has no preseason game rows. This home-stadium forecast is not matched to a game, venue, or kickoff.',
+    stadium,
+    forecast: {
+      ...forecast,
+      periods: forecast.periods.slice(0, 48),
+    },
+    alerts,
+    sources: weatherSources(),
+  };
+}
+
+function weatherSources() {
+  return [
+    {
+      label: 'nflverse schedules',
+      url: 'https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv.gz',
+    },
+    {
+      label: 'National Weather Service API',
+      url: 'https://www.weather.gov/documentation/services-web-api',
+    },
+  ];
 }
 
 function isIndoorRoof(roof: string | null): boolean {

@@ -90,7 +90,7 @@ export class NflverseClient {
       (game) =>
         (filters.season === undefined || game.season === filters.season) &&
         (filters.week === undefined || game.week === filters.week) &&
-        (gameType === undefined || game.gameType === gameType) &&
+        (gameType === undefined || matchesGameType(game.gameType, gameType)) &&
         (team === undefined || game.homeTeam === team || game.awayTeam === team),
     );
   }
@@ -296,6 +296,13 @@ export class NflverseClient {
       url,
     });
   }
+}
+
+function matchesGameType(actual: string, requested: string): boolean {
+  if (requested !== 'POST') {
+    return actual === requested;
+  }
+  return ['POST', 'WC', 'DIV', 'CON', 'SB'].includes(actual);
 }
 
 function parseGame(row: CsvRow): NflverseGame {

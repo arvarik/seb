@@ -6,6 +6,16 @@ import { findHomeStadium } from './stadiums.js';
 import type { NwsAlert, NwsForecastPeriod } from './types.js';
 
 export type WeatherRisk = 'low' | 'medium' | 'high';
+export type WeatherGameType = 'POST' | 'PRE' | 'REG';
+
+export class GameScheduleNotFoundError extends Error {
+  constructor(season: number, week: number, team: string) {
+    super(
+      `nflverse has no game for ${team.toUpperCase()} in ${season} Week ${week}.`,
+    );
+    this.name = 'GameScheduleNotFoundError';
+  }
+}
 
 export interface GameWeatherResult {
   alerts: NwsAlert[];
@@ -30,6 +40,7 @@ export class GameWeatherService {
   ) {}
 
   async getGameWeather(input: {
+    gameType?: WeatherGameType | undefined;
     season: number;
     team: string;
     week: number;
@@ -38,13 +49,11 @@ export class GameWeatherService {
       season: input.season,
       team: input.team,
       week: input.week,
-      gameType: input.week <= 18 ? 'REG' : 'POST',
+      gameType: resolveWeatherGameType(input.week, input.gameType),
     });
     const game = games[0];
     if (!game) {
-      throw new Error(
-        `nflverse has no game for ${input.team.toUpperCase()} in ${input.season} Week ${input.week}.`,
-      );
+      throw new GameScheduleNotFoundError(input.season, input.week, input.team);
     }
 
     const kickoff = easternKickoff(game.gameDate, game.gameTime);
@@ -128,6 +137,13 @@ export class GameWeatherService {
       status: 'available',
     };
   }
+}
+
+export function resolveWeatherGameType(
+  week: number,
+  gameType?: WeatherGameType,
+): WeatherGameType {
+  return gameType ?? (week <= 18 ? 'REG' : 'POST');
 }
 
 function baseResult(

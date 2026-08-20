@@ -138,6 +138,7 @@ export function applySetupProfile(
   session: SessionState,
 ): void {
   session.season = profile.defaults.season;
+  session.seasonType = null;
 }
 
 function validateUsername(value: string): string {

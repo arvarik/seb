@@ -6,6 +6,34 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-08-20
+
+### Added
+
+- Player information, team information, and general NFL statistics skills.
+- A read-only team player tool with an explicit Sleeper source limit.
+- The `/exit` command with `/quit` and `/q` aliases.
+- Grouped skill output for NFL information, fantasy decisions, and research.
+
+### Changed
+
+- The command palette now starts with the eight most common user tasks.
+- The command catalog now uses seven task-based sections.
+- Primary commands now use `/context`, `/source`, `/usage`, `/next`, `/export`, and `/shell-completion`.
+- Earlier command names remain available as aliases.
+- Skill completions now show each skill title and purpose.
+- Seb now supports non-fantasy NFL research without adding unwanted fantasy advice.
+- Trade and weather skills now route requests to explicit data tools.
+- Skill actions now use editable placeholders when required context is missing.
+
+### Fixed
+
+- Skill completion now stops after one valid skill.
+- Active skill actions now appear before optional setup actions.
+- Weather tools now report the nflverse preseason limit and return a labeled home-stadium outlook.
+- The `POST` schedule filter now includes nflverse playoff stage values.
+
+
 ## [0.0.3] - 2026-08-20
 
 ### Added

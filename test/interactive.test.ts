@@ -7,8 +7,12 @@ import {
 } from 'ai';
 
 import { createFantasyFootballAgent } from '../src/agent.js';
-import { createSessionState } from '../src/interactive/session.js';
-import { SEB_SKILLS } from '../src/interactive/skills.js';
+import {
+  createSessionState,
+  formatSessionContext,
+  getContextualSuggestions,
+} from '../src/interactive/session.js';
+import { formatSkillList, SEB_SKILLS } from '../src/interactive/skills.js';
 import {
   INTERACTIVE_HELP,
   SebInteractiveTransport,
@@ -25,12 +29,50 @@ describe('interactive skills', () => {
     expect(SEB_SKILLS.map((skill) => skill.id)).toEqual(
       expect.arrayContaining([
         'start-sit',
+        'player-info',
+        'team-info',
+        'nfl-stats',
         'waiver-scout',
         'weather-watch',
         'usage-trends',
         'game-environment',
         'playoff-planner',
       ]),
+    );
+    expect(formatSkillList()).toContain('### NFL information');
+    expect(formatSkillList()).toContain('### Fantasy');
+    expect(formatSkillList()).toContain('### Research');
+    expect(SEB_SKILLS.every((skill) => skill.category.length > 0)).toBe(true);
+  });
+
+  it('shows active skill actions before optional setup actions', () => {
+    const trade = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    trade.skillId = 'trade-review';
+    expect(getContextualSuggestions(trade).slice(0, 3)).toEqual([
+      'Compare <Side A> for <Side B>.',
+      'Review <Player A> and <Player B> for my roster.',
+      'Explain the risk on both sides of <trade>.',
+    ]);
+
+    const weather = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    weather.skillId = 'weather-watch';
+    weather.team = 'SEA';
+    weather.week = 2;
+    expect(getContextualSuggestions(weather).slice(0, 3)).toEqual([
+      "Check SEA's Week 2 kickoff weather.",
+      'List outdoor weather risks for Week 2.',
+      'Explain the weather impact for SEA.',
+    ]);
+    expect(formatSessionContext(weather)).toContain('Use getGameWeather');
+
+    const team = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    team.skillId = 'team-info';
+    team.team = 'SEA';
+    expect(getContextualSuggestions(team)[0]).toBe(
+      'Show the SEA team profile and player list.',
+    );
+    expect(formatSessionContext(team)).toContain(
+      'Do not add fantasy advice unless the user requests it.',
     );
   });
 });
@@ -44,6 +86,20 @@ describe('SebInteractiveTransport', () => {
     });
     const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
     const clients = dataClients();
+    clients.sleeperClient = new SleeperClient({
+      fetch: async (input) => {
+        if (new URL(String(input)).pathname === '/v1/state/nfl') {
+          return Response.json({
+            season: '2026',
+            season_type: 'pre',
+            week: 2,
+            leg: 2,
+          });
+        }
+        return new Response('Not found', { status: 404 });
+      },
+      playerCacheFile: false,
+    });
     const agent = createFantasyFootballAgent({
       languageModel: model,
       ...clients,
@@ -63,20 +119,24 @@ describe('SebInteractiveTransport', () => {
     const help = await sendCommand(transport, '/help', 'message-1');
     const skill = await sendCommand(transport, '/skill weather-watch', 'message-2');
     const team = await sendCommand(transport, '/team SEA', 'message-3');
-    const status = await sendCommand(transport, '/status', 'message-4');
+    const status = await sendCommand(transport, '/context', 'message-4');
     const commands = await sendCommand(transport, '/commands cache', 'message-5');
     const completion = await sendCommand(transport, '/complete /skill wea', 'message-6');
     const devtools = await sendCommand(transport, '/devtools', 'message-7');
+    const currentWeek = await sendCommand(transport, '/week current', 'message-8');
+    const currentStatus = await sendCommand(transport, '/status', 'message-9');
 
     expect(help).toContain(INTERACTIVE_HELP);
     expect(skill).toContain('weather-watch');
     expect(team).toContain('SEA');
     expect(status).toContain('Skill: `weather-watch`');
     expect(status).toContain('NFL team: SEA');
-    expect(commands).toContain('/refresh [all|sleeper|nflverse|weather]');
+    expect(commands).toContain('/cache');
     expect(completion).toContain('/skill weather-watch');
     expect(devtools).toContain('disabled');
     expect(devtools).toContain('npm run devtools');
+    expect(currentWeek).toContain('Week 2 kickoff weather');
+    expect(currentStatus).toContain('Season type: pre');
   });
 
   it('shows source links recorded during the session', async () => {
@@ -99,11 +159,13 @@ describe('SebInteractiveTransport', () => {
     });
 
     const output = await sendCommand(transport, '/sources', 'message-1');
-    const opened = await sendCommand(transport, '/open 1', 'message-2');
+    const opened = await sendCommand(transport, '/source 1', 'message-2');
 
     expect(output).toContain('[Test source](https://example.test/data)');
     expect(output).toContain('LIVE');
     expect(opened).toContain('Source 1: [Test source](https://example.test/data)');
+    const alias = await sendCommand(transport, '/open 1', 'message-3');
+    expect(alias).toContain('Source 1: [Test source](https://example.test/data)');
   });
 
   it('adds contextual suggestions after a streamed model answer', async () => {

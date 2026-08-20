@@ -323,6 +323,17 @@ export class SebTerminalRenderer {
       ? findInteractiveCommand(prompt.split(/\s+/u)[0] ?? '')
       : null;
     if (localCommand) this.options.uiState.recordCommand(localCommand.name);
+    if (localCommand?.name === 'exit') {
+      if (prompt.split(/\s+/u).length > 1) {
+        this.status = 'Use /exit without arguments';
+        this.paint();
+        return;
+      }
+      this.editor.set('');
+      this.stop();
+      resolve(undefined);
+      return;
+    }
     if (prompt === '/shortcuts') {
       this.overlay = 'shortcuts';
       this.editor.set('');
@@ -678,7 +689,7 @@ export class SebTerminalRenderer {
       suggestions ? paint(this.theme, 'source', fit(` ${suggestions}`, width)) : '',
       paint(this.theme, 'dim', '─'.repeat(width)),
       ...promptLines.map((line, index) => `${index === 0 ? `${symbol(this.theme, 'prompt')} ` : '  '}${line}`),
-      paint(this.theme, 'dim', fit(` ${this.status} · Ctrl+K commands · ? shortcuts · Alt+Enter newline`, width)),
+      paint(this.theme, 'dim', fit(` ${this.status} · Ctrl+K commands · /exit quit · ? shortcuts`, width)),
     ];
   }
 
@@ -742,6 +753,7 @@ export class SebTerminalRenderer {
       '  PgUp/PgDn    Scroll the transcript',
       '  Escape       Close a panel or stop a request',
       '  Ctrl+C       Exit Seb',
+      '  /exit        Exit Seb',
       '',
       paint(this.theme, 'dim', fit('Press Escape, Enter, or any character to close this guide.', width)),
     ];

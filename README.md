@@ -1,6 +1,6 @@
 # Seb
 
-Seb is a read-only fantasy football agent. It uses Gemini to select data tools and explain the returned facts.
+Seb is a read-only NFL and fantasy football agent. It uses Gemini to select data tools and explain the returned facts.
 
 Seb reads Sleeper, nflverse, and National Weather Service data. It never changes a league, roster, waiver claim, trade, or lineup.
 
@@ -8,7 +8,7 @@ Seb uses Gemini 3.7 Flash through the Gemini Interactions API by default.
 
 One-shot and connector requests use Gemini 3.6 Flash after a temporary capacity or rate-limit error.
 
-The current project version is `0.0.3`. Seb follows the [documented release policy](docs/VERSIONING.md).
+The current project version is `0.0.4`. Seb follows the [documented release policy](docs/VERSIONING.md).
 
 ## Requirements
 
@@ -38,7 +38,7 @@ The current project version is `0.0.3`. Seb follows the [documented release poli
    Set the NWS user agent when you want a direct contact value.
 
    ```dotenv
-   NWS_USER_AGENT=seb/0.0.3 (you@example.com)
+   NWS_USER_AGENT=seb/0.0.4 (you@example.com)
    ```
 
 4. Verify the complete setup.
@@ -66,6 +66,8 @@ The current project version is `0.0.3`. Seb follows the [documented release poli
    Press `Ctrl+K` or type `/` to open the command palette.
 
    Use `/leagues`, `/rosters`, and `/team` to select optional context.
+
+   Use `/exit` to close interactive mode.
 
 7. Ask one question without the interactive interface.
 
@@ -146,6 +148,7 @@ The [documentation index](docs/README.md) links every setup and operations guide
 
 - Read the current NFL state.
 - Find Sleeper player records.
+- Show non-fantasy NFL player, team, schedule, result, and statistic information.
 - Read a user's leagues.
 - Read league settings, users, rosters, matchups, and transactions.
 - Read and resolve trending adds or drops.

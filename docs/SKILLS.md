@@ -1,12 +1,32 @@
 # Skill guide
 
-A skill gives Seb focused instructions for one fantasy workflow.
+A skill gives Seb focused instructions for one NFL or fantasy workflow.
 
 Select a skill with `/skill NAME` inside interactive chat.
 
 The default skill is `general`.
 
-## Core skills
+The `/skills` command groups skills by NFL information, fantasy decisions, and research.
+
+## NFL information skills
+
+These skills answer non-fantasy questions by default.
+
+| Skill | Purpose | Main evidence |
+| --- | --- | --- |
+| `player-info` | Shows one NFL player profile and recorded statistics. | Sleeper profiles, nflverse game logs, and verified news. |
+| `team-info` | Shows one NFL team, player set, schedule, and results. | Team identity, Sleeper player records, and nflverse data. |
+| `nfl-stats` | Answers general NFL schedule and statistics questions. | Sleeper NFL state and nflverse records. |
+
+The `player-info` skill separates a current profile from game statistics and news.
+
+The `team-info` skill does not call Sleeper records an official NFL roster.
+
+The `nfl-stats` skill states the season and week range for each statistic.
+
+These skills add fantasy advice only when the user requests it.
+
+## Fantasy skills
 
 | Skill | Purpose | Main evidence |
 | --- | --- | --- |
@@ -17,6 +37,22 @@ The default skill is `general`.
 | `trade-review` | Compares both trade sides. | Production, usage, volatility, roster fit, and risk. |
 | `league-audit` | Ranks every roster. | Sleeper records, scores, consistency, and recent form. |
 | `projection-explainer` | Builds a transparent player range. | Baseline, matchup, weather, and uncertainty. |
+
+## Trade review skill
+
+The `trade-review` skill needs both trade sides.
+
+Seb resolves each player through Sleeper.
+
+Seb compares prior production, opportunity, recent form, and volatility through nflverse.
+
+Set a league and roster when roster fit affects the decision.
+
+Seb reads an identified Sleeper transaction only when the request refers to that transaction.
+
+Seb labels rest-of-season expectations as assumptions.
+
+Seb does not invent a trade-chart value or a market value.
 
 ## nflverse skills
 
@@ -34,6 +70,16 @@ The default skill is `general`.
 The `weather-watch` skill finds wind, rain, cold, heat, and active alerts.
 
 It can screen every outdoor game in one NFL week.
+
+Run `/week current` to load the current season, week, and season type from Sleeper.
+
+The weather tools use `REG` or `POST` to select the correct nflverse schedule.
+
+nflverse schedule releases do not include preseason game rows.
+
+During preseason, Seb can show the selected team home-stadium forecast.
+
+Seb states that this outlook is not matched to the game venue or kickoff.
 
 Seb first checks the nflverse roof field.
 
@@ -68,6 +114,12 @@ Seb has no licensed publisher feed or official injury-report feed.
 
 Use `start-sit` for one lineup decision.
 
+Use `player-info` for a non-fantasy player profile or game log.
+
+Use `team-info` for a non-fantasy team profile, player set, schedule, or results.
+
+Use `nfl-stats` for a general NFL schedule, result, or statistical question.
+
 Use `usage-trends` when the decision depends on changing opportunity.
 
 Use `defense-matchup` when the opponent is the main question.
@@ -95,6 +147,8 @@ The `news-briefing` skill identifies that uncertainty.
 The NWS supports United States points only.
 
 Seb does not apply a home-stadium coordinate to a neutral-site game.
+
+Seb does not claim a preseason kickoff forecast without a reliable schedule row.
 
 The NWS hourly forecast covers about seven days.
 

@@ -7,6 +7,7 @@ import { NflverseClient } from '../src/nflverse/client.js';
 const scheduleCsv = `game_id,season,game_type,week,gameday,weekday,gametime,away_team,away_score,home_team,home_score,away_rest,home_rest,spread_line,total_line,roof,surface,temp,wind,stadium_id,stadium
 2026_01_BUF_KC,2026,REG,1,2026-09-10,Thursday,20:20,BUF,,KC,,7,7,-2.5,48.5,outdoors,grass,,,KAN00,Arrowhead Stadium
 2026_01_DAL_PHI,2026,REG,1,2026-09-11,Friday,20:00,DAL,,PHI,,7,7,1.5,45.5,outdoors,grass,,,PHI00,Lincoln Financial Field
+2025_WC_BUF_JAX,2025,WC,19,2026-01-10,Saturday,16:30,BUF,,JAX,,7,7,-1.5,44.5,outdoors,grass,,,JAX00,EverBank Stadium
 `;
 
 const statsCsv = `player_id,player_display_name,position,season,week,season_type,game_id,team,opponent_team,completions,attempts,passing_yards,passing_tds,passing_interceptions,carries,rushing_yards,rushing_tds,receptions,targets,receiving_yards,receiving_tds,receiving_air_yards,target_share,air_yards_share,fantasy_points,fantasy_points_ppr
@@ -64,6 +65,18 @@ describe('NflverseClient', () => {
       fantasyPointsPpr: 21.5,
     });
     expect(requested[0]).toContain('stats_player_week_2025.csv.gz');
+  });
+
+  it('maps the POST filter to nflverse postseason stage values', async () => {
+    const client = new NflverseClient({
+      cacheDirectory: false,
+      fetch: async () => csvResponse(scheduleCsv),
+    });
+
+    const games = await client.getSchedule({ season: 2025, gameType: 'POST' });
+
+    expect(games).toHaveLength(1);
+    expect(games[0]).toMatchObject({ gameType: 'WC', week: 19 });
   });
 
   it('rejects an unavailable nflverse file with a useful error', async () => {

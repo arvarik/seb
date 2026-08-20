@@ -4,6 +4,10 @@ import { gzipSync } from 'node:zlib';
 import { MockLanguageModelV4 } from 'ai/test';
 
 import { createFantasyFootballAgent } from '../src/agent.js';
+import {
+  createSessionState,
+  formatSessionContext,
+} from '../src/interactive/session.js';
 import { NflverseClient } from '../src/nflverse/client.js';
 import { SleeperClient } from '../src/sleeper/client.js';
 
@@ -145,10 +149,14 @@ describe('fantasy football agent harness', () => {
         warnings: [],
       },
     });
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    session.skillId = 'weather-watch';
+    session.seasonType = 'pre';
+    session.week = 2;
+    session.team = 'SEA';
     const agent = createFantasyFootballAgent({
       languageModel: model,
-      getRuntimeInstructions: () =>
-        'Active skill: weather-watch. NFL week: 8. NFL team: SEA.',
+      getRuntimeInstructions: () => formatSessionContext(session),
     });
 
     await agent.generate({ prompt: 'Check my context.' });
@@ -158,6 +166,9 @@ describe('fantasy football agent harness', () => {
     );
     expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain(
       'NFL team: SEA',
+    );
+    expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain(
+      'do not include preseason game rows',
     );
   });
 });

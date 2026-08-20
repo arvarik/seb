@@ -39,6 +39,7 @@ import {
 } from '../setup/wizard.js';
 import {
   completeInteractiveInput,
+  findInteractiveCommand,
   formatCommandCatalog,
   formatCompletions,
   generateShellCompletion,
@@ -47,6 +48,7 @@ import {
 import {
   formatSessionStatus,
   getContextualSuggestions,
+  normalizeSessionSeasonType,
   type SessionState,
 } from './session.js';
 import { findSkill, formatSkillList, getSkill } from './skills.js';
@@ -151,7 +153,9 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     const [rawName, ...arguments_] = input.slice(1).trim().split(/\s+/);
     const name = rawName?.toLowerCase() ?? '';
     const state = this.options.session;
-    if (name) this.uiState.recordCommand(name);
+    if (name) {
+      this.uiState.recordCommand(findInteractiveCommand(name)?.name ?? name);
+    }
 
     switch (name) {
       case 'help':
@@ -165,8 +169,8 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         return formatCompletions(
           completeInteractiveInput(arguments_.join(' '), state),
         );
-      case 'status':
       case 'context':
+      case 'status':
         return formatSessionStatus(state);
       case 'skills':
         return `## Skills\n\n${formatSkillList()}`;
@@ -188,10 +192,14 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         return 'The Seb terminal places the latest model prompt in the editor.';
       case 'season': {
         const value = arguments_[0];
-        const season = value === 'current'
-          ? (await this.options.sleeper.getNflState()).season
-          : value;
+        const nfl = value === 'current'
+          ? await this.options.sleeper.getNflState()
+          : null;
+        const season = nfl?.season ?? value;
         state.season = validInteger(season, 1999, 2100, 'season');
+        state.seasonType = nfl
+          ? normalizeSessionSeasonType(nfl.season_type)
+          : null;
         state.leagueOptions = [];
         state.rosterOptions = [];
         return `The active NFL season is now ${state.season}.`;
@@ -205,8 +213,10 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         if (value === 'current') {
           const nfl = await this.options.sleeper.getNflState();
           state.season = validInteger(nfl.season, 1999, 2100, 'season');
+          state.seasonType = normalizeSessionSeasonType(nfl.season_type);
           state.week = validInteger(nfl.week, 1, 22, 'week');
         } else {
+          state.seasonType = null;
           state.week = validInteger(value, 1, 22, 'week');
         }
         return `The active NFL week is now ${state.week}.`;
@@ -296,6 +306,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           ),
         ].join('\n');
       }
+      case 'source':
       case 'open': {
         const index = validInteger(arguments_[0], 1, 1_000, 'source number');
         const source = this.options.sources.list()[index - 1];
@@ -416,6 +427,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         });
         return `\`\`\`text\n${formatDoctorReport(report)}\n\`\`\``;
       }
+      case 'usage':
       case 'cost':
         return [
           '## Session usage',
@@ -426,15 +438,17 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           `- Total tokens: ${state.usage.totalTokens.toLocaleString()}`,
           '- Seb does not estimate currency cost because model prices can change.',
         ].join('\n');
+      case 'next':
       case 'suggest':
       case 'suggestions':
         return ['## Suggested next actions', '', ...getContextualSuggestions(state).map((item) => `- ${item}`)].join('\n');
       case 'version':
         return `Seb ${this.options.version} uses ${this.options.model}.`;
+      case 'shell-completion':
       case 'completion': {
         const shell = arguments_[0]?.toLowerCase();
         if (!isCompletionShell(shell)) {
-          throw new Error('Use /completion bash, /completion fish, or /completion zsh.');
+          throw new Error('Use /shell-completion bash, fish, or zsh.');
         }
         return [
           `## ${shell} completion`,
@@ -446,6 +460,13 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           '\`\`\`',
         ].join('\n');
       }
+      case 'exit':
+      case 'quit':
+      case 'q':
+        if (arguments_.length > 0) {
+          throw new Error('Use /exit without arguments.');
+        }
+        return 'Run `/exit` in the Seb terminal to close interactive mode.';
       case '':
         throw new Error('Add a command after the slash. Run /help.');
       default:

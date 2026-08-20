@@ -1,6 +1,6 @@
 # Terminal interface guide
 
-Seb `0.0.3` includes a local terminal renderer for interactive research.
+Seb `0.0.4` includes a local terminal renderer for interactive research.
 
 The AI SDK still controls the agent message loop and tool transport.
 
@@ -54,13 +54,17 @@ Press `Ctrl+K` to open the palette.
 
 You can also type `/` at the start of a prompt.
 
-The palette groups commands into five categories.
+The palette groups commands into seven categories.
 
+- Essentials
 - Context
 - Analysis
-- Data
-- Session
+- Sources
+- Conversation
+- Preferences
 - Diagnostics
+
+The empty palette shows common tasks before advanced tools.
 
 The palette searches command names and descriptions.
 
@@ -133,7 +137,7 @@ The copy command uses the terminal OSC 52 clipboard sequence.
 
 The terminal must allow OSC 52 for this action.
 
-Run `/open 1` to show the first validated source link.
+Run `/source 1` to show the first validated source link.
 
 Replace `1` with another number from `/sources`.
 
@@ -161,7 +165,7 @@ Source states include `LIVE`, `WEB`, `CACHED 4m`, `2025 STATS`, and `STALE`.
 
 The exact cache age changes as time passes.
 
-Run `/status` for the full context.
+Run `/context` for the full context.
 
 Run `/sources` for exact links, retrieval times, and cache outcomes.
 
@@ -204,6 +208,8 @@ Press `Escape` during a request to stop that request.
 The session remains open after this action.
 
 Press `Ctrl+C` to stop the request and exit Seb.
+
+Run `/exit`, `/quit`, or `/q` from the prompt to exit Seb.
 
 Use `Page Up` and `Page Down` to scroll the transcript.
 

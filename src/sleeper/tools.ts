@@ -29,6 +29,7 @@ const analysisWeekSchema = z
   .max(18)
   .optional()
   .describe('The last completed week. Use 0 when no games are complete.');
+const teamSchema = z.string().trim().min(2).max(3).transform((value) => value.toUpperCase());
 
 export function createSleeperTools(client: SleeperClient) {
   const analysis = new SleeperAnalysisService(client);
@@ -80,6 +81,38 @@ export function createSleeperTools(client: SleeperClient) {
             limit,
           })
         ).map(compactPlayer),
+    }),
+
+    getTeamPlayers: tool({
+      description:
+        'Get current Sleeper NFL player records for one NFL team. This is not an official NFL roster or transaction source.',
+      inputSchema: z.object({
+        team: teamSchema,
+        position: z.string().trim().min(1).max(10).optional(),
+        includeInactive: z.boolean().optional().default(false),
+        limit: z.number().int().min(1).max(100).optional().default(100),
+      }),
+      inputExamples: [
+        { input: { team: 'SEA', includeInactive: false, limit: 100 } },
+        { input: { team: 'MIN', position: 'WR', includeInactive: false, limit: 25 } },
+      ],
+      execute: async ({ team, position, includeInactive, limit }) => {
+        const players = Object.values(await client.getPlayers({
+          active: !includeInactive,
+          ...(position ? { position } : {}),
+        }))
+          .filter((player) => player.team?.toUpperCase() === team)
+          .filter((player) => includeInactive || player.active !== false)
+          .filter((player) => !position || player.position?.toUpperCase() === position.toUpperCase())
+          .sort(compareTeamPlayers);
+        return {
+          team,
+          totalPlayers: players.length,
+          truncated: players.length > limit,
+          players: players.slice(0, limit).map(compactPlayer),
+          sourceLimit: 'Sleeper player records are not an official NFL roster or transaction source.',
+        };
+      },
     }),
 
     getUserLeagues: tool({
@@ -268,4 +301,14 @@ function compactPlayer(player: SleeperPlayer) {
     age: player.age ?? null,
     yearsExperience: player.years_exp ?? null,
   };
+}
+
+function compareTeamPlayers(left: SleeperPlayer, right: SleeperPlayer): number {
+  const position = (left.position ?? '').localeCompare(right.position ?? '');
+  if (position !== 0) {
+    return position;
+  }
+  const leftName = left.full_name ?? `${left.first_name ?? ''} ${left.last_name ?? ''}`;
+  const rightName = right.full_name ?? `${right.first_name ?? ''} ${right.last_name ?? ''}`;
+  return leftName.localeCompare(rightName);
 }

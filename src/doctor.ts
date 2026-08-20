@@ -6,7 +6,10 @@ import {
   DEFAULT_GEMINI_MODEL,
 } from './agent.js';
 import { isModelCapacityError } from './model-capacity-error.js';
+import { getSharedSebDatabase } from './data/sqlite-store.js';
+import { NflverseClient } from './nflverse/client.js';
 import { SleeperClient } from './sleeper/client.js';
+import { WeatherClient } from './weather/client.js';
 
 export type DoctorStatus = 'pass' | 'fail' | 'skip';
 
@@ -30,10 +33,26 @@ export interface DoctorOptions {
     primaryModel: string,
     fallbackModel: string,
   ) => Promise<{ fallbackUsed: boolean; model: string }>;
+  verifyDatabase?: () => {
+    cacheEntries: number;
+    file: string;
+    identities: number;
+    identityLinks: number;
+    schemaVersion: number;
+    snapshots: number;
+  };
+  verifyNflverse?: () => Promise<{
+    games: number;
+    latestSeason: number;
+  }>;
   verifySleeper?: () => Promise<{
     season: string;
     seasonType: string;
     week: number;
+  }>;
+  verifyWeather?: () => Promise<{
+    periods: number;
+    timeZone: string | null;
   }>;
 }
 
@@ -61,11 +80,22 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
           detail: 'Add GOOGLE_GENERATIVE_AI_API_KEY to .env.',
         },
   );
+  checks.push(checkDatabase(options.verifyDatabase ?? verifyDatabase));
 
   if (options.offline) {
     checks.push(
       {
         name: 'Sleeper API',
+        status: 'skip',
+        detail: 'The offline check skipped this request.',
+      },
+      {
+        name: 'nflverse data',
+        status: 'skip',
+        detail: 'The offline check skipped this request.',
+      },
+      {
+        name: 'National Weather Service API',
         status: 'skip',
         detail: 'The offline check skipped this request.',
       },
@@ -77,26 +107,63 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     );
   } else {
     const verifySleeper = options.verifySleeper ?? verifySleeperApi;
-    checks.push(await checkSleeper(verifySleeper));
-
-    if (apiKey) {
-      const verifyGemini = options.verifyGemini ?? verifyGeminiApi;
-      checks.push(
-        await checkGemini(apiKey, primaryModel, fallbackModel, verifyGemini),
-      );
-    } else {
-      checks.push({
+    const verifyNflverse = options.verifyNflverse ?? verifyNflverseData;
+    const verifyWeather =
+      options.verifyWeather ?? (() => verifyWeatherApi(environment));
+    const geminiCheck = apiKey
+      ? checkGemini(
+          apiKey,
+          primaryModel,
+          fallbackModel,
+          options.verifyGemini ?? verifyGeminiApi,
+        )
+      : Promise.resolve<DoctorCheck>({
         name: 'Gemini API',
         status: 'skip',
         detail: 'The request needs a Gemini key.',
       });
-    }
+    checks.push(
+      ...(await Promise.all([
+        checkSleeper(verifySleeper),
+        checkNflverse(verifyNflverse),
+        checkWeather(verifyWeather),
+        geminiCheck,
+      ])),
+    );
   }
 
   return {
     checks,
     ok: checks.every((check) => check.status !== 'fail'),
   };
+}
+
+function checkDatabase(
+  verify: NonNullable<DoctorOptions['verifyDatabase']>,
+): DoctorCheck {
+  try {
+    const status = verify();
+    return {
+      name: 'SQLite data store',
+      status: 'pass',
+      detail: [
+        `Schema ${status.schemaVersion}, ${status.cacheEntries} cache entries,`,
+        `${status.snapshots} snapshots,`,
+        `${status.identities} canonical ${status.identities === 1 ? 'identity' : 'identities'},`,
+        `and ${status.identityLinks} source ${status.identityLinks === 1 ? 'link' : 'links'} at ${status.file}.`,
+      ].join(' '),
+    };
+  } catch (error) {
+    return {
+      name: 'SQLite data store',
+      status: 'fail',
+      detail: errorMessage(error),
+    };
+  }
+}
+
+function verifyDatabase() {
+  return getSharedSebDatabase().status();
 }
 
 export function formatDoctorReport(report: DoctorReport): string {
@@ -168,6 +235,44 @@ async function checkGemini(
   }
 }
 
+async function checkNflverse(
+  verify: NonNullable<DoctorOptions['verifyNflverse']>,
+): Promise<DoctorCheck> {
+  try {
+    const result = await verify();
+    return {
+      name: 'nflverse data',
+      status: 'pass',
+      detail: `${result.games} schedule rows loaded through the ${result.latestSeason} season.`,
+    };
+  } catch (error) {
+    return {
+      name: 'nflverse data',
+      status: 'fail',
+      detail: errorMessage(error),
+    };
+  }
+}
+
+async function checkWeather(
+  verify: NonNullable<DoctorOptions['verifyWeather']>,
+): Promise<DoctorCheck> {
+  try {
+    const result = await verify();
+    return {
+      name: 'National Weather Service API',
+      status: 'pass',
+      detail: `${result.periods} hourly periods loaded for ${result.timeZone ?? 'the test point'}.`,
+    };
+  } catch (error) {
+    return {
+      name: 'National Weather Service API',
+      status: 'fail',
+      detail: errorMessage(error),
+    };
+  }
+}
+
 async function verifySleeperApi(): Promise<{
   season: string;
   seasonType: string;
@@ -181,7 +286,30 @@ async function verifySleeperApi(): Promise<{
   };
 }
 
-async function verifyGeminiApi(
+async function verifyNflverseData(): Promise<{
+  games: number;
+  latestSeason: number;
+}> {
+  const games = await new NflverseClient({ timeoutMs: 20_000 }).getSchedule();
+  return {
+    games: games.length,
+    latestSeason: Math.max(...games.map((game) => game.season)),
+  };
+}
+
+async function verifyWeatherApi(
+  environment: NodeJS.ProcessEnv,
+): Promise<{ periods: number; timeZone: string | null }> {
+  const forecast = await new WeatherClient({
+    timeoutMs: 15_000,
+    ...(environment.NWS_USER_AGENT?.trim()
+      ? { userAgent: environment.NWS_USER_AGENT.trim() }
+      : {}),
+  }).getHourlyForecast(47.5952, -122.3316);
+  return { periods: forecast.periods.length, timeZone: forecast.timeZone };
+}
+
+export async function verifyGeminiApi(
   apiKey: string,
   primaryModel: string,
   fallbackModel: string,

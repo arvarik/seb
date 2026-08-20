@@ -10,7 +10,7 @@ describe('Seb executable', () => {
     const result = runSeb('--help');
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('Seb reads Sleeper data');
+    expect(result.stdout).toContain('Seb reads Sleeper, nflverse, and weather data');
     expect(result.stdout).toContain('seb ask [OPTIONS] [QUESTION]');
     expect(result.stderr).toBe('');
   });
@@ -19,7 +19,7 @@ describe('Seb executable', () => {
     const result = runSeb('--version');
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe('seb 0.0.1\n');
+    expect(result.stdout).toBe('seb 0.0.2\n');
   });
 
   it('returns the usage exit code for an empty one-shot request', () => {
@@ -27,6 +27,15 @@ describe('Seb executable', () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('Add a question');
+  });
+
+  it('prints a shell completion script without credentials', () => {
+    const result = runSeb('completion', 'zsh');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('#compdef seb');
+    expect(result.stdout).toContain('replay:Measure historical baseline accuracy');
+    expect(result.stderr).toBe('');
   });
 });
 

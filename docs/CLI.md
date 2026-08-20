@@ -24,6 +24,79 @@ seb doctor
 
 You can skip `npm link`. Use `npm run seb` and `npm run ask` instead.
 
+## Command summary
+
+| Command | Purpose |
+| --- | --- |
+| `seb` or `seb chat` | Start interactive chat. |
+| `seb ask` | Ask one question or read standard input. |
+| `seb setup` | Discover and save a Sleeper profile. |
+| `seb doctor` | Verify local configuration and source access. |
+| `seb cache` | Inspect or clear the SQLite source cache. |
+| `seb snapshots` | List snapshots or inspect snapshot provenance. |
+| `seb replay` | Measure the nflverse PPR baseline. |
+| `seb completion` | Print a shell completion script. |
+| `seb version` | Print the installed Seb version. |
+
+Run `seb COMMAND --help` to return the general command help.
+
+## First-run setup
+
+Run the guided terminal setup.
+
+```bash
+seb setup
+```
+
+The wizard validates Gemini with one small request.
+
+It asks for a season and uses the current Sleeper season as the default.
+
+It then discovers leagues and owned rosters for that season.
+
+It saves one default profile outside the repository.
+
+Starting interactive chat without a profile starts this wizard automatically.
+
+Read the [setup guide](SETUP.md) for profile paths and security rules.
+
+## Install shell completion
+
+Generate a completion script without credentials.
+
+```bash
+seb completion zsh
+seb completion bash
+seb completion fish
+```
+
+Install Zsh completion.
+
+```bash
+mkdir -p ~/.zfunc
+seb completion zsh > ~/.zfunc/_seb
+```
+
+Add `~/.zfunc` to `fpath`, and run `compinit` from `~/.zshrc`.
+
+Install Bash completion.
+
+```bash
+seb completion bash > ~/.seb-completion.bash
+printf '\nsource ~/.seb-completion.bash\n' >> ~/.bashrc
+```
+
+Install Fish completion.
+
+```fish
+mkdir -p ~/.config/fish/completions
+seb completion fish > ~/.config/fish/completions/seb.fish
+```
+
+Restart the active shell after a Zsh or Bash installation.
+
+The scripts complete top-level commands and supported options.
+
 ## Interactive chat
 
 Start the full terminal interface.
@@ -32,7 +105,7 @@ Start the full terminal interface.
 seb
 ```
 
-The interface keeps the conversation until you exit. It renders Markdown and Sleeper tool activity.
+The interface keeps the conversation until you exit. It renders Markdown and data tool activity.
 
 Use these controls.
 
@@ -47,6 +120,10 @@ Use these controls.
 The interface expands the active tool card. It collapses older tool cards to reduce noise.
 
 Seb hides model reasoning by default. It shows a compact reasoning card when the provider returns reasoning.
+
+Run `/help` inside the interface. Local commands do not call Gemini.
+
+Use the [interactive guide](INTERACTIVE.md) for every command and skill.
 
 ## Ask one question
 
@@ -98,6 +175,16 @@ The command writes one compact JSON object to standard output.
   "fallbackUsed": false,
   "finishReason": "stop",
   "model": "gemini-3.7-flash",
+  "sources": [
+    {
+      "accessedAt": "2026-08-20T12:00:01.000Z",
+      "cacheOutcome": "source-updated",
+      "id": "sleeper-state-nfl",
+      "label": "Sleeper read-only API",
+      "retrievedAt": "2026-08-20T12:00:00.000Z",
+      "url": "https://api.sleeper.app/v1/state/nfl"
+    }
+  ],
   "toolCalls": ["getNflState"],
   "usage": {
     "inputTokens": 1050,
@@ -107,6 +194,8 @@ The command writes one compact JSON object to standard output.
 ```
 
 The token values can be `null` when a provider does not return usage data.
+
+Each source can include a cache outcome, retrieval time, and refresh error.
 
 Use the linked command for clean JSON. The standard npm command prints its own status lines.
 
@@ -134,8 +223,11 @@ The doctor performs these checks.
 
 1. It verifies Node.js 22 or newer.
 2. It verifies that the Gemini key exists.
-3. It reads the current Sleeper NFL state.
-4. It sends one small Gemini test request.
+3. It opens SQLite and reports the schema and record counts.
+4. It reads the current Sleeper NFL state.
+5. It loads the nflverse schedule.
+6. It loads one NWS hourly forecast.
+7. It sends one small Gemini test request.
 
 Use the offline option when the computer has no network access.
 
@@ -150,6 +242,92 @@ seb doctor --json
 ```
 
 The doctor never prints the Gemini key.
+
+## Inspect the local cache
+
+Show the database path and record counts.
+
+```bash
+seb cache
+seb cache status
+seb cache status --json
+```
+
+Text output names `Canonical identities` and `Identity source links`.
+
+JSON output uses the `identities` and `identityLinks` fields.
+
+Clear source cache entries.
+
+```bash
+seb cache clear
+seb cache clear --json
+```
+
+The clear command preserves every historical snapshot.
+
+Read the [storage guide](STORAGE.md) for source freshness periods.
+
+## Inspect source snapshots
+
+List the latest 20 snapshots.
+
+```bash
+seb snapshots
+```
+
+Filter and increase the result limit.
+
+```bash
+seb snapshots --kind nflverse-player-stats --limit 100
+seb snapshots --entity player-stats-v1-2025 --json
+```
+
+The result limit must use `1` through `1000`.
+
+Inspect one snapshot's provenance summary.
+
+```bash
+seb snapshots --id SNAPSHOT_ID
+```
+
+Return the complete stored provenance manifest.
+
+```bash
+seb snapshots --id SNAPSHOT_ID --json
+```
+
+The JSON inspection omits the source payload.
+
+Read the [provenance guide](PROVENANCE.md) for field lineage rules.
+
+## Run a historical replay
+
+Run the default PPR baseline through Week 18.
+
+```bash
+seb replay --season 2025
+```
+
+Select the final week and positions.
+
+```bash
+seb replay --season 2025 --through-week 10 --position QB,RB,WR,TE
+```
+
+Save the complete report and print compact JSON.
+
+```bash
+seb replay --season 2025 --output exports/replay-2025.json --json
+```
+
+The season is required.
+
+The final week must use `2` through `18`.
+
+The position list accepts `QB`, `RB`, `WR`, `TE`, and `K`.
+
+Read the [evaluation guide](EVALUATION.md) before you compare two reports.
 
 ## Select a model
 
@@ -169,9 +347,11 @@ seb chat --model gemini-3.7-flash
 
 An explicit model disables the fallback for that command. This behavior makes experiments repeatable.
 
-One-shot mode retries a capacity failure before it prints answer text. JSON mode can always retry a capacity failure.
+One-shot mode retries a capacity or rate-limit failure before it prints answer text.
 
-Interactive mode uses the selected primary model for the session. Restart with `--model` when that model has no capacity.
+JSON mode can also use this fallback before it prints the output object.
+
+Interactive mode uses the selected primary model for the session. Restart with `--model` when that model has no capacity or quota.
 
 ## Output and exit guarantees
 

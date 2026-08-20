@@ -1,5 +1,8 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+
+import { CachedResource, type ResourcePolicy } from '../data/cached-resource.js';
+import { ResilientFetch, type RequestPolicy } from '../data/resilient-fetch.js';
+import { getSharedSebDatabase, type SebDatabase } from '../data/sqlite-store.js';
 
 import type {
   ResolvedTrendingPlayer,
@@ -13,15 +16,23 @@ import type {
   SleeperTrendingPlayer,
   SleeperUser,
 } from './types.js';
+import type { SourceObserver } from '../sources.js';
 
 const DEFAULT_BASE_URL = 'https://api.sleeper.app/v1';
-const PLAYER_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
+const MINUTE_MS = 60 * 1_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 
 type Fetch = typeof globalThis.fetch;
 
 export interface SleeperClientOptions {
   baseUrl?: string;
+  database?: SebDatabase | false;
+  databaseFile?: string;
   fetch?: Fetch;
+  onSource?: SourceObserver;
+  policy?: Partial<RequestPolicy>;
+  /** @deprecated Use database or databaseFile. */
   playerCacheFile?: string | false;
   timeoutMs?: number;
 }
@@ -33,11 +44,6 @@ export interface PlayerFilters {
 
 export interface PlayerSearchOptions extends PlayerFilters {
   limit?: number;
-}
-
-interface PlayerCacheEnvelope {
-  cachedAt: string;
-  players: SleeperPlayerMap;
 }
 
 export class SleeperApiError extends Error {
@@ -54,19 +60,26 @@ export class SleeperApiError extends Error {
 
 export class SleeperClient {
   private readonly baseUrl: string;
-  private readonly fetchImplementation: Fetch;
-  private readonly playerCacheFile: string | false;
-  private readonly timeoutMs: number;
+  private readonly database: SebDatabase | false;
+  private readonly http: ResilientFetch;
+  private readonly onSource: SourceObserver | undefined;
 
   constructor(options: SleeperClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
-    this.fetchImplementation = options.fetch ?? globalThis.fetch;
-    this.playerCacheFile =
-      options.playerCacheFile === false
-        ? false
-        : (options.playerCacheFile ??
-          resolve(process.cwd(), '.cache/sleeper/players-nfl.json'));
-    this.timeoutMs = options.timeoutMs ?? 15_000;
+    const compatibilityDatabaseFile =
+      typeof options.playerCacheFile === 'string'
+        ? resolve(dirname(options.playerCacheFile), 'seb.sqlite')
+        : undefined;
+    this.database = options.database === false || options.playerCacheFile === false
+      ? false
+      : (options.database ?? getSharedSebDatabase(
+          options.databaseFile ?? compatibilityDatabaseFile,
+        ));
+    this.http = new ResilientFetch({
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+      policy: { timeoutMs: options.timeoutMs ?? 15_000, ...options.policy },
+    });
+    this.onSource = options.onSource;
   }
 
   getNflState(): Promise<SleeperNflState> {
@@ -115,23 +128,10 @@ export class SleeperClient {
 
   async getPlayers(filters: PlayerFilters = {}): Promise<SleeperPlayerMap> {
     const hasFilters = filters.active !== undefined || filters.position !== undefined;
-    if (!hasFilters) {
-      const cachedPlayers = await this.readPlayerCache();
-      if (cachedPlayers) {
-        return cachedPlayers;
-      }
-    }
-
-    const players = await this.get<SleeperPlayerMap>('/players/nfl', {
+    return this.get<SleeperPlayerMap>('/players/nfl', {
       active: filters.active,
       position: filters.position?.toUpperCase(),
-    });
-
-    if (!hasFilters) {
-      await this.writePlayerCache(players);
-    }
-
-    return players;
+    }, hasFilters ? sleeperPolicy('players-filtered') : sleeperPolicy('players'));
   }
 
   async findPlayers(
@@ -185,9 +185,14 @@ export class SleeperClient {
     }));
   }
 
+  async clearCache(): Promise<void> {
+    this.database && this.database.deleteCache('sleeper');
+  }
+
   private async get<T>(
     path: string,
     query: Record<string, string | number | boolean | undefined> = {},
+    policy = sleeperPolicy(path),
   ): Promise<T> {
     const url = new URL(this.baseUrl + path);
     for (const [name, value] of Object.entries(query)) {
@@ -196,83 +201,101 @@ export class SleeperClient {
       }
     }
 
-    let response: Response;
-    try {
-      response = await this.fetchImplementation(url, {
-        headers: { accept: 'application/json' },
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new SleeperApiError(`Sleeper request failed: ${detail}`, 0, url.href);
-    }
-
-    if (!response.ok) {
-      const body = (await response.text()).slice(0, 300);
-      const suffix = body ? ` Response: ${body}` : '';
-      throw new SleeperApiError(
-        `Sleeper returned HTTP ${response.status}.${suffix}`,
-        response.status,
-        url.href,
-      );
-    }
-
-    try {
-      return (await response.json()) as T;
-    } catch {
-      throw new SleeperApiError(
-        'Sleeper returned invalid JSON.',
-        response.status,
-        url.href,
-      );
-    }
-  }
-
-  private async readPlayerCache(): Promise<SleeperPlayerMap | null> {
-    if (!this.playerCacheFile) {
-      return null;
-    }
-
-    try {
-      const value = JSON.parse(
-        await readFile(this.playerCacheFile, 'utf8'),
-      ) as PlayerCacheEnvelope;
-      const ageMs = Date.now() - Date.parse(value.cachedAt);
-      if (
-        Number.isFinite(ageMs) &&
-        ageMs >= 0 &&
-        ageMs < PLAYER_CACHE_TTL_MS &&
-        value.players &&
-        typeof value.players === 'object'
-      ) {
-        return value.players;
+    const resource = new CachedResource<T>(
+      this.database,
+      'sleeper',
+      url.href,
+      url.href,
+      policy,
+    );
+    const result = await resource.read(async (conditional) => {
+      let response: Response;
+      try {
+        response = await this.http.request(url, {
+          headers: conditionalHeaders('application/json', conditional),
+        });
+      } catch (error) {
+        throw new SleeperApiError(
+          `Sleeper request failed: ${errorMessage(error)}`,
+          0,
+          url.href,
+        );
       }
-    } catch {
-      return null;
-    }
-
-    return null;
+      if (response.status === 304) {
+        return { notModified: true };
+      }
+      if (!response.ok) {
+        const body = (await response.text()).slice(0, 300);
+        throw new SleeperApiError(
+          `Sleeper returned HTTP ${response.status}.${body ? ` Response: ${body}` : ''}`,
+          response.status,
+          url.href,
+        );
+      }
+      try {
+        return {
+          etag: response.headers.get('etag'),
+          lastModified: response.headers.get('last-modified'),
+          value: (await response.json()) as T,
+        };
+      } catch {
+        throw new SleeperApiError('Sleeper returned invalid JSON.', response.status, url.href);
+      }
+    });
+    this.onSource?.({
+      cacheOutcome: result.outcome,
+      ...(result.error ? { error: result.error } : {}),
+      id: `sleeper-${path.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}`,
+      label: 'Sleeper read-only API',
+      retrievedAt: result.cache.cachedAt,
+      url: url.href,
+    });
+    return result.value;
   }
+}
 
-  private async writePlayerCache(players: SleeperPlayerMap): Promise<void> {
-    if (!this.playerCacheFile) {
-      return;
-    }
-
-    const temporaryFile = `${this.playerCacheFile}.${process.pid}.tmp`;
-    const envelope: PlayerCacheEnvelope = {
-      cachedAt: new Date().toISOString(),
-      players,
+function sleeperPolicy(resource: string): ResourcePolicy {
+  if (resource === 'players') {
+    return {
+      schemaVersion: 'sleeper-v1',
+      snapshotKind: 'sleeper-players',
+      snapshotRetention: 8,
+      staleIfErrorMs: 7 * DAY_MS,
+      ttlMs: DAY_MS,
     };
-
-    try {
-      await mkdir(dirname(this.playerCacheFile), { recursive: true });
-      await writeFile(temporaryFile, JSON.stringify(envelope), 'utf8');
-      await rename(temporaryFile, this.playerCacheFile);
-    } catch {
-      // A cache failure must not block a successful Sleeper response.
-    }
   }
+  if (resource.includes('trending') || resource === 'players-filtered') {
+    return {
+      schemaVersion: 'sleeper-v1',
+      staleIfErrorMs: 10 * MINUTE_MS,
+      ttlMs: MINUTE_MS,
+    };
+  }
+  const isHistorical = resource.includes('/matchups/') || resource.includes('/transactions/');
+  return {
+    schemaVersion: 'sleeper-v1',
+    snapshotKind: isHistorical ? 'sleeper-league-week' : 'sleeper-resource',
+    staleIfErrorMs: isHistorical ? DAY_MS : HOUR_MS,
+    ttlMs: isHistorical ? 2 * MINUTE_MS : 5 * MINUTE_MS,
+  };
+}
+
+function conditionalHeaders(
+  accept: string,
+  conditional: { etag: string | null; lastModified: string | null },
+): Headers {
+  const headers = new Headers({ accept });
+  if (conditional.etag) {
+    headers.set('if-none-match', conditional.etag);
+  }
+  if (conditional.lastModified) {
+    headers.set('if-modified-since', conditional.lastModified);
+  }
+  return headers;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function validateWeek(week: number): number {

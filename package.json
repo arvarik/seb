@@ -1,9 +1,9 @@
 {
   "name": "seb",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
-  "description": "A read-only Sleeper fantasy football agent.",
+  "description": "A source-grounded fantasy football agent for Sleeper, nflverse, and NWS data.",
   "bin": {
     "seb": "bin/seb.mjs"
   },
@@ -15,6 +15,7 @@
     "check": "npm run version:check && npm run typecheck && npm test",
     "connectors": "node --import tsx src/connectors/server.ts",
     "deps:check": "npm outdated",
+    "data:smoke": "node --import tsx src/smoke-data-sources.ts",
     "doctor": "node --import tsx src/cli.ts doctor",
     "seb": "node --import tsx src/cli.ts",
     "sleeper:smoke": "node --import tsx src/smoke-sleeper.ts",
@@ -36,13 +37,16 @@
     "@chat-adapter/telegram": "^4.38.1",
     "@hono/node-server": "^2.1.1",
     "ai": "^7.0.70",
+    "better-sqlite3": "^13.0.3",
     "chat": "^4.38.1",
+    "csv-parse": "^7.0.2",
     "hono": "^4.13.3",
     "tsx": "^4.23.12",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@chat-adapter/tests": "^4.38.1",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.2.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"

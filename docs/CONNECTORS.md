@@ -34,6 +34,12 @@ The connector streams each Gemini answer through the platform adapter.
 
 The connector uses one queue for overlapping messages in each thread.
 
+Every connector can use the Sleeper, nflverse, and NWS tools.
+
+Terminal slash commands apply only to the interactive command-line interface.
+
+Set `NWS_USER_AGENT` for connector weather requests.
+
 ## Start the service
 
 Set one or more connectors.

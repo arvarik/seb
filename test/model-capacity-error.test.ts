@@ -20,6 +20,11 @@ describe('isModelCapacityError', () => {
     ).toBe(true);
   });
 
+  it('detects a Gemini quota error and HTTP 429', () => {
+    expect(isModelCapacityError(new Error('Quota exceeded for this model.'))).toBe(true);
+    expect(isModelCapacityError({ statusCode: 429 })).toBe(true);
+  });
+
   it('does not classify authentication failures as capacity errors', () => {
     expect(isModelCapacityError({ statusCode: 401 })).toBe(false);
   });

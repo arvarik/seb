@@ -1,6 +1,25 @@
 export type CliCommand =
   | { name: 'help' }
   | { name: 'version' }
+  | { name: 'setup' }
+  | { name: 'completion'; shell: 'bash' | 'fish' | 'zsh' }
+  | { name: 'cache'; action: 'clear' | 'status'; json: boolean }
+  | {
+      name: 'snapshots';
+      entityKey?: string;
+      id?: string;
+      json: boolean;
+      kind?: string;
+      limit: number;
+    }
+  | {
+      name: 'replay';
+      json: boolean;
+      output?: string;
+      positions?: string[];
+      season: number;
+      throughWeek: number;
+    }
   | { name: 'chat'; model?: string }
   | {
       name: 'ask';
@@ -18,18 +37,28 @@ export class CliUsageError extends Error {
   }
 }
 
-export const CLI_HELP = `Seb reads Sleeper data and answers fantasy football questions.
+export const CLI_HELP = `Seb reads Sleeper, nflverse, and weather data for fantasy football.
 
 Usage:
   seb
   seb chat [--model MODEL]
   seb ask [OPTIONS] [QUESTION]
   seb doctor [--offline] [--json]
+  seb setup
+  seb completion bash|fish|zsh
+  seb cache [status|clear] [--json]
+  seb snapshots [--kind KIND] [--entity KEY] [--id ID] [--limit N] [--json]
+  seb replay --season YEAR [--through-week N] [--position POSITIONS] [--output FILE] [--json]
 
 Commands:
   chat       Start an interactive terminal session. This is the default.
   ask        Ask one question. Seb also reads the question from standard input.
-  doctor     Verify Node.js, the Gemini key, Gemini, and Sleeper.
+  doctor     Verify Node.js, Gemini, Sleeper, nflverse, and weather.
+  setup      Discover and save a default Sleeper league and roster.
+  completion Print a shell completion script.
+  cache      Inspect or clear the local SQLite cache.
+  snapshots  List versioned source snapshots.
+  replay     Measure historical nflverse baseline accuracy without future leakage.
   help       Show this help.
   version    Show the Seb version.
 
@@ -55,6 +84,7 @@ Run without npm link:
 
 Interactive controls:
   Enter sends a question. Arrow keys scroll. Escape or Ctrl+C exits.
+  Run /help inside chat for context, source, skill, cache, and export commands.
 `;
 
 export function parseCliArguments(arguments_: readonly string[]): CliCommand {
@@ -80,12 +110,132 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
       return parseAskArguments(rest);
     case 'doctor':
       return parseDoctorArguments(rest);
+    case 'setup':
+      requireNoArguments(rest, first);
+      return { name: 'setup' };
+    case 'completion':
+      return parseCompletionArguments(rest);
+    case 'cache':
+      return parseCacheArguments(rest);
+    case 'snapshots':
+      return parseSnapshotArguments(rest);
+    case 'replay':
+      return parseReplayArguments(rest);
     default:
       if (first?.startsWith('-')) {
         throw new CliUsageError(`Unknown option: ${first}`);
       }
       return parseAskArguments(arguments_);
   }
+}
+
+function parseReplayArguments(arguments_: readonly string[]): CliCommand {
+  let json = false;
+  let output: string | undefined;
+  let positions: string[] | undefined;
+  let season: number | undefined;
+  let throughWeek = 18;
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index];
+    if (argument === '--help' || argument === '-h') return { name: 'help' };
+    if (argument === '--json') {
+      json = true;
+      continue;
+    }
+    if (['--season', '--through-week', '--position', '--output'].includes(argument ?? '')) {
+      const value = readOptionValue(arguments_, index, argument ?? '');
+      index += 1;
+      if (argument === '--season') season = Number(value);
+      if (argument === '--through-week') throughWeek = Number(value);
+      if (argument === '--position') {
+        positions = value.split(',').map((item) => item.trim().toUpperCase()).filter(Boolean);
+      }
+      if (argument === '--output') output = value;
+      continue;
+    }
+    throw new CliUsageError(`Unknown replay option: ${argument}`);
+  }
+  if (season === undefined || !Number.isInteger(season) || season < 1999 || season > 2100) {
+    throw new CliUsageError('--season must be an integer from 1999 through 2100.');
+  }
+  if (!Number.isInteger(throughWeek) || throughWeek < 2 || throughWeek > 18) {
+    throw new CliUsageError('--through-week must be an integer from 2 through 18.');
+  }
+  if (positions && (positions.length === 0 || positions.some((item) => !['QB', 'RB', 'WR', 'TE', 'K'].includes(item)))) {
+    throw new CliUsageError('--position accepts QB, RB, WR, TE, and K as a comma-separated list.');
+  }
+  return {
+    name: 'replay',
+    json,
+    season,
+    throughWeek,
+    ...(output ? { output } : {}),
+    ...(positions ? { positions } : {}),
+  };
+}
+
+function parseCompletionArguments(arguments_: readonly string[]): CliCommand {
+  const shell = arguments_[0];
+  if (arguments_.length !== 1 || !['bash', 'fish', 'zsh'].includes(shell ?? '')) {
+    throw new CliUsageError('Use seb completion bash, fish, or zsh.');
+  }
+  return { name: 'completion', shell: shell as 'bash' | 'fish' | 'zsh' };
+}
+
+function parseCacheArguments(arguments_: readonly string[]): CliCommand {
+  let action: 'clear' | 'status' = 'status';
+  let json = false;
+  for (const argument of arguments_) {
+    if (argument === '--json') {
+      json = true;
+    } else if (argument === 'status' || argument === 'clear') {
+      action = argument;
+    } else if (argument === '--help' || argument === '-h') {
+      return { name: 'help' };
+    } else {
+      throw new CliUsageError(`Unknown cache option: ${argument}`);
+    }
+  }
+  return { name: 'cache', action, json };
+}
+
+function parseSnapshotArguments(arguments_: readonly string[]): CliCommand {
+  let entityKey: string | undefined;
+  let json = false;
+  let kind: string | undefined;
+  let id: string | undefined;
+  let limit = 20;
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index];
+    if (argument === '--help' || argument === '-h') return { name: 'help' };
+    if (argument === '--json') {
+      json = true;
+      continue;
+    }
+    if (argument === '--kind' || argument === '--entity' || argument === '--id' || argument === '--limit') {
+      const value = readOptionValue(arguments_, index, argument);
+      index += 1;
+      if (argument === '--kind') kind = value;
+      if (argument === '--entity') entityKey = value;
+      if (argument === '--id') id = value;
+      if (argument === '--limit') {
+        limit = Number(value);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+          throw new CliUsageError('--limit must be an integer from 1 through 1000.');
+        }
+      }
+      continue;
+    }
+    throw new CliUsageError(`Unknown snapshots option: ${argument}`);
+  }
+  return {
+    name: 'snapshots',
+    json,
+    limit,
+    ...(kind ? { kind } : {}),
+    ...(entityKey ? { entityKey } : {}),
+    ...(id ? { id } : {}),
+  };
 }
 
 function parseChatArguments(arguments_: readonly string[]): CliCommand {

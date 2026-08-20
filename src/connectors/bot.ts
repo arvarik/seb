@@ -18,6 +18,9 @@ import {
   DEFAULT_GEMINI_MODEL,
 } from '../agent.js';
 import { isModelCapacityError } from '../model-capacity-error.js';
+import { NflverseClient } from '../nflverse/client.js';
+import { SleeperClient } from '../sleeper/client.js';
+import { WeatherClient } from '../weather/client.js';
 import {
   CONNECTOR_NAMES,
   readConnectorConfig,
@@ -136,14 +139,27 @@ function createAgentReply(environment: Environment): ConnectorReply {
   const fallbackModel =
     environment.GEMINI_FALLBACK_MODEL?.trim() ||
     DEFAULT_GEMINI_FALLBACK_MODEL;
+  const sleeperClient = new SleeperClient();
+  const nflverseClient = new NflverseClient();
+  const weatherClient = new WeatherClient({
+    ...(environment.NWS_USER_AGENT?.trim()
+      ? { userAgent: environment.NWS_USER_AGENT.trim() }
+      : {}),
+  });
+  const clients = { sleeperClient, nflverseClient, weatherClient };
   const primaryAgent = createFantasyFootballAgent({
     apiKey,
     model: primaryModel,
+    ...clients,
   });
   const fallbackAgent =
     fallbackModel === primaryModel
       ? primaryAgent
-      : createFantasyFootballAgent({ apiKey, model: fallbackModel });
+      : createFantasyFootballAgent({
+          apiKey,
+          model: fallbackModel,
+          ...clients,
+        });
 
   return async (thread, message, context) => {
     const prompt = await buildPrompt(thread, message, context);

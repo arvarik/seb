@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { gzipSync } from 'node:zlib';
 
 import { MockLanguageModelV4 } from 'ai/test';
 
 import { createFantasyFootballAgent } from '../src/agent.js';
+import { NflverseClient } from '../src/nflverse/client.js';
 import { SleeperClient } from '../src/sleeper/client.js';
 
 const usage = {
@@ -83,6 +85,79 @@ describe('fantasy football agent harness', () => {
     ).toBe(true);
     expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain(
       'league_season',
+    );
+  });
+
+  it('executes an nflverse schedule tool through the agent loop', async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: [
+        {
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'call-1',
+              toolName: 'getNflSchedule',
+              input: '{"season":2026,"week":1,"team":"KC"}',
+            },
+          ],
+          finishReason: { unified: 'tool-calls', raw: undefined },
+          usage,
+          warnings: [],
+        },
+        {
+          content: [
+            {
+              type: 'text',
+              text: 'Kansas City hosts Buffalo in Week 1.',
+            },
+          ],
+          finishReason: { unified: 'stop', raw: undefined },
+          usage,
+          warnings: [],
+        },
+      ],
+    });
+    const csv = `game_id,season,game_type,week,gameday,gametime,away_team,home_team,roof\n2026_01_BUF_KC,2026,REG,1,2026-09-10,20:20,BUF,KC,outdoors\n`;
+    const agent = createFantasyFootballAgent({
+      languageModel: model,
+      nflverseClient: new NflverseClient({
+        cacheDirectory: false,
+        fetch: async () => new Response(gzipSync(csv), { status: 200 }),
+      }),
+    });
+
+    const result = await agent.generate({
+      prompt: 'Who does Kansas City play in Week 1?',
+    });
+
+    expect(result.text).toContain('hosts Buffalo');
+    expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain(
+      '2026_01_BUF_KC',
+    );
+  });
+
+  it('injects the current interactive context into each model call', async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: {
+        content: [{ type: 'text', text: 'Context received.' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage,
+        warnings: [],
+      },
+    });
+    const agent = createFantasyFootballAgent({
+      languageModel: model,
+      getRuntimeInstructions: () =>
+        'Active skill: weather-watch. NFL week: 8. NFL team: SEA.',
+    });
+
+    await agent.generate({ prompt: 'Check my context.' });
+
+    expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain(
+      'weather-watch',
+    );
+    expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain(
+      'NFL team: SEA',
     );
   });
 });

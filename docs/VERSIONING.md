@@ -2,7 +2,7 @@
 
 Seb uses [Semantic Versioning](https://semver.org/) with the `MAJOR.MINOR.PATCH` format.
 
-The current version is `0.0.1`.
+The current version is `0.0.2`.
 
 ## Version meaning
 
@@ -38,12 +38,12 @@ seb --version
 
 ## Release names
 
-Git tags use a lowercase `v` prefix. Version `0.0.1` uses the `v0.0.1` tag.
+Git tags use a lowercase `v` prefix. Version `0.0.2` uses the `v0.0.2` tag.
 
 Release commit subjects use this format.
 
 ```text
-chore(release): v0.0.1
+chore(release): v0.0.2
 ```
 
 ## Prepare a release

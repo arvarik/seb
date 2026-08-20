@@ -48,6 +48,20 @@ Use a dedicated Redis key prefix or database for each environment.
 
 The current code uses the `seb` key prefix.
 
+Redis does not store source caches or source snapshots.
+
+Each Seb process uses the local `.cache/seb.sqlite` file for those records.
+
+Give the service user read and write access to the `.cache` directory.
+
+Use one persistent volume when source snapshots must survive a deployment.
+
+Separate instances can use separate SQLite files.
+
+Those instances can download the same public source value independently.
+
+Do not place one SQLite file on a filesystem that breaks SQLite locking.
+
 ## Overlapping messages
 
 Seb uses the Chat SDK `queue` strategy.
@@ -128,6 +142,8 @@ Collect both streams in the deployment log service.
 
 Do not add complete request payloads to production logs.
 
+Do not print SQLite snapshot payloads in normal production logs.
+
 Add a request correlation ID at the proxy when cross-service tracing becomes necessary.
 
 Track these operational values.
@@ -136,6 +152,12 @@ Track these operational values.
 - Agent answer latency
 - Gemini error count by status
 - Sleeper error count by endpoint
+- nflverse download failures by release file
+- NWS error count by endpoint
+- NWS forecast age at answer time
+- Cache result count by fresh, updated, not-modified, and stale-if-error outcomes
+- Open request circuit count by source
+- SQLite write errors and database size
 - Platform post and edit failures
 - Discord Gateway reconnect count
 - Redis connection failures
@@ -148,11 +170,12 @@ Track these operational values.
 3. Start Redis and verify its network policy.
 4. Add Gemini and platform secrets.
 5. Start one Seb instance.
-6. Check `/health`.
-7. Send one test message from each enabled platform.
-8. Confirm one answer and one follow-up answer.
-9. Review logs for signature or permission errors.
-10. Add more HTTP instances only after shared-state verification.
+6. Run `seb cache status` as the service user.
+7. Check `/health`.
+8. Send one test message from each enabled platform.
+9. Confirm one answer and one follow-up answer.
+10. Review logs for signature or permission errors.
+11. Add more HTTP instances only after shared-state verification.
 
 ## Upgrade sequence
 
@@ -186,6 +209,50 @@ Run `npm run sleeper:smoke` from the same network.
 Inspect the failed endpoint and status in the service log.
 
 Do not substitute model memory for current Sleeper data.
+
+### nflverse fails
+
+Run `npm run data:smoke` from the same network.
+
+Check the requested season and release file URL.
+
+Use `/refresh nflverse` in interactive mode after a source update.
+
+Use `seb cache clear` from the service directory when all cache namespaces need a refresh.
+
+Do not substitute model memory for a schedule or statistic.
+
+### The National Weather Service fails
+
+Confirm that `NWS_USER_AGENT` identifies the application.
+
+Run `npm run data:smoke` from the same network.
+
+Keep weather unavailable until the NWS request succeeds.
+
+Do not replace the forecast with model memory.
+
+### Seb reports stale source data
+
+Inspect `/sources` in an interactive reproduction.
+
+The result shows the failed refresh and cached retrieval time.
+
+Check source access before you clear the local cache.
+
+Seb stops using that value after its stale-if-error period expires.
+
+### SQLite fails
+
+Run `seb cache status` as the service user.
+
+Confirm the `.cache` directory owner and permissions.
+
+Confirm that the volume supports SQLite locks and atomic writes.
+
+Restore the database backup when historical snapshots matter.
+
+Read the [storage recovery guide](STORAGE.md) before you replace the file.
 
 ### Redis fails
 

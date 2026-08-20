@@ -79,4 +79,42 @@ describe('parseCliArguments', () => {
       '--model needs a value.',
     );
   });
+
+  it('parses setup, completion, cache, and snapshot commands', () => {
+    expect(parseCliArguments(['setup'])).toEqual({ name: 'setup' });
+    expect(parseCliArguments(['completion', 'zsh'])).toEqual({
+      name: 'completion',
+      shell: 'zsh',
+    });
+    expect(parseCliArguments(['cache', 'clear', '--json'])).toEqual({
+      name: 'cache',
+      action: 'clear',
+      json: true,
+    });
+    expect(parseCliArguments([
+      'snapshots', '--kind', 'nws-alerts', '--entity', 'SEA', '--limit', '5', '--json',
+    ])).toEqual({
+      name: 'snapshots',
+      kind: 'nws-alerts',
+      entityKey: 'SEA',
+      limit: 5,
+      json: true,
+    });
+  });
+
+  it('parses and validates a historical replay request', () => {
+    expect(parseCliArguments([
+      'replay', '--season', '2025', '--through-week', '17', '--position', 'QB,WR', '--output', 'report.json',
+    ])).toEqual({
+      name: 'replay',
+      json: false,
+      season: 2025,
+      throughWeek: 17,
+      positions: ['QB', 'WR'],
+      output: 'report.json',
+    });
+    expect(() => parseCliArguments(['replay', '--season', '2025', '--position', 'DST'])).toThrow(
+      '--position accepts QB, RB, WR, TE, and K',
+    );
+  });
 });

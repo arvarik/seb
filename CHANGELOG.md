@@ -6,6 +6,36 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-08-20
+
+### Added
+
+- nflverse schedule and weekly player-stat clients with compressed CSV support.
+- Player trend, team performance, and defense-by-position analysis tools.
+- NWS point discovery, hourly forecast, and active alert clients.
+- Game weather and combined game environment tools.
+- A weekly outdoor game weather-risk screen with bounded request concurrency.
+- Interactive session context, slash commands, skills, source history, and transcript exports.
+- Contextual next-action suggestions after local commands and model answers.
+- Gemini fallback after primary-model capacity or rate-limit errors.
+- Live diagnostics and a smoke test for nflverse and NWS data.
+- Detailed interactive, skill, and data source guides.
+- Persistent canonical player and NFL team identities across Sleeper and nflverse.
+- A private SQLite cache with checksums, conditional requests, and versioned snapshots.
+- Field-level source provenance with freshness and derivation records.
+- Bounded retries, request timeouts, stale-if-error reads, and circuit breakers.
+- A first-run setup wizard with Gemini validation, season selection, and a private Sleeper profile.
+- Searchable interactive commands and Bash, Fish, and Zsh completion scripts.
+- A historical replay harness with leakage checks and baseline accuracy metrics.
+- Snapshot provenance inspection through `seb snapshots --id` and `/provenance`.
+
+### Changed
+
+- All source clients now store cache entries in `.cache/seb.sqlite`.
+- Cache refresh commands now preserve historical snapshots.
+- Cache refresh commands preserve canonical identities and source links.
+- Source output now reports retrieval time, cache outcome, and stale-data warnings.
+
 ## [0.0.1] - 2026-08-20
 
 ### Added

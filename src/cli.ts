@@ -3,8 +3,6 @@ import { resolve } from 'node:path';
 import { loadEnvFile } from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { runAgentTUI } from '@ai-sdk/tui';
-
 import {
   createFantasyFootballAgent,
   DEFAULT_GEMINI_FALLBACK_MODEL,
@@ -26,6 +24,7 @@ import {
 import { serializeReplayReport } from './evaluation/serialization.js';
 import { generateShellCompletion } from './interactive/commands.js';
 import { SebInteractiveTransport } from './interactive/transport.js';
+import { runSebInteractiveTui } from './interactive/tui.js';
 import {
   createSessionState,
   formatSessionContext,
@@ -40,7 +39,6 @@ import {
   FileSetupProfileStore,
   formatSetupProfile,
 } from './setup/profile.js';
-import { TerminalSetupPrompter } from './setup/terminal-prompter.js';
 import { applySetupProfile, runFirstRunSetup } from './setup/wizard.js';
 
 const MAX_STDIN_BYTES = 128 * 1024;
@@ -225,8 +223,8 @@ async function startInteractiveChat(
   const profileStore = new FileSetupProfileStore({ environment });
   let profile = await profileStore.load();
   if (!profile) {
-    streams.stdout.write('Seb found no local profile. Starting the one-time setup.\n');
-    profile = await runSetupWizard(streams, environment, clients.sleeperClient, profileStore);
+    streams.stdout.write('Seb found no local profile. Creating a team-independent profile.\n');
+    profile = await runSetupWizard(environment, clients.sleeperClient, profileStore);
   }
   const session = createSessionState();
   applySetupProfile(profile, session);
@@ -237,7 +235,7 @@ async function startInteractiveChat(
     getRuntimeInstructions: () => formatSessionContext(session),
     onUsage: (usage) => recordUsage(session, usage),
   });
-  await runAgentTUI({
+  await runSebInteractiveTui({
     transport: new SebInteractiveTransport({
       agent,
       environment,
@@ -251,9 +249,9 @@ async function startInteractiveChat(
       profileStore,
     }),
     title: `Seb · ${selection.primaryModel}`,
-    tools: 'auto-collapsed',
-    reasoning: 'collapsed',
-    responseStatistics: 'outputTokensPerSecond',
+    session,
+    input: streams.stdin as NodeJS.ReadStream,
+    output: streams.stdout as NodeJS.WriteStream,
   });
 }
 
@@ -261,41 +259,28 @@ async function runSetupCommand(
   streams: CliStreams,
   environment: NodeJS.ProcessEnv,
 ): Promise<void> {
-  if (streams.stdin.isTTY !== true || streams.stdout.isTTY !== true) {
-    throw new CliUsageError('The setup wizard needs a terminal.');
-  }
   const store = new FileSetupProfileStore({ environment });
   const sleeper = new SleeperClient();
-  const profile = await runSetupWizard(streams, environment, sleeper, store);
-  streams.stdout.write(`\nSeb saved the profile.\n\n${formatSetupProfile(profile, store.path)}\n`);
+  const profile = await runSetupWizard(environment, sleeper, store);
+  streams.stdout.write(`Seb saved the team-independent profile.\n\n${formatSetupProfile(profile, store.path)}\n`);
 }
 
 async function runSetupWizard(
-  streams: CliStreams,
   environment: NodeJS.ProcessEnv,
   sleeper: SleeperClient,
   store: FileSetupProfileStore,
 ) {
-  const prompt = new TerminalSetupPrompter({
-    input: streams.stdin as NodeJS.ReadableStream,
-    output: streams.stdout as NodeJS.WritableStream,
+  const primaryModel = environment.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
+  const fallbackModel = environment.GEMINI_FALLBACK_MODEL?.trim() ||
+    DEFAULT_GEMINI_FALLBACK_MODEL;
+  return runFirstRunSetup({
+    environment,
+    sleeper,
+    store,
+    verifyApiKey: async (apiKey) => {
+      await verifyGeminiApi(apiKey, primaryModel, fallbackModel);
+    },
   });
-  try {
-    const primaryModel = environment.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
-    const fallbackModel = environment.GEMINI_FALLBACK_MODEL?.trim() ||
-      DEFAULT_GEMINI_FALLBACK_MODEL;
-    return await runFirstRunSetup({
-      environment,
-      prompt,
-      sleeper,
-      store,
-      verifyApiKey: async (apiKey) => {
-        await verifyGeminiApi(apiKey, primaryModel, fallbackModel);
-      },
-    });
-  } finally {
-    prompt.close();
-  }
 }
 
 function formatCacheStatus(status: {

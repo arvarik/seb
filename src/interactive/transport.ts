@@ -28,8 +28,9 @@ import {
 } from '../setup/profile.js';
 import {
   applySetupProfile,
-  buildSetupProfile,
   checkGeminiApiKey,
+  createSetupProfile,
+  discoverSleeperAccount,
 } from '../setup/wizard.js';
 import {
   completeInteractiveInput,
@@ -168,6 +169,8 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           ? (await this.options.sleeper.getNflState()).season
           : value;
         state.season = validInteger(season, 1999, 2100, 'season');
+        state.leagueOptions = [];
+        state.rosterOptions = [];
         return `The active NFL season is now ${state.season}.`;
       }
       case 'week': {
@@ -185,8 +188,60 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         }
         return `The active NFL week is now ${state.week}.`;
       }
+      case 'leagues': {
+        const username = arguments_.join(' ') || state.user;
+        if (!username) {
+          throw new Error('Use /leagues <Sleeper user> or set /user first.');
+        }
+        const account = await discoverSleeperAccount(
+          this.options.sleeper,
+          username,
+          state.season,
+        );
+        state.user = account.user.username ?? username;
+        state.leagueOptions = account.leagues.map((league) => league.league_id);
+        state.rosterOptions = [];
+        if (account.leagues.length === 0) {
+          return `Sleeper found no NFL leagues for ${state.user} in ${state.season}.`;
+        }
+        return [
+          `## Sleeper leagues for ${state.user}`,
+          '',
+          ...account.leagues.map(
+            (league) => `- ${league.name}: \`${league.league_id}\` (${league.total_rosters} rosters)`,
+          ),
+          '',
+          'Select one with `/league <league ID>`.',
+        ].join('\n');
+      }
+      case 'rosters': {
+        const leagueId = optionalIdentifier(
+          arguments_[0] ?? state.leagueId ?? undefined,
+          /^\d+$/,
+          'Sleeper league ID',
+        );
+        if (!leagueId) {
+          throw new Error('Use /rosters <Sleeper league ID> or set /league first.');
+        }
+        state.leagueId = leagueId;
+        const rosters = await this.options.sleeper.getLeagueRosters(leagueId);
+        state.rosterOptions = rosters.map((roster) => roster.roster_id);
+        if (rosters.length === 0) {
+          return `Sleeper found no rosters in league ${leagueId}.`;
+        }
+        return [
+          `## Sleeper rosters in ${leagueId}`,
+          '',
+          ...rosters.map((roster) =>
+            `- Roster \`${roster.roster_id}\`: ${roster.players?.length ?? 0} players${roster.owner_id ? ` · owner \`${roster.owner_id}\`` : ''}`,
+          ),
+          '',
+          'Select one with `/roster <roster ID>`.',
+        ].join('\n');
+      }
       case 'league':
         state.leagueId = optionalIdentifier(arguments_[0], /^\d+$/, 'Sleeper league ID');
+        state.rosterOptions = [];
         return `The active Sleeper league ID is now ${state.leagueId ?? 'unset'}.`;
       case 'roster': {
         const value = arguments_[0];
@@ -195,6 +250,8 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       }
       case 'user':
         state.user = optionalIdentifier(arguments_.join(' '), /^[A-Za-z0-9_.-]{1,100}$/, 'Sleeper user');
+        state.leagueOptions = [];
+        state.rosterOptions = [];
         return `The active Sleeper user is now ${state.user ?? 'unset'}.`;
       case 'team':
         state.team = resolveTeam(arguments_.join(' '));
@@ -341,80 +398,22 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   }
 
   private async runSetupCommand(arguments_: string[]): Promise<string> {
-    if (arguments_.length > 3) {
-      throw new Error('Use /setup <Sleeper user> [league ID] [roster ID].');
+    if (arguments_.length > 0) {
+      throw new Error('Use /setup without arguments. Set team context with /user, /league, /roster, or /team.');
     }
     const key = checkGeminiApiKey(this.options.environment);
-    const username = arguments_[0];
-    if (!username) {
-      const existing = await this.profileStore.load();
-      return [
-        '## First-run setup',
-        '',
-        `- ${key.message}`,
-        `- Profile file: \`${this.profileStore.path}\``,
-        ...(existing ? ['', formatSetupProfile(existing)] : []),
-        '',
-        'Run `/setup <Sleeper user>` to discover leagues.',
-        'Seb then gives the exact command for the league or roster choice.',
-      ].join('\n');
-    }
     if (!key.present) {
       throw new Error(key.message);
     }
-
-    const leagueId = arguments_[1];
-    if (leagueId && !/^\d+$/.test(leagueId)) {
-      throw new Error('The Sleeper league ID must contain only numbers.');
-    }
-    const rosterId = arguments_[2] === undefined
-      ? undefined
-      : validInteger(arguments_[2], 1, 1_000_000, 'roster ID');
-    const result = await buildSetupProfile({
-      sleeper: this.options.sleeper,
-      username,
-      season: this.options.session.season,
-      ...(leagueId ? { leagueId } : {}),
-      ...(rosterId ? { rosterId } : {}),
-    });
-
-    if (!result.selectedLeague) {
-      if (result.leagues.length === 0) {
-        throw new Error(`Sleeper found no NFL league for ${result.account.season}.`);
-      }
-      return [
-        `## Leagues for ${result.account.user.username ?? username}`,
-        '',
-        ...result.leagues.map(
-          (league) => `- ${league.name}: \`${league.league_id}\` (${league.total_rosters} rosters)`,
-        ),
-        '',
-        `Continue with \`/setup ${username} <league ID>\`.`,
-      ].join('\n');
-    }
-    if (result.ownedRosters.length === 0) {
-      throw new Error(
-        `The Sleeper user does not own a roster in \`${result.selectedLeague.name}\`.`,
-      );
-    }
-    if (!result.profile) {
-      return [
-        `## Rosters in ${result.selectedLeague.name}`,
-        '',
-        ...result.ownedRosters.map(
-          (roster) => `- Roster \`${roster.roster_id}\`: ${roster.players?.length ?? 0} players`,
-        ),
-        '',
-        `Continue with \`/setup ${username} ${result.selectedLeague.league_id} <roster ID>\`.`,
-      ].join('\n');
-    }
-
-    await this.profileStore.save(result.profile);
-    applySetupProfile(result.profile, this.options.session);
+    const profile = createSetupProfile(this.options.session.season);
+    await this.profileStore.save(profile);
     return [
-      'Seb saved and activated the setup profile.',
+      'Seb saved a team-independent setup profile.',
       '',
-      formatSetupProfile(result.profile, this.profileStore.path),
+      formatSetupProfile(profile, this.profileStore.path),
+      '',
+      'Use `/leagues <Sleeper user>` and `/rosters <league ID>` for fantasy context.',
+      'Use `/team <NFL code>` for one NFL team.',
     ].join('\n');
   }
 

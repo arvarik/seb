@@ -10,7 +10,9 @@ export interface SessionUsage {
 export interface SessionState {
   contextAfterMessageId: string | null;
   leagueId: string | null;
+  leagueOptions: string[];
   rosterId: number | null;
+  rosterOptions: number[];
   season: number;
   skillId: string;
   team: string | null;
@@ -23,7 +25,9 @@ export function createSessionState(now = new Date()): SessionState {
   return {
     contextAfterMessageId: null,
     leagueId: null,
+    leagueOptions: [],
     rosterId: null,
+    rosterOptions: [],
     season: nflSeason(now),
     skillId: 'general',
     team: null,
@@ -86,10 +90,12 @@ export function getContextualSuggestions(state: SessionState): string[] {
   if (!state.week) {
     suggestions.push(`/week <number>`);
   }
-  if (!state.leagueId) {
-    suggestions.push(`/league <Sleeper league ID>`);
+  if (!state.user) {
+    suggestions.push('/leagues <Sleeper user>');
+  } else if (!state.leagueId) {
+    suggestions.push(`/leagues ${state.user}`);
   } else if (!state.rosterId) {
-    suggestions.push(`/roster <roster ID>`);
+    suggestions.push(`/rosters ${state.leagueId}`);
   }
   if (!state.team) {
     suggestions.push(`/team <NFL code>`);

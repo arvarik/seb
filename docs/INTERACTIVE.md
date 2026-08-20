@@ -13,9 +13,11 @@ Run `/help` inside Seb to show the local command list.
 
 Local commands do not call Gemini. Regular questions call Gemini and the required data tools.
 
-Seb starts the setup wizard when no local profile exists.
+Seb creates a team-independent setup profile when no local profile exists.
 
-The saved profile supplies the default season, user, league, and roster.
+The saved profile supplies only the default season.
+
+Sleeper users, leagues, rosters, and NFL teams remain session-specific.
 
 ## Recommended first session
 
@@ -54,6 +56,18 @@ Seb uses the active values when a question does not give different values.
 
 ## Search and completion commands
 
+Type `/` to open the live command menu.
+
+The menu filters commands after each character.
+
+Use Up and Down to select one result.
+
+Press Tab or Right Arrow to fill the selected command or argument.
+
+Press Enter to run the current input.
+
+Press Escape to close the menu without exiting Seb.
+
 Run `/help` to show the complete command catalog.
 
 Run `/commands SEARCH` to search command names and descriptions.
@@ -75,11 +89,11 @@ Run `/complete INPUT` to suggest a command or argument.
 
 The argument suggestions include skills, NFL teams, and active context values.
 
+After `/leagues` or `/rosters`, the menu also suggests the discovered IDs.
+
 Unknown commands show up to three likely command names.
 
-The TUI does not insert a completion directly into the input line.
-
-Copy one returned suggestion into a new input.
+The `/complete` command remains useful in copied transcripts and remote terminals.
 
 ## Complete local command reference
 
@@ -92,12 +106,14 @@ Copy one returned suggestion into a new input.
 | `/season YEAR|current` | Sets the active season. |
 | `/week NUMBER|current|clear` | Sets or clears the active week. |
 | `/user NAME|clear` | Sets or clears the Sleeper user. |
+| `/leagues [SLEEPER_USER]` | Discovers leagues for the active season. |
 | `/league ID|clear` | Sets or clears the Sleeper league. |
+| `/rosters [LEAGUE_ID]` | Lists every roster in a Sleeper league. |
 | `/roster ID|clear` | Sets or clears the Sleeper roster. |
 | `/team CODE|clear` | Sets or clears the NFL team. |
 | `/skills` | Lists all analysis skills. |
 | `/skill NAME|list` | Selects or lists a skill. |
-| `/setup [USER] [LEAGUE] [ROSTER]` | Discovers and saves default context. |
+| `/setup` | Saves team-independent defaults. |
 | `/profile [show|load|clear]` | Reads or removes the setup profile. |
 | `/sources` | Shows source URLs and cache outcomes. |
 | `/cache` | Shows SQLite cache and snapshot counts. |
@@ -125,7 +141,9 @@ Copy one returned suggestion into a new input.
 | `/week current` | Reads the current week from Sleeper. |
 | `/week clear` | Removes the active week. |
 | `/user NAME` | Sets the Sleeper user. |
+| `/leagues [USER]` | Lists the user's leagues for the active season. |
 | `/league ID` | Sets the numeric Sleeper league ID. |
+| `/rosters [LEAGUE_ID]` | Lists every roster in the selected league. |
 | `/roster ID` | Sets the Sleeper roster ID. |
 | `/team CODE` | Sets an NFL team code, such as `SEA`. |
 
@@ -133,31 +151,32 @@ Use `clear` with `/user`, `/league`, `/roster`, or `/team` to remove that value.
 
 ## Setup and profile commands
 
-Run `/setup` to show the profile path and setup status.
+Run `/setup` to save the active season as the global default.
 
-The interactive setup uses the active session season.
+Setup never saves a Sleeper user, league, roster, or NFL team.
 
-Run `/season YEAR` first when you want a different season.
+Run `/season YEAR` first when you want another default season.
 
 Discover a user's leagues.
 
 ```text
-/setup your-sleeper-name
+/leagues your-sleeper-name
 ```
 
-Continue with the returned league ID.
+Select one returned league.
 
 ```text
-/setup your-sleeper-name 123456789
+/league 123456789
 ```
 
-Add a roster ID when the user owns several rosters.
+List every roster in that league, then select one.
 
 ```text
-/setup your-sleeper-name 123456789 4
+/rosters
+/roster 4
 ```
 
-Seb saves and activates the completed profile.
+Seb applies these values only to the active interactive session.
 
 Show the saved profile.
 
@@ -165,7 +184,7 @@ Show the saved profile.
 /profile show
 ```
 
-Load its values into the current session again.
+Load its default season into the current session again.
 
 ```text
 /profile load
@@ -177,7 +196,7 @@ Remove the saved file.
 /profile clear
 ```
 
-The clear action does not erase current in-memory session values.
+The clear action does not erase current session values.
 
 Use the related context commands to clear those values.
 

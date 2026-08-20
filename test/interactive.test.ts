@@ -150,7 +150,7 @@ describe('SebInteractiveTransport', () => {
     expect(model.doStreamCalls).toHaveLength(1);
   });
 
-  it('discovers, saves, and activates a first-run setup profile', async () => {
+  it('keeps setup team-independent and discovers context inside the UI', async () => {
     const sleeperFetch: typeof globalThis.fetch = async (input) => {
       const path = new URL(String(input)).pathname;
       if (path === '/v1/user/arvarik') {
@@ -204,15 +204,31 @@ describe('SebInteractiveTransport', () => {
       weather: clients.weatherClient,
     });
 
-    const output = await sendCommand(transport, '/setup arvarik 200', 'message-1');
+    const setup = await sendCommand(transport, '/setup', 'message-1');
+    const leagues = await sendCommand(transport, '/leagues arvarik', 'message-2');
+    const leagueCompletion = await sendCommand(transport, '/complete /league 2', 'message-3');
+    await sendCommand(transport, '/league 200', 'message-4');
+    const rosters = await sendCommand(transport, '/rosters', 'message-5');
+    const rosterCompletion = await sendCommand(transport, '/complete /roster 4', 'message-6');
+    await sendCommand(transport, '/roster 4', 'message-7');
 
-    expect(output).toContain('saved and activated');
+    expect(setup).toContain('team-independent');
+    expect(leagues).toContain('Test League');
+    expect(leagueCompletion).toContain('/league 200');
+    expect(rosters).toContain('Roster `4`');
+    expect(rosterCompletion).toContain('/roster 4');
     expect(session).toMatchObject({
       user: 'arvarik',
       leagueId: '200',
       rosterId: 4,
       season: 2026,
     });
+    expect(profileStore.profile).toMatchObject({
+      schemaVersion: 2,
+      defaults: { season: 2026 },
+    });
+    expect(JSON.stringify(profileStore.profile)).not.toContain('arvarik');
+    expect(JSON.stringify(profileStore.profile)).not.toContain('200');
     expect(JSON.stringify(profileStore.profile)).not.toContain('secret-value');
   });
 });

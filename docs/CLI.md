@@ -30,7 +30,7 @@ You can skip `npm link`. Use `npm run seb` and `npm run ask` instead.
 | --- | --- |
 | `seb` or `seb chat` | Start interactive chat. |
 | `seb ask` | Ask one question or read standard input. |
-| `seb setup` | Discover and save a Sleeper profile. |
+| `seb setup` | Validate Gemini and save team-independent defaults. |
 | `seb doctor` | Verify local configuration and source access. |
 | `seb cache` | Inspect or clear the SQLite source cache. |
 | `seb snapshots` | List snapshots or inspect snapshot provenance. |
@@ -42,21 +42,21 @@ Run `seb COMMAND --help` to return the general command help.
 
 ## First-run setup
 
-Run the guided terminal setup.
+Create the local setup profile.
 
 ```bash
 seb setup
 ```
 
-The wizard validates Gemini with one small request.
+Setup validates Gemini with one small request.
 
-It asks for a season and uses the current Sleeper season as the default.
+It reads the current NFL season from Sleeper.
 
-It then discovers leagues and owned rosters for that season.
+It stores only the season and update time.
 
-It saves one default profile outside the repository.
+It never stores a Sleeper user, league, roster, or NFL team.
 
-Starting interactive chat without a profile starts this wizard automatically.
+Starting interactive chat without a profile runs setup automatically.
 
 Read the [setup guide](SETUP.md) for profile paths and security rules.
 
@@ -112,16 +112,21 @@ Use these controls.
 | Key | Action |
 | --- | --- |
 | `Enter` | Send the current question. |
-| `Up` and `Down` | Scroll the conversation. |
+| `/` | Open live slash-command suggestions. |
+| `Up` and `Down` | Select a command when the menu is open. Otherwise, scroll. |
+| `Tab` or `Right Arrow` | Fill the selected command or argument. |
 | `PageUp` and `PageDown` | Scroll one page. |
 | `Ctrl+L` | Repaint the terminal. |
-| `Escape` or `Ctrl+C` | Exit Seb. |
+| `Escape` | Close the command menu. Press it again to exit. |
+| `Ctrl+C` | Exit Seb. |
 
 The interface expands the active tool card. It collapses older tool cards to reduce noise.
 
 Seb hides model reasoning by default. It shows a compact reasoning card when the provider returns reasoning.
 
 Run `/help` inside the interface. Local commands do not call Gemini.
+
+Use `/leagues USER`, `/rosters LEAGUE_ID`, and `/team CODE` for optional context.
 
 Use the [interactive guide](INTERACTIVE.md) for every command and skill.
 

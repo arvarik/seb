@@ -85,8 +85,8 @@ export {
 } from './setup/profile.js';
 export {
   applySetupProfile,
-  buildSetupProfile,
   checkGeminiApiKey,
+  createSetupProfile,
   discoverOwnedRosters,
   discoverSleeperAccount,
   runFirstRunSetup,

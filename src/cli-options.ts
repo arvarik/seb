@@ -54,7 +54,7 @@ Commands:
   chat       Start an interactive terminal session. This is the default.
   ask        Ask one question. Seb also reads the question from standard input.
   doctor     Verify Node.js, Gemini, Sleeper, nflverse, and weather.
-  setup      Discover and save a default Sleeper league and roster.
+  setup      Validate Gemini and save team-independent defaults.
   completion Print a shell completion script.
   cache      Inspect or clear the local SQLite cache.
   snapshots  List versioned source snapshots.
@@ -83,8 +83,9 @@ Run without npm link:
   npm run ask -- "Show the current NFL state."
 
 Interactive controls:
-  Enter sends a question. Arrow keys scroll. Escape or Ctrl+C exits.
-  Run /help inside chat for context, source, skill, cache, and export commands.
+  Type / to open commands. Arrow keys select. Tab or Right Arrow fills.
+  Enter sends. Escape closes the menu. Escape again or Ctrl+C exits.
+  Run /help for context, source, skill, cache, and export commands.
 `;
 
 export function parseCliArguments(arguments_: readonly string[]): CliCommand {

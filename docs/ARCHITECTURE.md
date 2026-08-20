@@ -7,7 +7,7 @@ This design keeps current facts outside model memory.
 ## Request flow
 
 1. The command-line parser selects chat, ask, setup, doctor, cache, snapshot, replay, completion, help, or version mode.
-2. Interactive chat loads the saved profile or starts the first-run wizard.
+2. Interactive chat loads a season-only profile or creates one automatically.
 3. The transport runs a slash command locally or sends a normal question to the agent.
 4. `ToolLoopAgent` gives Gemini the read-only tools and active session instructions.
 5. Gemini selects only the tools that the question needs.
@@ -55,6 +55,18 @@ The `/commands` search uses local command metadata.
 
 The `/complete` command ranks local command and argument candidates.
 
+The terminal input adapter opens a live palette when the input starts with `/`.
+
+The palette reserves terminal rows and never overwrites the active input line.
+
+Arrow keys change the selection. Tab and Right Arrow fill the selected value.
+
+AI SDK TUI has no public prompt-completion hook in version `1.0.72`.
+
+Seb pins that exact version and adds a narrow input and screen adapter.
+
+Review this adapter before each TUI dependency update.
+
 ## Session context
 
 The session stores these values in memory.
@@ -74,9 +86,11 @@ A direct value in the user question overrides the active session value.
 
 Interactive chat loads one validated JSON profile before it starts the TUI.
 
-The top-level setup wizard validates Gemini and discovers Sleeper defaults.
+The top-level setup command validates Gemini and reads the current NFL season.
 
-The profile stores only the Sleeper identity and default league context.
+The profile stores only the NFL season, schema version, and update time.
+
+Sleeper and NFL team values remain in the in-memory session.
 
 It never stores an API key.
 

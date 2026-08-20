@@ -17,7 +17,9 @@ export interface InteractiveCompletion {
 
 export interface CompletionContext {
   leagueId?: string | null;
+  leagueOptions?: readonly string[];
   rosterId?: number | null;
+  rosterOptions?: readonly number[];
   season?: number;
   team?: string | null;
   user?: string | null;
@@ -39,7 +41,9 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('season', '/season YEAR|current', 'Set the NFL season.', undefined, ['current']),
   command('week', '/week NUMBER|current|clear', 'Set or clear the NFL week.', undefined, ['current', 'clear']),
   command('user', '/user NAME|clear', 'Set or clear the Sleeper user.', undefined, ['clear']),
+  command('leagues', '/leagues [SLEEPER_USER]', 'Discover Sleeper leagues for the active season.'),
   command('league', '/league ID|clear', 'Set or clear the Sleeper league.', undefined, ['clear']),
+  command('rosters', '/rosters [LEAGUE_ID]', 'List every roster in a Sleeper league.'),
   command('roster', '/roster ID|clear', 'Set or clear the Sleeper roster.', undefined, ['clear']),
   command('team', '/team CODE|clear', 'Set or clear the NFL team.', undefined, [...NFL_TEAMS, 'clear']),
   command('skills', '/skills', 'List all analysis skills.'),
@@ -47,7 +51,7 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
     ...SEB_SKILLS.map((skill) => skill.id),
     'list',
   ]),
-  command('setup', '/setup [SLEEPER_USER] [LEAGUE_ID] [ROSTER_ID]', 'Discover and save the default Sleeper context.'),
+  command('setup', '/setup', 'Save team-independent defaults for interactive sessions.'),
   command('profile', '/profile [show|load|clear]', 'Show, load, or clear the local setup profile.', undefined, ['show', 'load', 'clear']),
   command('sources', '/sources', 'Show sources used in this session.'),
   command('cache', '/cache', 'Show the SQLite cache and snapshot status.'),
@@ -225,10 +229,18 @@ function argumentSuggestions(
     case 'user':
       if (context.user) values.unshift(context.user);
       break;
+    case 'leagues':
+      if (context.user) values.unshift(context.user);
+      break;
     case 'league':
+      values.unshift(...(context.leagueOptions ?? []));
+      if (context.leagueId) values.unshift(context.leagueId);
+      break;
+    case 'rosters':
       if (context.leagueId) values.unshift(context.leagueId);
       break;
     case 'roster':
+      values.unshift(...(context.rosterOptions ?? []).map(String));
       if (context.rosterId) values.unshift(String(context.rosterId));
       break;
     case 'team':

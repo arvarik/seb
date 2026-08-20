@@ -28,15 +28,15 @@
     "version:check": "node scripts/check-version.mjs"
   },
   "dependencies": {
-    "@ai-sdk/google": "^4.0.47",
-    "@ai-sdk/tui": "^1.0.71",
+    "@ai-sdk/google": "^4.0.48",
+    "@ai-sdk/tui": "1.0.72",
     "@chat-adapter/discord": "^4.38.1",
     "@chat-adapter/slack": "^4.38.1",
     "@chat-adapter/state-memory": "^4.38.1",
     "@chat-adapter/state-redis": "^4.38.1",
     "@chat-adapter/telegram": "^4.38.1",
     "@hono/node-server": "^2.1.1",
-    "ai": "^7.0.70",
+    "ai": "^7.0.71",
     "better-sqlite3": "^13.0.3",
     "chat": "^4.38.1",
     "csv-parse": "^7.0.2",

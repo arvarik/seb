@@ -100,39 +100,29 @@ npm run ask -- "Show the current NFL state."
 
 One-shot requests use `GEMINI_MODEL` first. They use `GEMINI_FALLBACK_MODEL` after a temporary capacity or rate-limit error.
 
-## 5. Create the local profile
+## 5. Create the team-independent profile
 
-Run the setup wizard in a terminal.
+Run setup.
 
 ```bash
 npm run seb -- setup
 ```
 
-The wizard checks that the Gemini key exists.
+Setup checks that the Gemini key exists.
 
 It sends one small Gemini request to validate the key and configured models.
 
 It does not save the key value.
 
-The wizard asks for a Sleeper username.
-
 It reads the current NFL season from Sleeper.
 
-It asks for an NFL season and uses the current season as the default.
+Seb saves only that season and the update time.
 
-Enter an older season when you want a league from that season.
+The profile contains no Sleeper user, league, roster, or NFL team.
 
-It lists the user's leagues for that season.
+Starting `seb` without a profile runs the same team-independent setup automatically.
 
-It then lists only rosters that the user owns or co-owns.
-
-Select one league and one roster.
-
-Seb saves that context as the default interactive profile.
-
-Starting `seb` without a profile starts the same wizard automatically.
-
-The wizard needs an interactive terminal.
+The setup command accepts no interactive answers, so scripts can also run it.
 
 ## 6. Install the direct command
 
@@ -170,7 +160,22 @@ Use a user name when you do not know the league ID.
 npm run ask -- "Find the Sleeper user arvind and list the user's 2026 NFL leagues."
 ```
 
-Interactive chat can use a returned league ID in a later prompt.
+Interactive chat can discover and select context without changing the setup profile.
+
+Type `/` to open the command menu.
+
+Discover a user's leagues.
+
+```text
+/leagues your-sleeper-name
+```
+
+Select one returned league and list its rosters.
+
+```text
+/league 123456789
+/rosters
+```
 
 Set repeated values once inside interactive chat.
 
@@ -188,13 +193,9 @@ Run `/profile show` to show the active profile and file path.
 
 Run `/profile clear` to remove the profile.
 
-Run `/setup USERNAME` inside chat to discover another league.
+Run `/setup` inside chat to save the active season as the global default.
 
-The interactive setup command returns the next exact command when it needs a choice.
-
-It uses the active session season.
-
-Run `/season YEAR` before `/setup USERNAME` when you need another season.
+Team context remains in memory for the current interactive session.
 
 ## 8. Install shell completion
 
@@ -322,13 +323,17 @@ It rejects a file larger than 64 KiB.
 
 It validates the schema, identifiers, ranges, and update time on every load.
 
-The profile contains the Sleeper username, user ID, league, roster, season, and update time.
+The profile contains only the default NFL season, schema version, and update time.
+
+Seb migrates a version 1 profile to version 2 when it loads the file.
+
+The migration removes the saved Sleeper user, league, and roster values.
 
 The profile does not contain the Gemini key or connector credentials.
 
 Only interactive chat loads this profile automatically.
 
-One-shot and connector requests do not apply the saved league context.
+One-shot and connector requests do not apply interactive team context.
 
 ## Common setup errors
 
@@ -338,25 +343,19 @@ The command shows `The Google Generative AI API key is empty.`
 
 Add the key to `.env`. Then restart the command.
 
-### The setup wizard needs a terminal
-
-Run `seb setup` from a normal terminal.
-
-Do not pipe input into this command.
-
 ### Sleeper finds no league
 
-Confirm the Sleeper username first.
+Confirm the Sleeper username in `/leagues USERNAME`.
 
 Confirm that the user has an NFL league for the selected season.
 
-Run the wizard again and enter a different season when necessary.
+Run `/season YEAR`, then run `/leagues USERNAME` again.
 
-### Sleeper finds no owned roster
+### Sleeper does not list the expected roster
 
-Confirm that the selected user owns or co-owns a roster in that league.
+Run `/rosters LEAGUE_ID` to list every roster in the league.
 
-Select another league when the user only views the current league.
+Select the required roster with `/roster ID`.
 
 ### The profile contains invalid JSON
 

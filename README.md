@@ -45,21 +45,25 @@ The current project version is `0.0.2`. Seb follows the [documented release poli
    npm run doctor
    ```
 
-5. Run the setup wizard.
+5. Create the team-independent profile.
 
    ```bash
    npm run seb -- setup
    ```
 
-   The wizard validates Gemini with one small request.
+   Setup validates Gemini and records the current NFL season.
 
-   It then finds the Sleeper user, selected season, leagues, and owned rosters.
+   It does not select a Sleeper user, league, roster, or NFL team.
 
 6. Start the interactive terminal interface.
 
    ```bash
    npm run seb
    ```
+
+   Type `/` to open the live command menu.
+
+   Use `/leagues`, `/rosters`, and `/team` to select optional context.
 
 7. Ask one question without the interactive interface.
 
@@ -150,6 +154,7 @@ The [documentation index](docs/README.md) links every setup and operations guide
 - Screen a complete NFL week for outdoor weather risk.
 - Combine a game, both teams, the venue, and kickoff weather.
 - Select focused skills for start-sit, waivers, weather, schedules, and other workflows.
+- Fill slash commands from a live keyboard menu inside the terminal.
 - Resolve and persist player and team identities across Sleeper and nflverse.
 - Store checked cache records and versioned source snapshots in SQLite.
 - Show source retrieval times, cache outcomes, and stale-data warnings.

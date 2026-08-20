@@ -11,24 +11,6 @@ import {
   type SetupProfileStore,
 } from './profile.js';
 
-export interface SetupPromptChoice<T extends string | number> {
-  description?: string;
-  label: string;
-  value: T;
-}
-
-export interface SetupPrompter {
-  input(request: {
-    defaultValue?: string;
-    label: string;
-    validate?: (value: string) => string | null;
-  }): Promise<string>;
-  select<T extends string | number>(request: {
-    choices: readonly SetupPromptChoice<T>[];
-    label: string;
-  }): Promise<T>;
-}
-
 export interface SleeperSetupDiscovery {
   getLeagueRosters(leagueId: string): Promise<SleeperRoster[]>;
   getNflState(): Promise<SleeperNflState>;
@@ -51,8 +33,7 @@ export interface DiscoveredSleeperAccount {
 export interface FirstRunSetupOptions {
   environment: NodeJS.ProcessEnv;
   now?: () => Date;
-  prompt: SetupPrompter;
-  sleeper: SleeperSetupDiscovery;
+  sleeper: Pick<SleeperSetupDiscovery, 'getNflState'>;
   store: SetupProfileStore;
   verifyApiKey?: (apiKey: string) => Promise<void>;
 }
@@ -129,150 +110,34 @@ export async function runFirstRunSetup(
     }
   }
 
-  const username = await options.prompt.input({
-    label: 'Sleeper username',
-    validate: (value) => usernameError(value),
-  });
   const nflState = await options.sleeper.getNflState();
-  const defaultSeason = parseSeason(nflState.season);
-  const selectedSeason = await options.prompt.input({
-    defaultValue: String(defaultSeason),
-    label: 'NFL season',
-    validate: seasonError,
-  });
-  const account = await discoverSleeperAccount(
-    options.sleeper,
-    username,
-    Number(selectedSeason),
+  const profile = createSetupProfile(
+    parseSeason(nflState.season),
+    options.now?.(),
   );
-  if (account.leagues.length === 0) {
-    throw new SetupWizardError(
-      `Sleeper found no NFL league for ${account.season}. Check the username or season.`,
-    );
-  }
-
-  const selectedLeagueId = account.leagues.length === 1
-    ? account.leagues[0]!.league_id
-    : await options.prompt.select({
-        label: `NFL league for ${account.season}`,
-        choices: account.leagues.map((candidate) => ({
-          value: candidate.league_id,
-          label: candidate.name,
-          description: `${candidate.total_rosters} rosters`,
-        })),
-      });
-  const league = account.leagues.find(
-    (candidate) => candidate.league_id === selectedLeagueId,
-  );
-  if (!league) {
-    throw new SetupWizardError('Select one listed Sleeper league.');
-  }
-
-  const ownedRosters = await discoverOwnedRosters(
-    options.sleeper,
-    league.league_id,
-    account.user.user_id,
-  );
-  if (ownedRosters.length === 0) {
-    throw new SetupWizardError(
-      `The Sleeper user does not own a roster in \`${league.name}\`.`,
-    );
-  }
-  const selectedRosterId = ownedRosters.length === 1
-    ? ownedRosters[0]!.roster_id
-    : await options.prompt.select({
-        label: `Roster in ${league.name}`,
-        choices: ownedRosters.map((roster) => ({
-          value: roster.roster_id,
-          label: `Roster ${roster.roster_id}`,
-          description: `${roster.players?.length ?? 0} players`,
-        })),
-      });
-  const selectedRoster = ownedRosters.find(
-    (roster) => roster.roster_id === selectedRosterId,
-  );
-  if (!selectedRoster) {
-    throw new SetupWizardError('Select one listed Sleeper roster.');
-  }
-
-  const profile: SebSetupProfile = {
-    schemaVersion: SETUP_PROFILE_SCHEMA_VERSION,
-    updatedAt: (options.now ?? (() => new Date()))().toISOString(),
-    sleeper: {
-      userId: account.user.user_id,
-      username: account.user.username ?? username.trim(),
-    },
-    defaults: {
-      season: account.season,
-      leagueId: league.league_id,
-      leagueName: league.name,
-      rosterId: selectedRoster.roster_id,
-    },
-  };
   await options.store.save(profile);
   return profile;
+}
+
+export function createSetupProfile(
+  season: number,
+  now = new Date(),
+): SebSetupProfile {
+  if (!Number.isInteger(season) || season < 1999 || season > 2100) {
+    throw new SetupWizardError('The default NFL season is invalid.');
+  }
+  return {
+    schemaVersion: SETUP_PROFILE_SCHEMA_VERSION,
+    updatedAt: now.toISOString(),
+    defaults: { season },
+  };
 }
 
 export function applySetupProfile(
   profile: SebSetupProfile,
   session: SessionState,
 ): void {
-  session.user = profile.sleeper.username;
   session.season = profile.defaults.season;
-  session.leagueId = profile.defaults.leagueId;
-  session.rosterId = profile.defaults.rosterId;
-}
-
-export async function buildSetupProfile(
-  options: {
-    leagueId?: string;
-    now?: () => Date;
-    rosterId?: number;
-    season?: number;
-    sleeper: SleeperSetupDiscovery;
-    username: string;
-  },
-): Promise<{
-  account: DiscoveredSleeperAccount;
-  leagues: SleeperLeague[];
-  ownedRosters: SleeperRoster[];
-  profile: SebSetupProfile | null;
-  selectedLeague: SleeperLeague | null;
-}> {
-  const account = await discoverSleeperAccount(
-    options.sleeper,
-    options.username,
-    options.season,
-  );
-  const selectedLeague = options.leagueId
-    ? account.leagues.find((league) => league.league_id === options.leagueId) ?? null
-    : account.leagues.length === 1 ? account.leagues[0]! : null;
-  if (!selectedLeague) {
-    return { account, leagues: account.leagues, ownedRosters: [], profile: null, selectedLeague: null };
-  }
-  const ownedRosters = await discoverOwnedRosters(
-    options.sleeper,
-    selectedLeague.league_id,
-    account.user.user_id,
-  );
-  const selectedRoster = options.rosterId
-    ? ownedRosters.find((roster) => roster.roster_id === options.rosterId) ?? null
-    : ownedRosters.length === 1 ? ownedRosters[0]! : null;
-  const profile = selectedRoster ? {
-    schemaVersion: SETUP_PROFILE_SCHEMA_VERSION,
-    updatedAt: (options.now ?? (() => new Date()))().toISOString(),
-    sleeper: {
-      userId: account.user.user_id,
-      username: account.user.username ?? options.username.trim(),
-    },
-    defaults: {
-      season: account.season,
-      leagueId: selectedLeague.league_id,
-      leagueName: selectedLeague.name,
-      rosterId: selectedRoster.roster_id,
-    },
-  } satisfies SebSetupProfile : null;
-  return { account, leagues: account.leagues, ownedRosters, profile, selectedLeague };
 }
 
 function validateUsername(value: string): string {
@@ -295,13 +160,6 @@ function parseSeason(value: string | undefined): number {
     throw new SetupWizardError('Sleeper returned an invalid NFL season.');
   }
   return season;
-}
-
-function seasonError(value: string): string | null {
-  const season = Number(value.trim());
-  return Number.isInteger(season) && season >= 1999 && season <= 2100
-    ? null
-    : 'Use a four-digit NFL season from 1999 through 2100.';
 }
 
 function errorMessage(error: unknown): string {

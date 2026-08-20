@@ -3,21 +3,14 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promi
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 
-export const SETUP_PROFILE_SCHEMA_VERSION = 1;
+export const SETUP_PROFILE_SCHEMA_VERSION = 2;
 const MAX_PROFILE_BYTES = 64 * 1024;
 
 export interface SebSetupProfile {
   defaults: {
-    leagueId: string;
-    leagueName: string;
-    rosterId: number;
     season: number;
   };
   schemaVersion: typeof SETUP_PROFILE_SCHEMA_VERSION;
-  sleeper: {
-    userId: string;
-    username: string;
-  };
   updatedAt: string;
 }
 
@@ -71,7 +64,15 @@ export class FileSetupProfileStore implements SetupProfileStore {
     } catch {
       throw new SetupProfileValidationError('The setup profile contains invalid JSON.');
     }
-    return validateSetupProfile(value);
+    const result = readSetupProfile(value);
+    if (result.migrated) {
+      try {
+        await this.save(result.profile);
+      } catch (error) {
+        if (!isReadOnlyFileError(error)) throw error;
+      }
+    }
+    return result.profile;
   }
 
   async save(profile: SebSetupProfile): Promise<void> {
@@ -134,26 +135,8 @@ export function validateSetupProfile(value: unknown): SebSetupProfile {
   if (!isIsoDate(value.updatedAt)) {
     throw new SetupProfileValidationError('The setup profile needs a valid updatedAt value.');
   }
-  if (!isRecord(value.sleeper)) {
-    throw new SetupProfileValidationError('The setup profile needs Sleeper user data.');
-  }
-  if (!isIdentifier(value.sleeper.userId, 1, 100)) {
-    throw new SetupProfileValidationError('The Sleeper user ID is invalid.');
-  }
-  if (!isUsername(value.sleeper.username)) {
-    throw new SetupProfileValidationError('The Sleeper username is invalid.');
-  }
   if (!isRecord(value.defaults)) {
     throw new SetupProfileValidationError('The setup profile needs default values.');
-  }
-  if (!isIdentifier(value.defaults.leagueId, 1, 100, /^\d+$/)) {
-    throw new SetupProfileValidationError('The default Sleeper league ID is invalid.');
-  }
-  if (!isText(value.defaults.leagueName, 1, 200)) {
-    throw new SetupProfileValidationError('The default Sleeper league name is invalid.');
-  }
-  if (!isInteger(value.defaults.rosterId, 1, 1_000_000)) {
-    throw new SetupProfileValidationError('The default Sleeper roster ID is invalid.');
   }
   if (!isInteger(value.defaults.season, 1999, 2100)) {
     throw new SetupProfileValidationError('The default NFL season is invalid.');
@@ -162,14 +145,7 @@ export function validateSetupProfile(value: unknown): SebSetupProfile {
   return {
     schemaVersion: SETUP_PROFILE_SCHEMA_VERSION,
     updatedAt: value.updatedAt,
-    sleeper: {
-      userId: value.sleeper.userId,
-      username: value.sleeper.username,
-    },
     defaults: {
-      leagueId: value.defaults.leagueId,
-      leagueName: value.defaults.leagueName,
-      rosterId: value.defaults.rosterId,
       season: value.defaults.season,
     },
   };
@@ -177,16 +153,38 @@ export function validateSetupProfile(value: unknown): SebSetupProfile {
 
 export function formatSetupProfile(profile: SebSetupProfile, path?: string): string {
   return [
-    '## Seb profile',
+    '## Seb setup profile',
     '',
-    `- Sleeper user: \`${profile.sleeper.username}\``,
-    `- Season: ${profile.defaults.season}`,
-    `- League: ${profile.defaults.leagueName} (\`${profile.defaults.leagueId}\`)`,
-    `- Roster ID: ${profile.defaults.rosterId}`,
+    `- Default NFL season: ${profile.defaults.season}`,
     `- Updated: ${profile.updatedAt}`,
     ...(path ? [`- File: \`${path}\``] : []),
     '- Gemini keys stay in the environment. Seb never saves them in this profile.',
+    '- Sleeper users, leagues, rosters, and NFL teams remain session-specific.',
+    '- Type `/` in interactive mode to select a context command.',
   ].join('\n');
+}
+
+function readSetupProfile(value: unknown): {
+  migrated: boolean;
+  profile: SebSetupProfile;
+} {
+  if (isRecord(value) && value.schemaVersion === 1 && isRecord(value.defaults)) {
+    if (!isIsoDate(value.updatedAt)) {
+      throw new SetupProfileValidationError('The legacy setup profile needs a valid updatedAt value.');
+    }
+    if (!isInteger(value.defaults.season, 1999, 2100)) {
+      throw new SetupProfileValidationError('The legacy setup profile has an invalid NFL season.');
+    }
+    return {
+      migrated: true,
+      profile: {
+        schemaVersion: SETUP_PROFILE_SCHEMA_VERSION,
+        updatedAt: value.updatedAt,
+        defaults: { season: value.defaults.season },
+      },
+    };
+  }
+  return { migrated: false, profile: validateSetupProfile(value) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -197,23 +195,11 @@ function isIsoDate(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
 
-function isIdentifier(
-  value: unknown,
-  minimum: number,
-  maximum: number,
-  pattern = /^[A-Za-z0-9_.-]+$/,
-): value is string {
-  return typeof value === 'string' && value.length >= minimum && value.length <= maximum && pattern.test(value);
-}
-
-function isUsername(value: unknown): value is string {
-  return isIdentifier(value, 1, 100);
-}
-
-function isText(value: unknown, minimum: number, maximum: number): value is string {
-  return typeof value === 'string' && value.trim().length >= minimum && value.length <= maximum;
-}
-
 function isInteger(value: unknown, minimum: number, maximum: number): value is number {
   return Number.isInteger(value) && (value as number) >= minimum && (value as number) <= maximum;
+}
+
+function isReadOnlyFileError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EACCES' || code === 'EPERM' || code === 'EROFS';
 }

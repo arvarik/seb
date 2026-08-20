@@ -99,8 +99,11 @@ describe('SebInteractiveTransport', () => {
     });
 
     const output = await sendCommand(transport, '/sources', 'message-1');
+    const opened = await sendCommand(transport, '/open 1', 'message-2');
 
     expect(output).toContain('[Test source](https://example.test/data)');
+    expect(output).toContain('LIVE');
+    expect(opened).toContain('Source 1: [Test source](https://example.test/data)');
   });
 
   it('adds contextual suggestions after a streamed model answer', async () => {

@@ -8,7 +8,7 @@ Seb uses Gemini 3.7 Flash through the Gemini Interactions API by default.
 
 One-shot and connector requests use Gemini 3.6 Flash after a temporary capacity or rate-limit error.
 
-The current project version is `0.0.2`. Seb follows the [documented release policy](docs/VERSIONING.md).
+The current project version is `0.0.3`. Seb follows the [documented release policy](docs/VERSIONING.md).
 
 ## Requirements
 
@@ -38,7 +38,7 @@ The current project version is `0.0.2`. Seb follows the [documented release poli
    Set the NWS user agent when you want a direct contact value.
 
    ```dotenv
-   NWS_USER_AGENT=seb/0.0.2 (you@example.com)
+   NWS_USER_AGENT=seb/0.0.3 (you@example.com)
    ```
 
 4. Verify the complete setup.
@@ -63,7 +63,7 @@ The current project version is `0.0.2`. Seb follows the [documented release poli
    npm run seb
    ```
 
-   Type `/` to open the live command menu.
+   Press `Ctrl+K` or type `/` to open the command palette.
 
    Use `/leagues`, `/rosters`, and `/team` to select optional context.
 
@@ -89,6 +89,8 @@ seb
 See the [command-line guide](docs/CLI.md) for pipes, JSON, exit codes, and diagnostics.
 
 See the [interactive guide](docs/INTERACTIVE.md) for slash commands, skills, sources, and transcript exports.
+
+See the [terminal interface guide](docs/TERMINAL_UI.md) for editing, history, themes, shortcuts, badges, charts, and privacy.
 
 See [the detailed setup guide](docs/SETUP.md) for verification and troubleshooting.
 
@@ -161,7 +163,10 @@ The [documentation index](docs/README.md) links every setup and operations guide
 - Screen a complete NFL week for outdoor weather risk.
 - Combine a game, both teams, the venue, and kickoff weather.
 - Select focused skills for start-sit, waivers, weather, schedules, and other workflows.
-- Fill slash commands from a live keyboard menu inside the terminal.
+- Edit multiline prompts with cursor movement, word deletion, bracketed paste, and private history.
+- Search a categorized command palette with live context values and command effect previews.
+- Select contextual actions with the number keys.
+- Show persistent context, source freshness, tool duration, decision bars, and terminal charts.
 - Resolve and persist player and team identities across Sleeper and nflverse.
 - Store checked cache records and versioned source snapshots in SQLite.
 - Show source retrieval times, cache outcomes, and stale-data warnings.

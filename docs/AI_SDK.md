@@ -1,6 +1,26 @@
 # AI SDK integration guide
 
-Seb uses five AI SDK features to improve news research, analysis, context size, tool selection, and local debugging.
+Seb uses AI SDK features to improve news research, analysis, context size, tool selection, local debugging, and interactive streaming.
+
+## Interactive stream integration
+
+The AI SDK runner controls the message loop and chat transport.
+
+Seb supplies a local renderer through the runner renderer interface.
+
+The renderer reads public AI SDK UI message streams with `readUIMessageStream`.
+
+This design keeps the agent and transport behavior unchanged.
+
+It also gives Seb complete control over prompt editing and screen layout.
+
+The installed TUI release does not export the renderer hook from its public entry point.
+
+Seb pins `@ai-sdk/tui` to `1.0.72` and imports only the internal runner entry point.
+
+Seb never imports the private default terminal renderer.
+
+Review this adapter before every TUI dependency update.
 
 ## 1. Grounded current news
 

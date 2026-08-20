@@ -8,16 +8,18 @@ This design keeps current facts outside model memory.
 
 1. The command-line parser selects chat, ask, setup, doctor, cache, snapshot, replay, completion, help, or version mode.
 2. Interactive chat loads a season-only profile or creates one automatically.
-3. The transport runs a slash command locally or sends a normal question to the agent.
-4. `ToolLoopAgent` gives Gemini the read-only tools, grounded web tools, and active session instructions.
-5. Middleware adds valid input examples to each compatible data tool.
-6. An identity tool resolves ambiguous player or team identifiers when necessary.
-7. Gemini selects only the tools that the question needs.
-8. A source client reads a fresh SQLite cache record or requests the source.
-9. Google Search or URL Context returns current public reporting when necessary.
-10. A deterministic function calculates summaries and risk signals.
-11. Gemini explains the returned facts.
-12. The transport adds web sources and contextual next actions.
+3. The Seb renderer reads and edits the terminal prompt.
+4. The transport runs a slash command locally or sends a normal question to the agent.
+5. `ToolLoopAgent` gives Gemini the read-only tools, grounded web tools, and active session instructions.
+6. Middleware adds valid input examples to each compatible data tool.
+7. An identity tool resolves ambiguous player or team identifiers when necessary.
+8. Gemini selects only the tools that the question needs.
+9. A source client reads a fresh SQLite cache record or requests the source.
+10. Google Search or URL Context returns current public reporting when necessary.
+11. A deterministic function calculates summaries and risk signals.
+12. Gemini explains the returned facts.
+13. The transport adds web sources and contextual next actions.
+14. The Seb renderer draws the response, tool progress, badges, and supported charts.
 
 ## Agent harness
 
@@ -49,9 +51,13 @@ The second tool-free request converts that evidence into the validated schema.
 
 Seb formats that object into the compatible `answer` field.
 
-## Interactive transport
+## Interactive renderer and transport
 
-AI SDK TUI renders the terminal interface.
+AI SDK controls the message loop and calls the custom chat transport.
+
+Seb owns the terminal renderer.
+
+The renderer supplies prompt input, tool approval, stream display, and terminal cleanup.
 
 Seb supplies a custom `ChatTransport` around `DirectChatTransport`.
 
@@ -73,17 +79,25 @@ The `/commands` search uses local command metadata.
 
 The `/complete` command ranks local command and argument candidates.
 
-The terminal input adapter opens a live palette when the input starts with `/`.
+The renderer opens a live palette when the input starts with `/`.
 
-The palette reserves terminal rows and never overwrites the active input line.
+The renderer calculates the palette, transcript, header, and prompt rows together.
 
-Arrow keys change the selection. Tab and Right Arrow fill the selected value.
+Arrow keys change the selection. Tab fills the selected value.
 
-AI SDK TUI has no public prompt-completion hook in version `1.0.72`.
+AI SDK TUI has no public custom renderer hook in version `1.0.72`.
 
-Seb pins that exact version and adds a narrow input and screen adapter.
+Seb pins that exact version and uses only the internal runner entry point.
 
-Review this adapter before each TUI dependency update.
+Seb does not import the private AI SDK terminal renderer.
+
+The local renderer uses the public `readUIMessageStream` function.
+
+Review the runner adapter before each TUI dependency update.
+
+Pure editor, history, theme, and presentation modules contain most terminal behavior.
+
+Tests can verify those modules without a live terminal or model request.
 
 ## Session context
 

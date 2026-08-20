@@ -6,9 +6,21 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-08-20
+
 ### Added
 
 - A live slash-command palette with fuzzy matches and contextual argument values.
+- A multiline prompt editor with cursor movement, word deletion, bracketed paste, and prompt recall.
+- A private prompt history file with search, clearing, and an environment opt-out.
+- A categorized command palette with recent commands, active values, previews, and warnings.
+- Number-key selection for contextual suggestions.
+- Retry, edit, copy, open-source, history, shortcut, theme, and icon commands.
+- Persistent context and source-freshness badges.
+- Decision confidence bars and terminal charts for supported analysis fields.
+- Default, high-contrast, compact, no-color, Unicode, and ASCII display modes.
+- OSC 8 source links and OSC 52 clipboard support.
+- Friendly model and tool progress with elapsed times.
 - Interactive Sleeper league and roster discovery commands.
 - Gemini Google Search and URL Context tools for current public reporting.
 - The Gemini Interactions endpoint for grounded source records.
@@ -24,6 +36,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Model middleware now gives each data tool valid input examples.
 - The command line, interactive interface, and connectors now show grounded web sources.
 - The agent now treats tool results and web pages as untrusted data.
+- Seb now owns the terminal renderer while the AI SDK controls the agent transport and message loop.
+- Interactive setup remains team-independent until the user selects session context.
 
 ## [0.0.2] - 2026-08-20
 

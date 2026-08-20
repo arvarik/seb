@@ -50,6 +50,8 @@ import {
   type SessionState,
 } from './session.js';
 import { findSkill, formatSkillList, getSkill } from './skills.js';
+import { sourceBadge } from './presentation.js';
+import { InteractiveUiState } from './ui-state.js';
 
 type SebAgent = ReturnType<typeof createFantasyFootballAgent>;
 
@@ -64,6 +66,7 @@ export interface SebInteractiveTransportOptions {
   profileStore?: SetupProfileStore;
   version: string;
   weather: WeatherClient;
+  uiState?: InteractiveUiState;
 }
 
 export class SebInteractiveTransport implements ChatTransport<UIMessage> {
@@ -71,9 +74,11 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   private readonly delegate: ChatTransport<UIMessage>;
   private readonly options: SebInteractiveTransportOptions;
   private readonly profileStore: SetupProfileStore;
+  private readonly uiState: InteractiveUiState;
 
   constructor(options: SebInteractiveTransportOptions) {
     this.options = options;
+    this.uiState = options.uiState ?? new InteractiveUiState();
     this.profileStore = options.profileStore ?? new FileSetupProfileStore({
       environment: options.environment,
     });
@@ -96,7 +101,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       } catch (error) {
         response = `Command error: ${errorMessage(error)}`;
       }
-      return localTextStream(withSuggestions(response, this.options.session));
+      return localTextStream(withSuggestions(response, this.options.session, this.uiState));
     }
 
     const stream = await this.delegate.sendMessages({
@@ -107,6 +112,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       stream,
       this.options.session,
       this.options.sources,
+      this.uiState,
     );
   }
 
@@ -145,11 +151,14 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     const [rawName, ...arguments_] = input.slice(1).trim().split(/\s+/);
     const name = rawName?.toLowerCase() ?? '';
     const state = this.options.session;
+    if (name) this.uiState.recordCommand(name);
 
     switch (name) {
       case 'help':
       case '?':
         return INTERACTIVE_HELP;
+      case 'shortcuts':
+        return SHORTCUT_HELP;
       case 'commands':
         return formatCommandCatalog(arguments_.join(' '));
       case 'complete':
@@ -173,6 +182,10 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         state.skillId = skill.id;
         return `The active skill is now \`${skill.id}\`. ${skill.description}`;
       }
+      case 'retry':
+        return 'The Seb terminal runs `/retry` immediately. Use the latest prompt again in connectors.';
+      case 'edit':
+        return 'The Seb terminal places the latest model prompt in the editor.';
       case 'season': {
         const value = arguments_[0];
         const season = value === 'current'
@@ -279,9 +292,15 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           '## Recent data sources',
           '',
           ...sources.map(
-            (source) => formatSourceRecord(source),
+            (source, index) => formatSourceRecord(source, index + 1),
           ),
         ].join('\n');
+      }
+      case 'open': {
+        const index = validInteger(arguments_[0], 1, 1_000, 'source number');
+        const source = this.options.sources.list()[index - 1];
+        if (!source) throw new Error(`Seb found no source ${index}. Run /sources.`);
+        return `Source ${index}: [${source.label}](${source.url}) · ${sourceBadge(source)}`;
       }
       case 'devtools': {
         const enabled = ['1', 'true'].includes(
@@ -375,6 +394,16 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         state.contextAfterMessageId = messageId;
         this.options.sources.clear();
         return 'Seb started a new model context. The terminal keeps the visible transcript.';
+      case 'history':
+        return arguments_[0] === 'clear'
+          ? 'Run `/history clear` in the Seb terminal to delete its private prompt history.'
+          : 'Run `/history` in the Seb terminal to view its private prompt history.';
+      case 'copy':
+        return 'Run `/copy` in the Seb terminal to copy the latest answer with OSC 52.';
+      case 'theme':
+        return 'Use `/theme default`, `/theme high-contrast`, or `/theme compact` in the Seb terminal.';
+      case 'icons':
+        return 'Use `/icons unicode` or `/icons ascii` in the Seb terminal.';
       case 'save':
       case 'export': {
         const saved = await saveTranscript(messages, arguments_[0], arguments_[1]);
@@ -470,6 +499,24 @@ export const INTERACTIVE_HELP = `${formatCommandCatalog()}
 
 Press Escape or Ctrl+C to exit.`;
 
+export const SHORTCUT_HELP = `## Keyboard shortcuts
+
+- \`Ctrl+K\`: Open the command palette.
+- \`?\`: Open the shortcut guide from an empty prompt.
+- \`Tab\`: Fill the selected command.
+- \`1\`, \`2\`, or \`3\`: Select a contextual suggestion.
+- \`Left\` and \`Right\`: Move the cursor.
+- \`Option+Left\` and \`Option+Right\`: Move by one word.
+- \`Ctrl+A\` and \`Ctrl+E\`: Move to the start or end.
+- \`Ctrl+W\`: Delete the prior word.
+- \`Ctrl+U\`: Delete to the start.
+- \`Alt+Enter\`: Insert a new line.
+- \`Up\` and \`Down\`: Read prompt history.
+- \`Ctrl+R\`: Search prompt history.
+- \`Page Up\` and \`Page Down\`: Scroll the transcript.
+- \`Escape\`: Close a panel or stop the current request.
+- \`Ctrl+C\`: Exit Seb.`;
+
 function localTextStream(text: string): ReadableStream<UIMessageChunk> {
   const textId = `local-${crypto.randomUUID()}`;
   return createUIMessageStream<UIMessage>({
@@ -490,6 +537,7 @@ function appendContextualSuggestions(
   stream: ReadableStream<UIMessageChunk>,
   state: SessionState,
   sources: SourceTracker,
+  uiState: InteractiveUiState,
 ): ReadableStream<UIMessageChunk> {
   const webSources = new Map<string, { title?: string; url: string }>();
   return stream.pipeThrough(
@@ -510,6 +558,7 @@ function appendContextualSuggestions(
           }
         }
         if (chunk.type === 'finish') {
+          uiState.sources = sources.list();
           if (webSources.size > 0) {
             const sourceId = `sources-${crypto.randomUUID()}`;
             controller.enqueue({ type: 'start-step' });
@@ -526,6 +575,7 @@ function appendContextualSuggestions(
           }
           const id = `suggestion-${crypto.randomUUID()}`;
           const suggestions = getContextualSuggestions(state).slice(0, 3);
+          uiState.suggestions = suggestions;
           controller.enqueue({ type: 'start-step' });
           controller.enqueue({ type: 'text-start', id });
           controller.enqueue({
@@ -546,11 +596,16 @@ function markdownLabel(value: string): string {
   return value.replace(/[\[\]]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-function withSuggestions(text: string, state: SessionState): string {
+function withSuggestions(
+  text: string,
+  state: SessionState,
+  uiState: InteractiveUiState,
+): string {
+  const suggestions = getContextualSuggestions(state);
+  uiState.suggestions = suggestions.slice(0, 3);
   if (text.includes('## Suggested next actions')) {
     return text;
   }
-  const suggestions = getContextualSuggestions(state);
   return `${text}\n\nTry next: ${suggestions.join(' · ')}`;
 }
 
@@ -561,7 +616,7 @@ function messageText(message: UIMessage): string {
     .join('\n');
 }
 
-function formatSourceRecord(source: DataSourceRecord): string {
+function formatSourceRecord(source: DataSourceRecord, index: number): string {
   const cache = source.cacheOutcome
     ? source.cacheOutcome.replace(/-/g, ' ')
     : 'source access';
@@ -569,7 +624,7 @@ function formatSourceRecord(source: DataSourceRecord): string {
   const warning = source.cacheOutcome === 'stale-if-error'
     ? ` Warning: Seb used stale data because the refresh failed${source.error ? ` (${source.error})` : ''}.`
     : '';
-  return `- [${source.label}](${source.url}) · ${cache} · retrieved ${retrieved}.${warning}`;
+  return `${index}. [${source.label}](${source.url}) · ${sourceBadge(source)} · ${cache} · retrieved ${retrieved}.${warning}`;
 }
 
 function formatProvenance(value: unknown, snapshotId: string): string {

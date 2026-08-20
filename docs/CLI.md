@@ -105,22 +105,27 @@ Start the full terminal interface.
 seb
 ```
 
-The interface keeps the conversation until you exit. It renders Markdown and data tool activity.
+The interface keeps the conversation until you exit. It renders Markdown, context badges, sources, charts, and data tool activity.
 
 Use these controls.
 
 | Key | Action |
 | --- | --- |
 | `Enter` | Send the current question. |
-| `/` | Open live slash-command suggestions. |
-| `Up` and `Down` | Select a command when the menu is open. Otherwise, scroll. |
-| `Tab` or `Right Arrow` | Fill the selected command or argument. |
+| `Ctrl+K` or `/` | Open the command palette. |
+| `Up` and `Down` | Select a command or read prompt history. |
+| `Tab` | Fill the selected command or argument. |
+| `Left` and `Right` | Move the prompt cursor. |
+| `Option+Left` and `Option+Right` | Move the cursor by one word. |
+| `Alt+Enter` | Insert a new prompt line. |
+| `Ctrl+R` | Search private prompt history. |
+| `1`, `2`, or `3` | Select a contextual action. |
 | `PageUp` and `PageDown` | Scroll one page. |
 | `Ctrl+L` | Repaint the terminal. |
-| `Escape` | Close the command menu. Press it again to exit. |
+| `Escape` | Close a panel or stop the current request. |
 | `Ctrl+C` | Exit Seb. |
 
-The interface expands the active tool card. It collapses older tool cards to reduce noise.
+The interface animates only active work. It keeps each completed tool on one compact row.
 
 Seb hides model reasoning by default. It shows a compact reasoning card when the provider returns reasoning.
 
@@ -129,6 +134,8 @@ Run `/help` inside the interface. Local commands do not call Gemini.
 Use `/leagues USER`, `/rosters LEAGUE_ID`, and `/team CODE` for optional context.
 
 Use the [interactive guide](INTERACTIVE.md) for every command and skill.
+
+Use the [terminal interface guide](TERMINAL_UI.md) for editing, themes, history, accessibility, and terminal compatibility.
 
 ## Ask one question
 

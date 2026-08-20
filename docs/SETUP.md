@@ -41,7 +41,7 @@ GOOGLE_GENERATIVE_AI_API_KEY=your-key
 Add a contact value to the NWS user agent.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.0.2 (you@example.com)
+NWS_USER_AGENT=seb/0.0.3 (you@example.com)
 ```
 
 The default value identifies the public Seb repository. A direct contact value helps the NWS contact you about request problems.
@@ -55,6 +55,22 @@ SEB_DEVTOOLS=false
 ```
 
 DevTools records complete prompts and tool data when you enable it.
+
+Optional terminal settings select a theme, symbol set, and history policy.
+
+```dotenv
+SEB_THEME=default
+SEB_ICONS=unicode
+SEB_HISTORY=true
+```
+
+Use `high-contrast` or `compact` for the theme.
+
+Use `ascii` when the terminal cannot display Unicode symbols.
+
+Set `SEB_HISTORY=false` to prevent disk history.
+
+Read the [terminal interface guide](TERMINAL_UI.md) for every setting and file path.
 
 ## 3. Verify the public data sources
 
@@ -170,7 +186,7 @@ npm run ask -- "Find the Sleeper user arvind and list the user's 2026 NFL league
 
 Interactive chat can discover and select context without changing the setup profile.
 
-Type `/` to open the command menu.
+Press `Ctrl+K` or type `/` to open the command palette.
 
 Discover a user's leagues.
 

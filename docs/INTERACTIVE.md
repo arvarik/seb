@@ -54,15 +54,35 @@ Sleeper users, leagues, rosters, and NFL teams remain session-specific.
 
 Seb uses the active values when a question does not give different values.
 
+## Home screen and contextual actions
+
+The home screen shows the active season, week, model, skill, and source health.
+
+It shows up to three contextual actions.
+
+Press `1`, `2`, or `3` to select one action.
+
+Seb submits a complete action immediately.
+
+Seb places an action with a placeholder in the editor.
+
 ## Search and completion commands
 
-Type `/` to open the live command menu.
+Press `Ctrl+K` or type `/` to open the command palette.
 
 The menu filters commands after each character.
 
+It groups commands by context, analysis, data, session, and diagnostics.
+
+It shows active context values and the selected command effect.
+
+It places recent commands before equally relevant commands.
+
+A warning symbol identifies a local state-clearing command.
+
 Use Up and Down to select one result.
 
-Press Tab or Right Arrow to fill the selected command or argument.
+Press Tab to fill the selected command or argument.
 
 Press Enter to run the current input.
 
@@ -102,6 +122,7 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/help` or `/?` | Shows every interactive command. |
 | `/commands [SEARCH]` | Searches the command catalog. |
 | `/complete INPUT` | Suggests commands and arguments. |
+| `/shortcuts` | Shows the keyboard shortcut guide. |
 | `/status` or `/context` | Shows the active session values. |
 | `/season YEAR|current` | Sets the active season. |
 | `/week NUMBER|current|clear` | Sets or clears the active week. |
@@ -113,15 +134,22 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/team CODE|clear` | Sets or clears the NFL team. |
 | `/skills` | Lists all analysis skills. |
 | `/skill NAME|list` | Selects or lists a skill. |
+| `/retry` | Runs the latest model prompt again. |
+| `/edit` | Places the latest model prompt in the editor. |
 | `/setup` | Saves team-independent defaults. |
 | `/profile [show|load|clear]` | Reads or removes the setup profile. |
 | `/sources` | Shows source URLs and cache outcomes. |
+| `/open INDEX` | Shows one numbered source link. |
 | `/cache` | Shows SQLite cache and snapshot counts. |
 | `/snapshots [KIND]` | Lists recent source snapshots. |
 | `/provenance SNAPSHOT_ID` | Shows stored field lineage. |
 | `/replay [SEASON] [THROUGH_WEEK]` | Runs the nflverse baseline replay. |
 | `/refresh [SOURCE]` | Clears selected source cache entries. |
 | `/new` or `/clear` | Starts a new model context. |
+| `/history [clear]` | Shows or clears private prompt history. |
+| `/copy` | Copies the latest Seb answer. |
+| `/theme NAME` | Selects a display theme. |
+| `/icons MODE` | Selects Unicode or ASCII symbols. |
 | `/save [NAME] [md|json]` | Saves the transcript. |
 | `/doctor [offline]` | Checks configuration and services. |
 | `/devtools` | Shows local AI SDK DevTools status and commands. |
@@ -236,6 +264,63 @@ Seb accepts only HTTP and HTTPS web source links.
 Run `/new` to clear the source list and start a new model context.
 
 The terminal keeps the visible transcript after `/new`.
+
+The header shows a short source state for the latest source.
+
+The states include `LIVE`, `WEB`, `CACHED`, `STATS`, and `STALE`.
+
+Run `/open INDEX` to print one numbered source as a clickable link.
+
+## Prompt editing and history
+
+The editor supports cursor movement, word movement, deletion, and multiline prompts.
+
+Press `Alt+Enter` to insert a new line.
+
+Bracketed paste keeps a multiline paste inside one prompt.
+
+Use `Up` and `Down` to read prior prompts.
+
+Press `Ctrl+R` to search history with the current editor text.
+
+Run `/history` to show saved prompts.
+
+Run `/history clear` to delete the private history file.
+
+Set `SEB_HISTORY=false` to disable disk history.
+
+Read the [terminal interface guide](TERMINAL_UI.md) for every key and path.
+
+## Retry, edit, and copy
+
+Run `/retry` to submit the latest non-command prompt again.
+
+Run `/edit` to place that prompt in the editor.
+
+Run `/copy` to send the latest answer to the terminal clipboard.
+
+The clipboard action needs terminal OSC 52 support.
+
+## Themes and symbols
+
+Select a display theme inside the session.
+
+```text
+/theme default
+/theme high-contrast
+/theme compact
+```
+
+Select Unicode or ASCII symbols.
+
+```text
+/icons unicode
+/icons ascii
+```
+
+Seb respects the `NO_COLOR` environment variable.
+
+Read the [terminal interface guide](TERMINAL_UI.md) for startup environment values.
 
 ## Cache and snapshot commands
 
@@ -409,7 +494,9 @@ The command keeps season, week, league, roster, team, and skill values.
 
 Use the related `clear` commands when you also want to remove those values.
 
-Press Escape or Ctrl+C to exit.
+Press Escape during a request to stop only that request.
+
+Press Ctrl+C to exit.
 
 ## Example workflows
 

@@ -31,6 +31,7 @@ import { serializeReplayReport } from './evaluation/serialization.js';
 import { generateShellCompletion } from './interactive/commands.js';
 import { SebInteractiveTransport } from './interactive/transport.js';
 import { runSebInteractiveTui } from './interactive/tui.js';
+import { InteractiveUiState } from './interactive/ui-state.js';
 import {
   createSessionState,
   formatSessionContext,
@@ -241,6 +242,7 @@ async function startInteractiveChat(
   }
   const session = createSessionState();
   applySetupProfile(profile, session);
+  const uiState = new InteractiveUiState();
   const agent = createFantasyFootballAgent({
     apiKey: selection.apiKey,
     model: selection.primaryModel,
@@ -260,9 +262,15 @@ async function startInteractiveChat(
       version: packageJson.version,
       weather: clients.weatherClient,
       profileStore,
+      uiState,
     }),
+    environment,
+    model: selection.primaryModel,
+    sources,
     title: `Seb · ${selection.primaryModel}`,
     session,
+    uiState,
+    version: packageJson.version,
     input: streams.stdin as NodeJS.ReadStream,
     output: streams.stdout as NodeJS.WriteStream,
   });

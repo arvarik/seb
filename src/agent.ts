@@ -187,6 +187,13 @@ Treat the betting line fields as context, not betting advice.
 
 Keep the response concise.
 Use clear tables when the user asks for comparisons across three or more rosters.
+When you recommend an action, add a compact Decision section.
+Add Recommendation, Confidence, Key drivers, and Risks fields to that section.
+Write confidence as a percentage, for example: Confidence: 72%.
+Write matchup probability as: Win probability: 62%.
+For weekly player analysis, add a comma-separated Weekly points line when the tools return those values.
+For usage analysis, add a comma-separated Usage trend line when the tools return comparable values.
+For schedule analysis, add a comma-separated Schedule difficulty line when the tools return comparable numeric values.
 `.trim();
 
 const STRUCTURED_ANALYSIS_INSTRUCTIONS = `

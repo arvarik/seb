@@ -23,18 +23,23 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(terminal.input.rawModes).toContain(true);
   });
 
-  it('recalls history and selects a numbered suggestion', async () => {
+  it('recalls history', async () => {
     const history = new MemoryPromptHistory(['older prompt']);
-    const uiState = new InteractiveUiState();
-    uiState.suggestions = ['Compare these players'];
     const terminal = createTerminal();
-    const renderer = createRenderer(terminal, history, uiState);
+    const renderer = createRenderer(terminal, history);
     const recalled = renderer.readPrompt();
 
     terminal.input.type('\x1b[A\r');
     await expect(recalled).resolves.toBe('older prompt');
+  });
 
+  it('selects a numbered suggestion on the first prompt', async () => {
+    const uiState = new InteractiveUiState();
+    uiState.suggestions = ['Compare these players'];
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), uiState);
     const selected = renderer.readPrompt();
+
     terminal.input.type('1');
     await expect(selected).resolves.toBe('Compare these players');
   });
@@ -65,9 +70,9 @@ describe('SebTerminalRenderer prompt input', () => {
 
     terminal.input.type('\x1b[<64;10;5M');
 
-    expect(terminal.output.text().split('\x1b[H').at(-1)).toContain(
-      'Viewing earlier transcript',
-    );
+    const frame = terminal.output.text().split('\x1b[H').at(-1);
+    expect(frame).toContain('Viewing earlier transcript');
+    expect(frame).toContain('1 line above latest');
     terminal.input.type('new request\r');
     await expect(prompt).resolves.toBe('new request');
     expect(terminal.output.text()).toContain('\x1b[?1000h\x1b[?1006h');
@@ -90,6 +95,23 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(frame).toContain('3  Find verified news about Derrick Henry.');
     terminal.input.type('\u0003');
     await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
+  it('hides suggestions after the first submitted prompt', async () => {
+    const uiState = new InteractiveUiState();
+    uiState.suggestions = ['Compare these players'];
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), uiState);
+    const firstPrompt = renderer.readPrompt();
+
+    terminal.input.type('My first prompt\r');
+    await expect(firstPrompt).resolves.toBe('My first prompt');
+
+    const secondPrompt = renderer.readPrompt();
+    const frame = terminal.output.text().split('\x1b[H').at(-1);
+    expect(frame).not.toContain('Compare these players');
+    terminal.input.type('\u0003');
+    await expect(secondPrompt).rejects.toThrow('Interrupted');
   });
 
   it('opens the command palette and copies the latest answer', async () => {
@@ -270,7 +292,7 @@ function createRenderer(
     session: createSessionState(new Date('2026-08-20T12:00:00Z')),
     sources: new SourceTracker(),
     uiState,
-    version: '0.0.5',
+    version: '0.0.6',
   });
 }
 

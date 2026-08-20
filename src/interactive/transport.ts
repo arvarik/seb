@@ -126,7 +126,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           ...options,
           messages: this.modelMessages(options.messages),
         });
-        return appendContextualSuggestions(
+        return decorateResponseStream(
           stream,
           this.options.session,
           this.options.sources,
@@ -145,7 +145,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         ...options,
         messages: this.modelMessages(options.messages),
       });
-      return appendContextualSuggestions(
+      return decorateResponseStream(
         stream,
         this.options.session,
         this.options.sources,
@@ -160,7 +160,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       } catch (error) {
         response = `Command error: ${errorMessage(error)}`;
       }
-      return localTextStream(withSuggestions(response, this.options.session, this.uiState));
+      return localTextStream(recordSuggestions(response, this.options.session, this.uiState));
     }
 
     if (text) {
@@ -170,7 +170,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       ...options,
       messages: this.modelMessages(options.messages),
     });
-    return appendContextualSuggestions(
+    return decorateResponseStream(
       stream,
       this.options.session,
       this.options.sources,
@@ -202,8 +202,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       skipNextAssistant = false;
       const skillPrompt = this.skillPromptByMessageId.get(message.id);
       const modelMessage = skillPrompt ? replaceMessageText(message, skillPrompt) : message;
-      const sanitized = sanitizeModelMessage(modelMessage);
-      if (sanitized.parts.length > 0) filtered.push(sanitized);
+      if (modelMessage.parts.length > 0) filtered.push(modelMessage);
     }
     return filtered;
   }
@@ -531,6 +530,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         state.skillId = 'general';
         state.team = null;
         this.options.sources.clear();
+        this.uiState.showSuggestions = true;
         return 'Seb started a new Explore context. It kept the automatic NFL state and Sleeper account.';
       case 'history':
         return arguments_[0]?.toLowerCase() === 'clear'
@@ -701,7 +701,7 @@ function localTextStream(text: string): ReadableStream<UIMessageChunk> {
   });
 }
 
-function appendContextualSuggestions(
+function decorateResponseStream(
   stream: ReadableStream<UIMessageChunk>,
   state: SessionState,
   sources: SourceTracker,
@@ -744,18 +744,8 @@ function appendContextualSuggestions(
             controller.enqueue({ type: 'text-end', id: sourceId });
             controller.enqueue({ type: 'finish-step' });
           }
-          const id = `suggestion-${crypto.randomUUID()}`;
           const suggestions = getContextualSuggestions(state).slice(0, 3);
           uiState.suggestions = suggestions;
-          controller.enqueue({ type: 'start-step' });
-          controller.enqueue({ type: 'text-start', id });
-          controller.enqueue({
-            type: 'text-delta',
-            id,
-            delta: `\n\nTry next: ${suggestions.join(' · ')}`,
-          });
-          controller.enqueue({ type: 'text-end', id });
-          controller.enqueue({ type: 'finish-step' });
         }
         controller.enqueue(chunk);
       },
@@ -767,17 +757,14 @@ function markdownLabel(value: string): string {
   return value.replace(/[\[\]]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-function withSuggestions(
+function recordSuggestions(
   text: string,
   state: SessionState,
   uiState: InteractiveUiState,
 ): string {
   const suggestions = getContextualSuggestions(state);
   uiState.suggestions = suggestions.slice(0, 3);
-  if (text.includes('## Suggested next actions')) {
-    return text;
-  }
-  return `${text}\n\nTry next: ${suggestions.join(' · ')}`;
+  return text;
 }
 
 function messageText(message: UIMessage): string {
@@ -795,27 +782,6 @@ function replaceMessageText(message: UIMessage, text: string): UIMessage {
       ...message.parts.filter((part) => part.type !== 'text'),
     ],
   };
-}
-
-function sanitizeModelMessage(message: UIMessage): UIMessage {
-  if (message.role !== 'assistant') return message;
-  const parts: UIMessage['parts'] = [];
-  for (const part of message.parts) {
-    if (part.type !== 'text') {
-      parts.push(part);
-      continue;
-    }
-    const text = stripSuggestionText(part.text);
-    if (text) parts.push({ ...part, text });
-  }
-  return {
-    ...message,
-    parts,
-  };
-}
-
-function stripSuggestionText(value: string): string {
-  return value.replace(/(?:^|\n\n)Try next: [^\n]+\s*$/u, '').trim();
 }
 
 function experienceModeForCommand(

@@ -1,6 +1,6 @@
 # Terminal interface guide
 
-Seb `0.0.5` includes a local terminal renderer for interactive research.
+Seb `0.0.6` includes a local terminal renderer for interactive research.
 
 The AI SDK still controls the agent message loop and tool transport.
 
@@ -23,7 +23,9 @@ My Fantasy uses one optional Sleeper username.
 
 Analyze continues from the active subject with comparison and decision context.
 
-It also shows up to three useful next actions.
+The first prompt shows up to three useful next actions.
+
+The `/new` and `/clear` commands show these actions again.
 
 Press `1`, `2`, or `3` to select one action.
 
@@ -153,6 +155,8 @@ Replace `1` with another number from `/sources`.
 
 Seb emits OSC 8 links when the terminal supports terminal links.
 
+Seb makes Markdown links, angle-bracket links, and bare HTTP URLs clickable.
+
 Seb prints a normal URL when terminal links are unavailable.
 
 ## Read the header
@@ -235,6 +239,8 @@ Run `/exit`, `/quit`, or `/q` from the prompt to exit Seb.
 Use `Page Up` and `Page Down` to scroll the transcript.
 
 Use the mouse wheel or a trackpad gesture to scroll the transcript.
+
+Each wheel event moves one transcript row.
 
 The footer shows when the screen displays earlier transcript rows.
 

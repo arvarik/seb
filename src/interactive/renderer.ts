@@ -307,8 +307,8 @@ export class SebTerminalRenderer {
       case 'down': this.recallHistory(-1); break;
       case 'page-up': this.scroll(8); break;
       case 'page-down': this.scroll(-8); break;
-      case 'scroll-up': this.scroll(3); break;
-      case 'scroll-down': this.scroll(-3); break;
+      case 'scroll-up': this.scroll(1); break;
+      case 'scroll-down': this.scroll(-1); break;
       case 'ctrl-r': this.reverseSearch(); break;
       case 'ctrl-k': this.menuOpen = true; if (!this.editor.text()) this.editor.set('/'); break;
       case 'ctrl-l': this.paint(true); return;
@@ -429,6 +429,7 @@ export class SebTerminalRenderer {
     resolve: (value: string | undefined) => void,
   ): Promise<void> {
     this.scrollOffset = 0;
+    this.options.uiState.showSuggestions = false;
     try {
       await this.options.history.add(prompt);
     } catch (error) {
@@ -461,7 +462,7 @@ export class SebTerminalRenderer {
     } else if (key.type === 'page-down' || key.type === 'down') {
       this.scroll(key.type === 'page-down' ? -8 : -1);
     } else if (key.type === 'scroll-up' || key.type === 'scroll-down') {
-      this.scroll(key.type === 'scroll-up' ? 3 : -3);
+      this.scroll(key.type === 'scroll-up' ? 1 : -1);
     } else if (key.type === 'ctrl-l') {
       this.paint(true);
     }
@@ -476,10 +477,8 @@ export class SebTerminalRenderer {
     for (const [index, part] of message.parts.entries()) {
       const id = `${message.id}:${index}`;
       if (part.type === 'text' && part.text.trim()) {
-        const content = stripSuggestionFooter(part.text);
-        if (!content) continue;
         active.add(id);
-        this.upsert({ content, id, kind: 'assistant', title: 'Seb' });
+        this.upsert({ content: part.text, id, kind: 'assistant', title: 'Seb' });
       } else if (isToolUIPart(part)) {
         active.add(id);
         const state = part.state;
@@ -529,7 +528,7 @@ export class SebTerminalRenderer {
       .map((part) => part.text)
       .join('\n\n')
       .trim();
-    if (answer) this.options.uiState.latestAnswer = stripSuggestionFooter(answer);
+    if (answer) this.options.uiState.latestAnswer = answer;
   }
 
   private menuCompletions() {
@@ -709,7 +708,7 @@ export class SebTerminalRenderer {
       lines.push(paint(this.theme, color, `${section.kind === 'assistant' ? symbol(this.theme, 'assistant') : symbol(this.theme, 'bullet')} ${section.title}`));
       const rendered = section.kind === 'assistant'
         ? renderAnalysisText(
-          stripSuggestionFooter(section.content),
+          section.content,
           this.theme,
           Math.max(20, width - 2),
         )
@@ -726,12 +725,13 @@ export class SebTerminalRenderer {
     const menu = this.menuOpen || this.editor.text().startsWith('/')
       ? this.renderMenu(width)
       : [];
-    const suggestions = !this.editor.text() && menu.length === 0
+    const suggestions = this.options.uiState.showSuggestions &&
+      !this.editor.text() && menu.length === 0
       ? this.suggestions()
       : [];
     const promptLines = renderEditor(this.editor, width - 4, this.theme);
     const status = this.scrollOffset > 0
-      ? `Viewing earlier transcript · ${this.scrollOffset} lines above latest · scroll down to return`
+      ? `Viewing earlier transcript · ${this.scrollOffset} ${this.scrollOffset === 1 ? 'line' : 'lines'} above latest · scroll down to return`
       : this.status;
     return [
       ...menu,
@@ -882,8 +882,4 @@ function toReadableStream<T>(source: AsyncIterable<T> | ReadableStream<T>): Read
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function stripSuggestionFooter(value: string): string {
-  return value.replace(/(?:^|\n\n)Try next: [^\n]+\s*$/u, '').trim();
 }

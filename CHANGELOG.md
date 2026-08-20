@@ -6,6 +6,22 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-08-20
+
+### Changed
+
+- Mouse and trackpad wheel events now move the transcript by one row for smoother reading.
+- Contextual actions now appear only on the first prompt and after `/new` or `/clear`.
+- The `/next` command still shows contextual actions at any time.
+
+### Fixed
+
+- Markdown links, angle-bracket links, and bare HTTP URLs now remain clickable after line wrapping.
+- Long linked URLs now fit the terminal width without losing their link target.
+- Wrapped styled text now keeps its terminal formatting.
+- Terminals without link support now print each bare URL once.
+- The renderer no longer removes a legitimate final paragraph that starts with `Try next:`.
+
 ## [0.0.5] - 2026-08-20
 
 ### Added

@@ -202,7 +202,7 @@ Start complex data with a short labeled summary.
 Group related metrics under clear Markdown headings.
 Keep each table focused on related fields.
 Use lists for supporting facts that do not need row-by-row comparison.
-Do not add follow-up suggestions. The interface adds complete standalone suggestions.
+Do not add follow-up suggestions. The interface shows actions on the first prompt and after a session clear.
 When you recommend an action, add a compact Decision section.
 Add Recommendation, Confidence, Key drivers, and Risks fields to that section.
 Write confidence as a percentage, for example: Confidence: 72%.

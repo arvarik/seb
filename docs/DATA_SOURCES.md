@@ -34,7 +34,7 @@ nflverse remains authoritative for historical schedules and statistics.
 
 The NWS remains authoritative for United States forecasts and alerts.
 
-Seb does not store a persistent news index in version 0.0.5.
+Seb does not store a persistent news index in version 0.0.6.
 
 It records validated web source links for the active answer and session.
 
@@ -157,7 +157,7 @@ The NWS requires a user agent that identifies the application.
 Set `NWS_USER_AGENT` to an application name and contact value.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.0.5 (you@example.com)
+NWS_USER_AGENT=seb/0.0.6 (you@example.com)
 ```
 
 Seb performs three request types.

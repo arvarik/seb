@@ -20,7 +20,7 @@ This design keeps current facts outside model memory.
 12. Google Search or URL Context returns current public reporting when necessary.
 13. A deterministic function calculates summaries and risk signals.
 14. Gemini explains the returned facts.
-15. The transport adds web sources and contextual next actions.
+15. The transport adds validated web sources and records contextual actions.
 16. The Seb renderer draws the response, responsive tables, record cards, tool progress, badges, and supported charts.
 
 ## Agent harness
@@ -77,11 +77,9 @@ It removes local command messages from later model context.
 
 It also supports a `/new` model-context boundary.
 
-The transport appends contextual suggestions as UI stream parts.
+The transport records contextual actions for the renderer.
 
 The transport records the active player from compatible tool input.
-
-It removes synthetic suggestion text before the next model request.
 
 The transport also appends validated grounded web sources.
 
@@ -97,7 +95,9 @@ The renderer calculates the palette, transcript, header, and prompt rows togethe
 
 The renderer enables terminal mouse reporting for transcript scrolling.
 
-It renders each contextual suggestion on a separate footer row.
+It renders each contextual action on a separate footer row.
+
+It shows these rows on the first prompt and after `/new` or `/clear`.
 
 Arrow keys change the selection. Tab fills the selected value.
 

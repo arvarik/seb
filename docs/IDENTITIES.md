@@ -102,7 +102,7 @@ The agent uses these tools when a name can map to several source identifiers.
 
 ## SQLite persistence
 
-Version `0.0.5` stores resolved player and team identities in SQLite.
+Version `0.0.6` stores resolved player and team identities in SQLite.
 
 The `identities` table stores the entity type, canonical ID, checked payload, and update time.
 

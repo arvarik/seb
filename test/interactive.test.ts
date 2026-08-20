@@ -24,6 +24,7 @@ import {
   INTERACTIVE_HELP,
   SebInteractiveTransport,
 } from '../src/interactive/transport.js';
+import { InteractiveUiState } from '../src/interactive/ui-state.js';
 import { NflverseClient } from '../src/nflverse/client.js';
 import { SleeperClient } from '../src/sleeper/client.js';
 import { SourceTracker } from '../src/sources.js';
@@ -202,13 +203,7 @@ describe('SebInteractiveTransport', () => {
       {
         id: 'assistant-1',
         role: 'assistant',
-        parts: [
-          { type: 'text', text: 'Player profile.' },
-          {
-            type: 'text',
-            text: '\n\nTry next: Show more about him. · Look deeper into his stats.',
-          },
-        ],
+        parts: [{ type: 'text', text: 'Player profile.' }],
       },
       {
         id: 'message-2',
@@ -223,7 +218,6 @@ describe('SebInteractiveTransport', () => {
     expect(session.skillId).toBe('player-info');
     expect(followUpPrompt).toContain('Derrick Henry');
     expect(followUpPrompt).toContain('Player profile.');
-    expect(followUpPrompt).not.toContain('Try next:');
     expect(followUpPrompt).not.toContain('/skill player-info');
   });
 
@@ -286,7 +280,7 @@ describe('SebInteractiveTransport', () => {
     expect(completion).toContain('/skill weather-watch');
     expect(devtools).toContain('disabled');
     expect(devtools).toContain('npm run devtools');
-    expect(currentWeek).toContain('Week 2 kickoff weather');
+    expect(currentWeek).toBe('The active NFL week is now 2.');
     expect(currentStatus).toContain('NFL now: 2026 pre, Week 2');
     expect(extraArguments).toContain('Command error: Use /help.');
   });
@@ -320,7 +314,7 @@ describe('SebInteractiveTransport', () => {
     expect(alias).toContain('Source 1: [Test source](https://example.test/data)');
   });
 
-  it('adds contextual suggestions after a streamed model answer', async () => {
+  it('adds web sources without repeating suggestions after a streamed answer', async () => {
     const model = new MockLanguageModelV4({
       doStream: {
         stream: simulateReadableStream({
@@ -376,9 +370,36 @@ describe('SebInteractiveTransport', () => {
     expect(output).toContain('Model answer.');
     expect(output).toContain('## Web sources');
     expect(output).toContain('[NFL report](<https://example.com/nfl-report>)');
-    expect(output).toContain('Try next:');
+    expect(output).not.toContain('Try next:');
     expect(sources.list()[0]?.label).toBe('NFL report');
     expect(model.doStreamCalls).toHaveLength(1);
+  });
+
+  it('shows suggestions again when the user clears the session', async () => {
+    const clients = dataClients();
+    const uiState = new InteractiveUiState();
+    uiState.showSuggestions = false;
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({
+        languageModel: new MockLanguageModelV4({}),
+        ...clients,
+      }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      uiState,
+      version: '0.0.6',
+      weather: clients.weatherClient,
+    });
+
+    const output = await sendCommand(transport, '/clear', 'message-clear');
+
+    expect(uiState.showSuggestions).toBe(true);
+    expect(uiState.suggestions).toHaveLength(3);
+    expect(output).not.toContain('Try next:');
   });
 
   it('connects one username and discovers fantasy context inside the UI', async () => {

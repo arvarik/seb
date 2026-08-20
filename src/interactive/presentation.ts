@@ -2,6 +2,8 @@ import type { DataSourceRecord } from '../sources.js';
 import { paint, symbol, type SebTheme } from './theme.js';
 
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/gu;
+const INLINE_LINK_PATTERN = /\[([^\]]+)\]\((?:<([^>\s]+)>|(https?:\/\/[^)\s]+))\)|<(https?:\/\/[^>\s]+)>|(https?:\/\/[^\s<>\x1b]+)/gu;
+const TERMINAL_LINK_PATTERN = /\x1b\]8;;([^\x07\x1b]*)(?:\x07|\x1b\\)([\s\S]*?)\x1b\]8;;(?:\x07|\x1b\\)/gu;
 
 type TableAlignment = 'center' | 'left' | 'right';
 
@@ -145,16 +147,21 @@ function renderMarkdownLine(
       : symbol(theme, 'bullet');
     const prefix = `${'  '.repeat(depth + 1)}${listMarker} `;
     const contentWidth = Math.max(10, width - visibleLength(prefix));
-    const parts = wrapPlainWords(list[3] ?? '', contentWidth);
+    const parts = wrapTerminalLine(
+      inlineLabeledMarkup(list[3] ?? '', theme),
+      contentWidth,
+    );
     return parts.map((part, index) =>
-      `${index === 0 ? prefix : ' '.repeat(visibleLength(prefix))}${inlineLabeledMarkup(part, theme)}`);
+      `${index === 0 ? prefix : ' '.repeat(visibleLength(prefix))}${part}`);
   }
 
   const quote = line.match(/^\s*>\s?(.*)$/u);
   if (quote) {
     const prefix = theme.iconMode === 'unicode' ? '│ ' : '| ';
-    return wrapPlainWords(quote[1] ?? '', Math.max(10, width - 2)).map((part) =>
-      `${paint(theme, 'dim', prefix)}${inlineMarkup(part, theme)}`);
+    return wrapTerminalLine(
+      inlineMarkup(quote[1] ?? '', theme),
+      Math.max(10, width - 2),
+    ).map((part) => `${paint(theme, 'dim', prefix)}${part}`);
   }
 
   const decisionField = line.match(
@@ -181,7 +188,7 @@ function renderMarkdownLine(
     );
   }
 
-  return wrapPlainWords(line, width).map((part) => inlineMarkup(part, theme));
+  return wrapTerminalLine(inlineMarkup(line, theme), width);
 }
 
 function renderLabeledValue(
@@ -194,9 +201,9 @@ function renderLabeledValue(
   const renderedLabel = uppercase ? label.toUpperCase() : `${label}:`;
   const prefix = `${paint(theme, 'source', renderedLabel)}  `;
   const firstWidth = Math.max(10, width - visibleLength(prefix));
-  const parts = wrapPlainWords(value, firstWidth);
+  const parts = wrapTerminalLine(inlineMarkup(value, theme), firstWidth);
   return parts.map((part, index) =>
-    `${index === 0 ? prefix : ' '.repeat(visibleLength(prefix))}${inlineMarkup(part, theme)}`);
+    `${index === 0 ? prefix : ' '.repeat(visibleLength(prefix))}${part}`);
 }
 
 function inlineLabeledMarkup(value: string, theme: SebTheme): string {
@@ -328,14 +335,12 @@ function renderGridRow(
   vertical: string,
 ): string[] {
   const wrapped = cells.map((cell, index) =>
-    wrapPlainWords(cell, widths[index] ?? 3));
+    wrapTerminalLine(inlineMarkup(cell, theme), widths[index] ?? 3));
   const height = Math.max(1, ...wrapped.map((parts) => parts.length));
   return Array.from({ length: height }, (_, lineIndex) => {
     const rendered = widths.map((cellWidth, columnIndex) => {
       const raw = wrapped[columnIndex]?.[lineIndex] ?? '';
-      const value = header
-        ? paint(theme, 'source', raw)
-        : inlineMarkup(raw, theme);
+      const value = header ? paint(theme, 'source', raw) : raw;
       return ` ${alignVisible(value, cellWidth, alignments[columnIndex] ?? 'left')} `;
     });
     return `${paint(theme, 'dim', vertical)}${rendered.join(paint(theme, 'dim', vertical))}${paint(theme, 'dim', vertical)}`;
@@ -586,6 +591,7 @@ function hardWrap(value: string, width: number): string[] {
 }
 
 export function terminalLink(label: string, url: string, enabled = true): string {
+  if (!isSafeTerminalUrl(url)) return label;
   return enabled ? `\x1b]8;;${url}\x07${label}\x1b]8;;\x07` : `${label} <${url}>`;
 }
 
@@ -604,30 +610,110 @@ export function stripAnsi(value: string): string {
 
 export function wrapTerminalLine(value: string, width: number): string[] {
   if (width <= 1 || visibleLength(value) <= width) return [value];
-  const plain = stripAnsi(value);
-  const words = plain.split(/\s+/u);
+  const links: string[] = [];
+  const protectedValue = value.replace(TERMINAL_LINK_PATTERN, (link) => {
+    const index = links.push(link) - 1;
+    return `\u{e000}${index}\u{e001}`;
+  });
+  const words = protectedValue.split(/\s+/u);
   const lines: string[] = [];
   let line = '';
-  for (const word of words) {
-    if (!word) continue;
-    if (line && line.length + word.length + 1 > width) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = line ? `${line} ${word}` : word;
+  for (const protectedWord of words) {
+    if (!protectedWord) continue;
+    const word = protectedWord.replace(/\u{e000}(\d+)\u{e001}/gu,
+      (_match, index: string) => links[Number(index)] ?? '');
+    const parts = visibleLength(word) > width
+      ? splitLongTerminalWord(word, width)
+      : [word];
+    for (const part of parts) {
+      if (line && visibleLength(line) + visibleLength(part) + 1 > width) {
+        lines.push(line);
+        line = part;
+      } else {
+        line = line ? `${line} ${part}` : part;
+      }
     }
   }
   if (line) lines.push(line);
-  return lines.length > 0 ? lines : [''];
+  return stabilizeTerminalStyles(lines.length > 0 ? lines : ['']);
 }
 
 function inlineMarkup(value: string, theme: SebTheme): string {
-  let output = value.replace(/\[([^\]]+)\]\(<([^>]+)>\)|\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gu,
-    (_match, angleLabel: string | undefined, angleUrl: string | undefined, label: string | undefined, url: string | undefined) =>
-      `${symbol(theme, 'source')} ${terminalLink(angleLabel ?? label ?? 'source', angleUrl ?? url ?? '', theme.links)}`);
+  let output = value.replace(INLINE_LINK_PATTERN,
+    (
+      _match,
+      label: string | undefined,
+      angleUrl: string | undefined,
+      markdownUrl: string | undefined,
+      autolinkUrl: string | undefined,
+      bareUrl: string | undefined,
+    ) => {
+      const candidate = angleUrl ?? markdownUrl ?? autolinkUrl ?? bareUrl ?? '';
+      const { trailing, url } = bareUrl ? trimBareUrl(candidate) : { trailing: '', url: candidate };
+      const display = label ?? url;
+      const prefix = label ? `${symbol(theme, 'source')} ` : '';
+      const link = !theme.links && !label ? url : terminalLink(display, url, theme.links);
+      return `${prefix}${link}${trailing}`;
+    });
   output = output.replace(/`([^`]+)`/gu, (_match, code: string) => paint(theme, 'source', code));
   output = output.replace(/\*\*([^*]+)\*\*/gu, (_match, strong: string) => paint(theme, 'assistant', strong));
   return output;
+}
+
+function isSafeTerminalUrl(value: string): boolean {
+  if (!/^https?:\/\//iu.test(value) || /[\u0000-\u001f\u007f]/u.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function trimBareUrl(value: string): { trailing: string; url: string } {
+  let url = value;
+  let trailing = '';
+  while (/[.,;:!?]$/u.test(url)) {
+    trailing = `${url.at(-1) ?? ''}${trailing}`;
+    url = url.slice(0, -1);
+  }
+  for (const [open, close] of [['(', ')'], ['[', ']'], ['{', '}']] as const) {
+    while (url.endsWith(close) && count(url, close) > count(url, open)) {
+      trailing = `${close}${trailing}`;
+      url = url.slice(0, -1);
+    }
+  }
+  return { trailing, url };
+}
+
+function count(value: string, character: string): number {
+  return [...value].filter((candidate) => candidate === character).length;
+}
+
+function stabilizeTerminalStyles(lines: readonly string[]): string[] {
+  let activeStyle = '';
+  return lines.map((line) => {
+    const prefix = activeStyle;
+    for (const match of line.matchAll(/\x1b\[([0-9;]*)m/gu)) {
+      const parameters = match[1] ?? '';
+      if (!parameters || parameters.split(';').includes('0')) activeStyle = '';
+      else activeStyle += match[0];
+    }
+    return `${prefix}${line}${activeStyle ? '\x1b[0m' : ''}`;
+  });
+}
+
+function splitLongTerminalWord(value: string, width: number): string[] {
+  const link = value.match(/^\x1b\]8;;([^\x07\x1b]*)\x07([\s\S]*?)\x1b\]8;;\x07(.*)$/u);
+  if (link) {
+    const url = link[1] ?? '';
+    const label = link[2] ?? '';
+    const suffix = link[3] ?? '';
+    const chunks = hardWrap(label, width);
+    return chunks.map((chunk, index) =>
+      `${terminalLink(chunk, url)}${index === chunks.length - 1 ? suffix : ''}`);
+  }
+  return value.includes('\x1b') ? [value] : hardWrap(value, width);
 }
 
 function bar(score: number, width: number, theme: SebTheme): string {

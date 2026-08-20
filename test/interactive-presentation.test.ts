@@ -106,15 +106,34 @@ describe('interactive presentation', () => {
     expect(clipboard).toContain(Buffer.from('answer').toString('base64'));
   });
 
+  it('keeps wrapped Markdown and bare URLs clickable', () => {
+    const theme = createTheme({});
+    const url = 'https://example.com/a/long/source/path';
+    const output = renderAnalysisText([
+      `Read the [NFL report source](<${url}>) before the next game.`,
+      `Open ${url}.`,
+    ].join('\n'), theme, 30);
+
+    expect(output.match(new RegExp(`\\x1b\\]8;;${url}`, 'gu'))?.length).toBeGreaterThanOrEqual(2);
+    expect(output).not.toContain('[NFL report source]');
+    expect(output.split('\n').every((line) => visibleLength(line) <= 30)).toBe(true);
+  });
+
+  it('rejects unsafe terminal link targets', () => {
+    expect(terminalLink('Unsafe', 'https://example.com/\u0007bad')).toBe('Unsafe');
+  });
+
   it('keeps links in no-color mode and supports accessible themes', () => {
     const noColor = createTheme({ NO_COLOR: '1' });
     const contrast = createTheme({ SEB_THEME: 'high-contrast' });
     const compact = createTheme({ SEB_THEME: 'compact', TERM: 'dumb' });
+    const plainUrl = renderAnalysisText('Open https://example.com/report.', compact);
 
     expect(noColor.color).toBe(false);
     expect(noColor.links).toBe(true);
     expect(contrast.name).toBe('high-contrast');
     expect(compact.compact).toBe(true);
     expect(compact.links).toBe(false);
+    expect(plainUrl).toBe('Open https://example.com/report.');
   });
 });

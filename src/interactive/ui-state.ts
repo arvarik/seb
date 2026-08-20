@@ -7,6 +7,7 @@ export class InteractiveUiState {
   latestPrompt = '';
   notification = '';
   recentCommands: string[] = [];
+  showSuggestions = true;
   sources: DataSourceRecord[] = [];
   suggestions: string[] = [];
   theme: SebThemeName = 'default';

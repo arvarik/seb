@@ -328,6 +328,8 @@ Use `Up` and `Down` to read prior prompts.
 
 Use the mouse wheel or `Page Up` and `Page Down` to scroll the transcript.
 
+Each mouse wheel event moves one transcript row.
+
 Press `Ctrl+R` to search history with the current editor text.
 
 Run `/history` to show saved prompts.
@@ -437,7 +439,11 @@ Read the [evaluation guide](EVALUATION.md) for leakage rules and metrics.
 
 ## Next actions and token use
 
-Seb adds contextual next actions after each answer.
+Seb shows contextual next actions on the first prompt.
+
+Run `/new` or `/clear` to show the actions again.
+
+Seb hides the actions after you submit a prompt.
 
 Run `/next` when you want only the current action list.
 
@@ -447,7 +453,7 @@ Player suggestions repeat the active player name.
 
 Seb learns the active player from player tool input and inline player skills.
 
-The model does not receive the interface suggestion footer as conversation text.
+The model does not add interface suggestions to its answer.
 
 Run `/usage` to show model requests and token totals.
 

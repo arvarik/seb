@@ -27,6 +27,9 @@ export function createWeatherTools(
         team: teamSchema,
         hours: z.number().int().min(1).max(168).optional().default(48),
       }),
+      inputExamples: [
+        { input: { team: 'SEA', hours: 48 } },
+      ],
       execute: async ({ team, hours }) => {
         const stadium = findHomeStadium(team);
         if (!stadium) {
@@ -59,6 +62,9 @@ export function createWeatherTools(
         week: weekSchema,
         team: teamSchema,
       }),
+      inputExamples: [
+        { input: { season: 2026, week: 8, team: 'SEA' } },
+      ],
       execute: async (input) => ({
         ...(await gameWeather.getGameWeather(input)),
         sources: [
@@ -83,6 +89,16 @@ export function createWeatherTools(
         includeIndoor: z.boolean().optional().default(false),
         limit: z.number().int().min(1).max(18).optional().default(18),
       }),
+      inputExamples: [
+        {
+          input: {
+            season: 2026,
+            week: 8,
+            includeIndoor: false,
+            limit: 18,
+          },
+        },
+      ],
       execute: async ({ season, week, includeIndoor, limit }) => {
         const games = await nflverse.getSchedule({
           season,
@@ -147,6 +163,17 @@ export function createWeatherTools(
           .describe('The statistics season. Week 1 defaults to the prior season.'),
         throughWeek: weekSchema.optional(),
       }),
+      inputExamples: [
+        {
+          input: {
+            season: 2026,
+            week: 8,
+            team: 'SEA',
+            analysisSeason: 2026,
+            throughWeek: 7,
+          },
+        },
+      ],
       execute: async ({ season, week, team, analysisSeason, throughWeek }) => {
         const games = await nflverse.getSchedule({
           season,

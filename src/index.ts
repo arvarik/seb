@@ -1,9 +1,16 @@
 export {
   createFantasyFootballAgent,
+  createFantasyFootballAnalysisAgent,
   DEFAULT_GEMINI_FALLBACK_MODEL,
   DEFAULT_GEMINI_MODEL,
   type FantasyFootballAgentOptions,
 } from './agent.js';
+export {
+  FANTASY_ANALYSIS_SCHEMA_VERSION,
+  fantasyAnalysisSchema,
+  formatFantasyAnalysis,
+  type FantasyAnalysis,
+} from './analysis/output.js';
 export { isModelCapacityError } from './model-capacity-error.js';
 export {
   NflverseApiError,

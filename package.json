@@ -3,7 +3,7 @@
   "version": "0.0.2",
   "private": true,
   "type": "module",
-  "description": "A source-grounded fantasy football agent for Sleeper, nflverse, and NWS data.",
+  "description": "A source-grounded fantasy football agent for league, NFL, weather, and news analysis.",
   "bin": {
     "seb": "bin/seb.mjs"
   },
@@ -15,6 +15,7 @@
     "check": "npm run version:check && npm run typecheck && npm test",
     "connectors": "node --import tsx src/connectors/server.ts",
     "deps:check": "npm outdated",
+    "devtools": "devtools",
     "data:smoke": "node --import tsx src/smoke-data-sources.ts",
     "doctor": "node --import tsx src/cli.ts doctor",
     "seb": "node --import tsx src/cli.ts",
@@ -45,6 +46,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@ai-sdk/devtools": "^1.0.12",
     "@chat-adapter/tests": "^4.38.1",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.2.0",

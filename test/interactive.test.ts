@@ -66,6 +66,7 @@ describe('SebInteractiveTransport', () => {
     const status = await sendCommand(transport, '/status', 'message-4');
     const commands = await sendCommand(transport, '/commands cache', 'message-5');
     const completion = await sendCommand(transport, '/complete /skill wea', 'message-6');
+    const devtools = await sendCommand(transport, '/devtools', 'message-7');
 
     expect(help).toContain(INTERACTIVE_HELP);
     expect(skill).toContain('weather-watch');
@@ -74,6 +75,8 @@ describe('SebInteractiveTransport', () => {
     expect(status).toContain('NFL team: SEA');
     expect(commands).toContain('/refresh [all|sleeper|nflverse|weather]');
     expect(completion).toContain('/skill weather-watch');
+    expect(devtools).toContain('disabled');
+    expect(devtools).toContain('npm run devtools');
   });
 
   it('shows source links recorded during the session', async () => {
@@ -110,6 +113,13 @@ describe('SebInteractiveTransport', () => {
             { type: 'text-delta', id: 'text-1', delta: 'Model answer.' },
             { type: 'text-end', id: 'text-1' },
             {
+              type: 'source',
+              sourceType: 'url',
+              id: 'news-1',
+              url: 'https://example.com/nfl-report',
+              title: 'NFL report',
+            },
+            {
               type: 'finish',
               finishReason: { unified: 'stop', raw: undefined },
               usage: {
@@ -131,6 +141,7 @@ describe('SebInteractiveTransport', () => {
       },
     });
     const clients = dataClients();
+    const sources = new SourceTracker();
     const transport = new SebInteractiveTransport({
       agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
       environment: {},
@@ -138,7 +149,7 @@ describe('SebInteractiveTransport', () => {
       nflverse: clients.nflverseClient,
       session: createSessionState(),
       sleeper: clients.sleeperClient,
-      sources: new SourceTracker(),
+      sources,
       version: '0.0.1',
       weather: clients.weatherClient,
     });
@@ -146,7 +157,10 @@ describe('SebInteractiveTransport', () => {
     const output = await sendCommand(transport, 'Give me an answer.', 'message-1');
 
     expect(output).toContain('Model answer.');
+    expect(output).toContain('## Web sources');
+    expect(output).toContain('[NFL report](<https://example.com/nfl-report>)');
     expect(output).toContain('Try next:');
+    expect(sources.list()[0]?.label).toBe('NFL report');
     expect(model.doStreamCalls).toHaveLength(1);
   });
 

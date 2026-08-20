@@ -124,6 +124,7 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/new` or `/clear` | Starts a new model context. |
 | `/save [NAME] [md|json]` | Saves the transcript. |
 | `/doctor [offline]` | Checks configuration and services. |
+| `/devtools` | Shows local AI SDK DevTools status and commands. |
 | `/cost` | Shows session token counts. |
 | `/suggest` or `/suggestions` | Shows contextual next actions. |
 | `/completion SHELL` | Prints a shell completion script. |
@@ -224,9 +225,13 @@ Read the [skill guide](SKILLS.md) for all available workflows.
 
 Run `/sources` after an answer.
 
-Seb shows each source URL that a data client used during the session.
+Seb shows each source URL that a data client or grounded search used during the session.
 
-The source list records Sleeper endpoints, nflverse files, and NWS endpoints.
+The source list records Sleeper endpoints, nflverse files, NWS endpoints, and web reporting.
+
+Current-news answers include a `Web sources` section when Gemini returns source links.
+
+Seb accepts only HTTP and HTTPS web source links.
 
 Run `/new` to clear the source list and start a new model context.
 
@@ -309,6 +314,34 @@ The suggestions use the active skill and the missing session values.
 Run `/cost` to show model requests and token totals.
 
 The command does not calculate currency cost. Gemini prices can change.
+
+Seb removes old tool data before a long model request.
+
+It keeps the six latest messages with tool data.
+
+This rule reduces token use without deleting recent conversation text.
+
+## Local AI SDK DevTools
+
+Run `/devtools` to show whether local trace recording is active.
+
+Enable recording before you start Seb.
+
+```bash
+SEB_DEVTOOLS=true npm run seb
+```
+
+Start the viewer in another terminal.
+
+```bash
+npm run devtools
+```
+
+DevTools stores complete prompts and tool data under `.devtools/`.
+
+Never enable this feature in production.
+
+Read the [AI SDK guide](AI_SDK.md) for its privacy rules.
 
 ## Shell completion
 

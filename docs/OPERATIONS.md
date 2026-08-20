@@ -144,6 +144,10 @@ Do not add complete request payloads to production logs.
 
 Do not print SQLite snapshot payloads in normal production logs.
 
+Keep `SEB_DEVTOOLS` disabled in every production environment.
+
+AI SDK DevTools stores complete prompts, model output, and tool data in local files.
+
 Add a request correlation ID at the proxy when cross-service tracing becomes necessary.
 
 Track these operational values.
@@ -201,6 +205,16 @@ Confirm the key and model names.
 Check whether the fallback model also fails.
 
 Keep webhook acknowledgements active so platforms do not create a retry storm.
+
+### Grounded news fails
+
+Inspect the visible web source list in a local reproduction.
+
+Retry the request after a temporary Gemini Search error.
+
+Do not replace current reporting with model memory.
+
+Keep the answer unavailable when the request needs current news and grounding fails.
 
 ### Sleeper fails
 

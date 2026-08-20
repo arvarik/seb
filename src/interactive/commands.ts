@@ -54,6 +54,7 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('setup', '/setup', 'Save team-independent defaults for interactive sessions.'),
   command('profile', '/profile [show|load|clear]', 'Show, load, or clear the local setup profile.', undefined, ['show', 'load', 'clear']),
   command('sources', '/sources', 'Show sources used in this session.'),
+  command('devtools', '/devtools', 'Show local AI SDK DevTools status.'),
   command('cache', '/cache', 'Show the SQLite cache and snapshot status.'),
   command('snapshots', '/snapshots [KIND]', 'List recent source snapshots.'),
   command('provenance', '/provenance SNAPSHOT_ID', 'Inspect field lineage for one snapshot.'),

@@ -24,6 +24,17 @@ export function createNflverseTools(client: NflverseClient) {
         gameType: z.enum(['PRE', 'REG', 'POST']).optional(),
         limit: z.number().int().min(1).max(200).optional().default(100),
       }),
+      inputExamples: [
+        {
+          input: {
+            season: 2026,
+            week: 8,
+            team: 'SEA',
+            gameType: 'REG',
+            limit: 100,
+          },
+        },
+      ],
       execute: async ({ season, week, team, gameType, limit }) => {
         const filters = {
           season,
@@ -59,6 +70,18 @@ export function createNflverseTools(client: NflverseClient) {
         seasonType: z.enum(['REG', 'POST']).optional().default('REG'),
         limit: z.number().int().min(1).max(200).optional().default(100),
       }),
+      inputExamples: [
+        {
+          input: {
+            season: 2026,
+            throughWeek: 8,
+            playerName: 'Justin Jefferson',
+            position: 'WR',
+            seasonType: 'REG',
+            limit: 100,
+          },
+        },
+      ],
       execute: async ({
         season,
         week,
@@ -99,6 +122,15 @@ export function createNflverseTools(client: NflverseClient) {
         throughWeek: weekSchema.optional(),
         playerNames: z.array(z.string().trim().min(2).max(100)).min(1).max(12),
       }),
+      inputExamples: [
+        {
+          input: {
+            season: 2026,
+            throughWeek: 8,
+            playerNames: ['Justin Jefferson', 'Ja\'Marr Chase'],
+          },
+        },
+      ],
       execute: async ({ season, throughWeek, playerNames }) => {
         const allRows = await client.getPlayerWeeklyStats({
           season,
@@ -126,6 +158,9 @@ export function createNflverseTools(client: NflverseClient) {
         team: teamSchema,
         throughWeek: weekSchema.optional(),
       }),
+      inputExamples: [
+        { input: { season: 2026, team: 'SEA', throughWeek: 8 } },
+      ],
       execute: async ({ season, team, throughWeek }) => {
         const [games, stats] = await Promise.all([
           client.getSchedule({ season, team, gameType: 'REG' }),
@@ -163,6 +198,16 @@ export function createNflverseTools(client: NflverseClient) {
         position: z.enum(['QB', 'RB', 'WR', 'TE', 'K']),
         throughWeek: weekSchema.optional(),
       }),
+      inputExamples: [
+        {
+          input: {
+            season: 2026,
+            defense: 'SF',
+            position: 'WR',
+            throughWeek: 8,
+          },
+        },
+      ],
       execute: async ({ season, defense, position, throughWeek }) => {
         const stats = await client.getPlayerWeeklyStats({
           season,

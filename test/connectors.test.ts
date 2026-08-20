@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   registerConnectorHandlers,
+  withWebSources,
   type ConnectorRuntime,
 } from '../src/connectors/bot.js';
 import { readConnectorConfig } from '../src/connectors/config.js';
@@ -89,6 +90,38 @@ describe('connector handlers', () => {
 
     expect(reply).toHaveBeenCalledOnce();
     await bot.shutdown();
+  });
+});
+
+describe('connector web sources', () => {
+  it('appends validated web sources after streamed text', async () => {
+    const stream = (async function* () {
+      yield { type: 'text-delta', text: 'Current news.' };
+      yield {
+        sourceType: 'url',
+        title: 'NFL [News]',
+        type: 'source',
+        url: 'https://www.nfl.com/news/example',
+      };
+      yield {
+        sourceType: 'url',
+        title: 'Unsafe',
+        type: 'source',
+        url: 'file:///tmp/unsafe',
+      };
+    })();
+    let output = '';
+
+    for await (const part of withWebSources(stream)) {
+      if (typeof part === 'string') output += part;
+    }
+
+    expect(output).toContain('Current news.');
+    expect(output).toContain('**Web sources**');
+    expect(output).toContain(
+      '- [NFL News](<https://www.nfl.com/news/example>)',
+    );
+    expect(output).not.toContain('file:///tmp/unsafe');
   });
 });
 

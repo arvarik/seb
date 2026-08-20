@@ -56,11 +56,13 @@ These rules provide analysis context. They do not create an official projection.
 
 The `news-briefing` skill prevents false current-news claims.
 
-It can summarize Sleeper status fields and recent nflverse changes.
+It searches current public reporting through Gemini Google Search.
 
-It states that Seb has no publisher news feed when the question needs one.
+It includes publisher links and dates when Gemini returns those values.
 
-Use this skill before the V1 news integration exists.
+It uses Sleeper for league facts and nflverse for historical statistics.
+
+Seb has no licensed publisher feed or official injury-report feed.
 
 ## Skill selection guidance
 
@@ -84,7 +86,11 @@ Use `league-audit` before a broad roster improvement plan.
 
 Skills do not create unavailable facts.
 
-Seb has no publisher news, official projection, or current injury-report feed.
+Seb has no licensed publisher feed, official projection feed, or official injury-report feed.
+
+Current web reporting can contain incomplete or conflicting claims.
+
+The `news-briefing` skill identifies that uncertainty.
 
 The NWS supports United States points only.
 

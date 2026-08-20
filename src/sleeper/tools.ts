@@ -55,6 +55,23 @@ export function createSleeperTools(client: SleeperClient) {
         includeInactive: z.boolean().optional().default(false),
         limit: z.number().int().min(1).max(25).optional().default(10),
       }),
+      inputExamples: [
+        {
+          input: {
+            query: 'Justin Jefferson',
+            position: 'WR',
+            includeInactive: false,
+            limit: 5,
+          },
+        },
+        {
+          input: {
+            query: '4046',
+            includeInactive: true,
+            limit: 1,
+          },
+        },
+      ],
       execute: async ({ query, position, includeInactive, limit }) =>
         (
           await client.findPlayers(query, {
@@ -76,6 +93,9 @@ export function createSleeperTools(client: SleeperClient) {
           .optional()
           .describe('The four-digit season. The current Sleeper league season is the default.'),
       }),
+      inputExamples: [
+        { input: { user: 'example_user', season: '2026' } },
+      ],
       execute: async ({ user: identifier, season }) => {
         const [user, state] = await Promise.all([
           client.getUser(identifier),
@@ -97,6 +117,9 @@ export function createSleeperTools(client: SleeperClient) {
       description:
         'Get league settings, users, rosters, records, and roster player IDs for a Sleeper league.',
       inputSchema: z.object({ leagueId: leagueIdSchema }),
+      inputExamples: [
+        { input: { leagueId: '123456789012345678' } },
+      ],
       execute: async ({ leagueId }) => {
         const [league, users, rosters] = await Promise.all([
           client.getLeague(leagueId),
@@ -114,6 +137,9 @@ export function createSleeperTools(client: SleeperClient) {
         leagueId: leagueIdSchema,
         rosterId: z.number().int().positive(),
       }),
+      inputExamples: [
+        { input: { leagueId: '123456789012345678', rosterId: 4 } },
+      ],
       execute: async ({ leagueId, rosterId }) => {
         const details = await analysis.getRosterDetails(leagueId, rosterId);
         return {
@@ -128,6 +154,9 @@ export function createSleeperTools(client: SleeperClient) {
       description:
         'Get every fantasy roster matchup and score for one Sleeper league week.',
       inputSchema: z.object({ leagueId: leagueIdSchema, week: weekSchema }),
+      inputExamples: [
+        { input: { leagueId: '123456789012345678', week: 8 } },
+      ],
       execute: async ({ leagueId, week }) => ({
         leagueId,
         week,
@@ -139,6 +168,9 @@ export function createSleeperTools(client: SleeperClient) {
       description:
         'Get completed and pending trades, waivers, and free-agent moves for one league week.',
       inputSchema: z.object({ leagueId: leagueIdSchema, week: weekSchema }),
+      inputExamples: [
+        { input: { leagueId: '123456789012345678', week: 8 } },
+      ],
       execute: async ({ leagueId, week }) => ({
         leagueId,
         week,
@@ -154,6 +186,9 @@ export function createSleeperTools(client: SleeperClient) {
         lookbackHours: z.number().int().min(1).max(168).optional().default(24),
         limit: z.number().int().min(1).max(50).optional().default(25),
       }),
+      inputExamples: [
+        { input: { type: 'add', lookbackHours: 24, limit: 10 } },
+      ],
       execute: async ({ type, lookbackHours, limit }) => ({
         type,
         lookbackHours,
@@ -175,6 +210,9 @@ export function createSleeperTools(client: SleeperClient) {
         leagueId: leagueIdSchema,
         throughWeek: analysisWeekSchema,
       }),
+      inputExamples: [
+        { input: { leagueId: '123456789012345678', throughWeek: 8 } },
+      ],
       execute: async ({ leagueId, throughWeek }) =>
         analysis.analyzeLeague(leagueId, throughWeek),
     }),
@@ -188,6 +226,16 @@ export function createSleeperTools(client: SleeperClient) {
         rosterBId: z.number().int().positive(),
         throughWeek: analysisWeekSchema,
       }),
+      inputExamples: [
+        {
+          input: {
+            leagueId: '123456789012345678',
+            rosterAId: 4,
+            rosterBId: 7,
+            throughWeek: 8,
+          },
+        },
+      ],
       execute: async ({ leagueId, rosterAId, rosterBId, throughWeek }) =>
         analysis.predictMatchup(
           leagueId,

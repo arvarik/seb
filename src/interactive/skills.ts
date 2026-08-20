@@ -108,9 +108,9 @@ export const SEB_SKILLS: readonly SebSkill[] = [
   {
     id: 'news-briefing',
     title: 'Source-safe briefing',
-    description: 'Summarize connected player changes without inventing publisher news.',
-    instructions: 'Use Sleeper status fields and nflverse trends. State that Seb has no publisher news feed when the request needs current reporting.',
-    suggestions: ['Show current injury fields.', 'Find recent usage changes.', 'List the missing news sources.'],
+    description: 'Combine public reporting with Sleeper and nflverse evidence.',
+    instructions: 'Use searchCurrentNews for current reporting. Include publisher links and dates. Keep Sleeper and nflverse authoritative for league data and statistics.',
+    suggestions: ['Find current player news.', 'Show current injury fields.', 'Compare reporting with recent usage.'],
   },
 ] as const;
 

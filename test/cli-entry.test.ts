@@ -10,7 +10,9 @@ describe('Seb executable', () => {
     const result = runSeb('--help');
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('Seb reads Sleeper, nflverse, and weather data');
+    expect(result.stdout).toContain(
+      'Seb reads Sleeper, nflverse, weather, and grounded news',
+    );
     expect(result.stdout).toContain('seb ask [OPTIONS] [QUESTION]');
     expect(result.stderr).toBe('');
   });

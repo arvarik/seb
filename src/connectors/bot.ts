@@ -5,6 +5,7 @@ import { createRedisState } from '@chat-adapter/state-redis';
 import { createTelegramAdapter } from '@chat-adapter/telegram';
 import {
   Chat,
+  fromFullStream,
   type Adapter,
   type Message,
   type MessageContext,
@@ -21,6 +22,7 @@ import { isModelCapacityError } from '../model-capacity-error.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import { WeatherClient } from '../weather/client.js';
+import { normalizeSourceLabel, normalizeWebUrl } from '../sources.js';
 import {
   CONNECTOR_NAMES,
   readConnectorConfig,
@@ -165,15 +167,64 @@ function createAgentReply(environment: Environment): ConnectorReply {
     const prompt = await buildPrompt(thread, message, context);
     try {
       const result = await primaryAgent.stream({ prompt });
-      await thread.post(result.fullStream);
+      await thread.post(withWebSources(result.fullStream));
     } catch (error) {
       if (!isModelCapacityError(error) || fallbackAgent === primaryAgent) {
         throw error;
       }
       const result = await fallbackAgent.stream({ prompt });
-      await thread.post(result.fullStream);
+      await thread.post(withWebSources(result.fullStream));
     }
   };
+}
+
+export function withWebSources(stream: AsyncIterable<unknown>) {
+  const sources = new Map<string, string>();
+  const monitored = (async function* () {
+    for await (const part of stream) {
+      if (isUrlSourcePart(part)) {
+        const url = normalizeWebUrl(part.url);
+        if (url) {
+          sources.set(
+            url,
+            normalizeSourceLabel(part.title, new URL(url).hostname),
+          );
+        }
+      }
+      yield part;
+    }
+  })();
+  const text = fromFullStream(monitored);
+  return (async function* () {
+    for await (const part of text) yield part;
+    if (sources.size > 0) {
+      yield `\n\n**Web sources**\n\n${[...sources]
+        .map(([url, title]) => `- [${safeMarkdownLabel(title)}](<${url}>)`)
+        .join('\n')}`;
+    }
+  })();
+}
+
+function isUrlSourcePart(value: unknown): value is {
+  sourceType: 'url';
+  title?: string;
+  type: 'source';
+  url: string;
+} {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  if (
+    record.type !== 'source' ||
+    record.sourceType !== 'url' ||
+    typeof record.url !== 'string'
+  ) {
+    return false;
+  }
+  return normalizeWebUrl(record.url) !== null;
+}
+
+function safeMarkdownLabel(value: string): string {
+  return value.replace(/[\[\]]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 async function buildPrompt(

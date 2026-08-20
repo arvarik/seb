@@ -30,6 +30,10 @@ export function createIdentityTools(
         query: z.string().trim().min(1).max(100),
         provider: z.enum(['sleeper', 'nflverse']).optional(),
       }),
+      inputExamples: [
+        { input: { query: 'Seattle Seahawks' } },
+        { input: { query: 'JAX', provider: 'nflverse' } },
+      ],
       execute: async ({ query, provider }) => {
         const resolution = provider
           ? teams.resolveSource(provider, query)
@@ -48,6 +52,16 @@ export function createIdentityTools(
         position: z.string().trim().min(1).max(10).optional(),
         team: z.string().trim().min(2).max(100).optional(),
       }),
+      inputExamples: [
+        {
+          input: {
+            name: 'Justin Jefferson',
+            season: 2026,
+            position: 'WR',
+            team: 'MIN',
+          },
+        },
+      ],
       execute: async ({ name, season, position, team }) => {
         const teamResolution = team ? teams.resolve(team) : null;
         if (teamResolution?.status === 'ambiguous') {

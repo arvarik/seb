@@ -37,7 +37,7 @@ export class CliUsageError extends Error {
   }
 }
 
-export const CLI_HELP = `Seb reads Sleeper, nflverse, and weather data for fantasy football.
+export const CLI_HELP = `Seb reads Sleeper, nflverse, weather, and grounded news for fantasy football.
 
 Usage:
   seb
@@ -63,7 +63,7 @@ Commands:
   version    Show the Seb version.
 
 Ask options:
-  --json           Print one JSON object for a script.
+  --json           Print one validated analysis object for a script.
   --model MODEL    Use one Gemini model for this request.
   --no-progress    Hide tool activity from the terminal.
 
@@ -85,7 +85,7 @@ Run without npm link:
 Interactive controls:
   Type / to open commands. Arrow keys select. Tab or Right Arrow fills.
   Enter sends. Escape closes the menu. Escape again or Ctrl+C exits.
-  Run /help for context, source, skill, cache, and export commands.
+  Run /help for context, source, skill, DevTools, cache, and export commands.
 `;
 
 export function parseCliArguments(arguments_: readonly string[]): CliCommand {

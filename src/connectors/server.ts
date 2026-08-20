@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { loadEnvFile } from 'node:process';
 import { pathToFileURL } from 'node:url';
 
+import { configureAiDevTools } from '../ai/devtools.js';
 import {
   createConnectorRuntime,
   isConnectorName,
@@ -84,6 +85,11 @@ export function createConnectorApp(
 
 async function main(): Promise<void> {
   loadLocalEnvironment();
+  if (await configureAiDevTools()) {
+    process.stderr.write(
+      'Seb AI SDK DevTools is active. Local prompts and tool data are recorded in .devtools/.\n',
+    );
+  }
 
   const runtime = createConnectorRuntime();
   const background = new BackgroundTasks();

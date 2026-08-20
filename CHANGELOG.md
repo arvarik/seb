@@ -10,12 +10,20 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 - A live slash-command palette with fuzzy matches and contextual argument values.
 - Interactive Sleeper league and roster discovery commands.
+- Gemini Google Search and URL Context tools for current public reporting.
+- The Gemini Interactions endpoint for grounded source records.
+- A versioned and validated fantasy analysis object for JSON output.
+- Optional local AI SDK DevTools with a production safety check.
 
 ### Changed
 
 - Setup profiles now store only a global NFL season instead of one fantasy roster.
 - Version 1 profiles migrate to the team-independent version 2 schema.
 - The project now uses the latest AI SDK 7.0.71 and TUI 1.0.72 releases.
+- The agent now prunes old tool data before long model requests.
+- Model middleware now gives each data tool valid input examples.
+- The command line, interactive interface, and connectors now show grounded web sources.
+- The agent now treats tool results and web pages as untrusted data.
 
 ## [0.0.2] - 2026-08-20
 

@@ -48,6 +48,14 @@ The default value identifies the public Seb repository. A direct contact value h
 
 Do not commit `.env`. The project already ignores this file.
 
+Keep local AI SDK DevTools disabled by default.
+
+```dotenv
+SEB_DEVTOOLS=false
+```
+
+DevTools records complete prompts and tool data when you enable it.
+
 ## 3. Verify the public data sources
 
 Run the Sleeper smoke test.
@@ -256,7 +264,27 @@ Check for newer direct dependencies.
 npm run deps:check
 ```
 
-## 10. Start a chat connector
+## 10. Inspect local AI SDK requests
+
+Enable local trace recording for one Seb session.
+
+```bash
+SEB_DEVTOOLS=true npm run seb
+```
+
+Start the trace viewer in another terminal.
+
+```bash
+npm run devtools
+```
+
+DevTools stores complete prompts and tool data under `.devtools/`.
+
+Never enable DevTools in production.
+
+Read the [AI SDK guide](AI_SDK.md) before you retain or share trace files.
+
+## 11. Start a chat connector
 
 Choose one platform guide.
 
@@ -286,6 +314,7 @@ The response lists each enabled connector and the selected state adapter.
 | `GEMINI_MODEL` | No | Selects the primary Gemini model. |
 | `GEMINI_FALLBACK_MODEL` | No | Selects the capacity fallback model. |
 | `NWS_USER_AGENT` | Recommended | Identifies Seb and gives the NWS a contact value. |
+| `SEB_DEVTOOLS` | No | Records local AI SDK traces when it equals `true` or `1`. |
 | `SEB_PROFILE_FILE` | No | Selects the complete setup profile path. |
 | `SEB_CONFIG_HOME` | No | Selects the directory that contains `profile.json`. |
 | `SEB_CONNECTORS` | Usually | Lists `slack`, `discord`, or `telegram`. |

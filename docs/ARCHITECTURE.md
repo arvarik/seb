@@ -9,13 +9,15 @@ This design keeps current facts outside model memory.
 1. The command-line parser selects chat, ask, setup, doctor, cache, snapshot, replay, completion, help, or version mode.
 2. Interactive chat loads a season-only profile or creates one automatically.
 3. The transport runs a slash command locally or sends a normal question to the agent.
-4. `ToolLoopAgent` gives Gemini the read-only tools and active session instructions.
-5. Gemini selects only the tools that the question needs.
+4. `ToolLoopAgent` gives Gemini the read-only tools, grounded web tools, and active session instructions.
+5. Middleware adds valid input examples to each compatible data tool.
 6. An identity tool resolves ambiguous player or team identifiers when necessary.
-7. A source client reads a fresh SQLite cache record or requests the source.
-8. A deterministic function calculates summaries and risk signals.
-9. Gemini explains the returned facts.
-10. The transport adds contextual next actions without another model request.
+7. Gemini selects only the tools that the question needs.
+8. A source client reads a fresh SQLite cache record or requests the source.
+9. Google Search or URL Context returns current public reporting when necessary.
+10. A deterministic function calculates summaries and risk signals.
+11. Gemini explains the returned facts.
+12. The transport adds web sources and contextual next actions.
 
 ## Agent harness
 
@@ -27,6 +29,10 @@ The schemas validate seasons, weeks, teams, limits, IDs, and other inputs.
 
 The agent uses at most 12 model and tool steps for one request.
 
+The agent runs AI SDK `pruneMessages` before each model request.
+
+This policy removes reasoning and old tool data from the active context.
+
 The tools perform read-only actions.
 
 The direct data tools cap large row results.
@@ -35,11 +41,21 @@ Summary tools can read a complete file internally and return a small result.
 
 The identity tools return ambiguity instead of a guessed source join.
 
+`seb ask --json` uses a separate agent with AI SDK `Output.object`.
+
+The first request gathers evidence and grounded source records.
+
+The second tool-free request converts that evidence into the validated schema.
+
+Seb formats that object into the compatible `answer` field.
+
 ## Interactive transport
 
 AI SDK TUI renders the terminal interface.
 
 Seb supplies a custom `ChatTransport` around `DirectChatTransport`.
+
+The direct transport enables AI SDK source stream parts.
 
 The custom transport intercepts slash commands before the model call.
 
@@ -48,6 +64,8 @@ It removes local command messages from later model context.
 It also supports a `/new` model-context boundary.
 
 The transport appends contextual suggestions as UI stream parts.
+
+The transport also appends validated grounded web sources.
 
 This step uses no extra Gemini request.
 
@@ -100,19 +118,28 @@ The [setup guide](SETUP.md) defines path selection and file permissions.
 
 ## Source clients
 
-Each source has one client class.
+Each direct public source has one client class.
 
 - `SleeperClient` reads JSON endpoints.
 - `NflverseClient` reads compressed CSV releases.
 - `WeatherClient` reads NWS GeoJSON endpoints.
 
-Each client accepts an injected `fetch` function.
+The production model uses the Gemini Interactions endpoint.
+
+The model also receives two provider tools.
+
+- Gemini Google Search reads current public reporting.
+- Gemini URL Context reads a user-supplied web page.
+
+Each direct source client accepts an injected `fetch` function.
 
 Tests use that injection to avoid network requests.
 
-Each client accepts a source observer.
+Each direct source client accepts a source observer.
 
 The observer records exact URLs, retrieval times, and cache outcomes.
+
+The session source tracker records grounded HTTP and HTTPS source links.
 
 `ResilientFetch` gives each client bounded retries and request timeouts.
 
@@ -213,6 +240,18 @@ Plain TypeScript functions calculate the following results.
 - Weather risk and its reason list.
 
 The model explains these results. It does not calculate hidden source facts.
+
+## Local model inspection
+
+Seb can register AI SDK DevTools telemetry during local development.
+
+The feature stays disabled unless `SEB_DEVTOOLS` equals `true` or `1`.
+
+Seb rejects the feature when `NODE_ENV` equals `production`.
+
+The local viewer reads trace files from `.devtools/`.
+
+Read the [AI SDK guide](AI_SDK.md) before you enable trace recording.
 
 ## Historical evaluation
 

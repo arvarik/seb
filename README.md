@@ -4,7 +4,9 @@ Seb is a read-only fantasy football agent. It uses Gemini to select data tools a
 
 Seb reads Sleeper, nflverse, and National Weather Service data. It never changes a league, roster, waiver claim, trade, or lineup.
 
-Seb uses Gemini 3.7 Flash by default. One-shot and connector requests use Gemini 3.6 Flash after a temporary capacity or rate-limit error.
+Seb uses Gemini 3.7 Flash through the Gemini Interactions API by default.
+
+One-shot and connector requests use Gemini 3.6 Flash after a temporary capacity or rate-limit error.
 
 The current project version is `0.0.2`. Seb follows the [documented release policy](docs/VERSIONING.md).
 
@@ -98,6 +100,8 @@ Read the [provenance guide](docs/PROVENANCE.md) for source lineage and freshness
 
 Read the [evaluation guide](docs/EVALUATION.md) for replay rules and baseline metrics.
 
+Read the [AI SDK guide](docs/AI_SDK.md) for grounded news, typed results, context pruning, middleware, and local traces.
+
 Install shell completion after `npm link`.
 
 ```bash
@@ -151,6 +155,9 @@ The [documentation index](docs/README.md) links every setup and operations guide
 - Measure defense results against each fantasy position.
 - Compare NFL team results and offense totals.
 - Read NWS hourly forecasts and active alerts for United States stadiums.
+- Search current public reporting through Gemini Google Search.
+- Read user-supplied news pages through Gemini URL Context.
+- Return a validated fantasy analysis object from `seb ask --json`.
 - Screen a complete NFL week for outdoor weather risk.
 - Combine a game, both teams, the venue, and kickoff weather.
 - Select focused skills for start-sit, waivers, weather, schedules, and other workflows.
@@ -162,7 +169,11 @@ The [documentation index](docs/README.md) links every setup and operations guide
 
 The roster analysis uses Sleeper results. The NFL analysis uses nflverse and NWS facts.
 
-Seb has no publisher news feed or official projection feed. It does not use model memory as current news.
+Seb can search current public reporting and return source links.
+
+Seb has no licensed publisher feed, official injury feed, or official projection feed.
+
+Seb never uses model memory as current news.
 
 Read the [data source guide](docs/DATA_SOURCES.md) for fields, cache periods, limits, and attribution.
 
@@ -177,11 +188,20 @@ npm run data:smoke
 npm run test:connectors
 npm run test:harness
 npm run deps:check
+npm run devtools
 ```
+
+Set `SEB_DEVTOOLS=true` before a local Seb run to record AI SDK requests.
+
+Never enable local DevTools in production. The trace files contain prompts and tool data.
 
 The agent uses `ToolLoopAgent` because this project needs direct model and tool-loop control. AI SDK `HarnessAgent` targets sandboxed coding runtimes and remains experimental.
 
 The agent test harness uses AI SDK 7's `MockLanguageModelV4`. It tests a complete tool call without network use or model cost.
+
+The agent prunes old tool data before long model requests.
+
+Model middleware adds valid input examples to each data tool.
 
 The connector harness uses Chat SDK mocks and contract matchers. It tests routing, subscriptions, configuration, and webhook dispatch without platform credentials.
 

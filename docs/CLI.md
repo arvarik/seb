@@ -140,6 +140,8 @@ seb ask "Show the current NFL state."
 
 Seb streams answer text to standard output. An interactive terminal can show tool activity on standard error.
 
+Current-news answers end with a source list when Gemini returns web sources.
+
 Use this option when you want no tool activity.
 
 ```bash
@@ -176,9 +178,28 @@ The command writes one compact JSON object to standard output.
 
 ```json
 {
-  "answer": "Sleeper reports the 2026 preseason.",
+  "analysis": {
+    "schemaVersion": 1,
+    "kind": "general",
+    "subject": "Current NFL state",
+    "summary": "Sleeper reports the 2026 preseason.",
+    "recommendation": null,
+    "confidence": {
+      "level": "high",
+      "score": 0.98,
+      "rationale": "Sleeper returned the current league state."
+    },
+    "metrics": [],
+    "strengths": [],
+    "weaknesses": [],
+    "risks": [],
+    "assumptions": [],
+    "limitations": []
+  },
+  "answer": "# Current NFL state\n\nSleeper reports the 2026 preseason.",
   "fallbackUsed": false,
   "finishReason": "stop",
+  "generatedAt": "2026-08-20T12:00:02.000Z",
   "model": "gemini-3.7-flash",
   "sources": [
     {
@@ -202,6 +223,16 @@ The token values can be `null` when a provider does not return usage data.
 
 Each source can include a cache outcome, retrieval time, and refresh error.
 
+The `analysis` object follows schema version 1.
+
+Seb validates this object before it writes any JSON.
+
+JSON mode uses one research request and one tool-free formatter request.
+
+The reported token use includes both requests.
+
+Web source URLs stay in the separate `sources` array.
+
 Use the linked command for clean JSON. The standard npm command prints its own status lines.
 
 If you do not use `npm link`, add the npm silent option.
@@ -215,6 +246,15 @@ This example selects one field with `jq`.
 ```bash
 seb ask --json "Show the current NFL state." | jq -r .answer
 ```
+
+Select a recommendation or confidence score.
+
+```bash
+seb ask --json "Should I start Player A?" | jq -r .analysis.recommendation.action
+seb ask --json "Compare these teams." | jq .analysis.confidence.score
+```
+
+Read the [AI SDK guide](AI_SDK.md) for the complete analysis contract.
 
 ## Run diagnostics
 

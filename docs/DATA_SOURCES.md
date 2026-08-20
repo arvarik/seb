@@ -1,12 +1,46 @@
 # Data source guide
 
-Seb uses three read-only source families.
+Seb uses four read-only source families.
 
 Each client records the source URL, retrieval time, and cache outcome.
 
 Seb stores normalized cache values and source snapshots in `.cache/seb.sqlite`.
 
 Read the [storage guide](STORAGE.md) for the common request and stale-data policies.
+
+## Gemini Google Search and URL Context
+
+Seb uses Gemini Google Search for current public reporting.
+
+Seb uses Gemini URL Context for an HTTP or HTTPS page that a user supplies.
+
+These tools return provider source records and grounding metadata.
+
+Google can return an attribution redirect URL for a grounded publisher page.
+
+Seb validates each direct web source URL before it displays the link.
+
+The command line, interactive interface, and chat connectors show these links.
+
+Seb includes the current UTC date in each agent request.
+
+This date helps Gemini interpret terms such as `today` and `latest`.
+
+Seb uses grounded reporting for news, injury discussion, trades, and depth-chart changes.
+
+Sleeper remains authoritative for league and roster data.
+
+nflverse remains authoritative for historical schedules and statistics.
+
+The NWS remains authoritative for United States forecasts and alerts.
+
+Seb does not store a persistent news index in version 0.0.2.
+
+It records validated web source links for the active answer and session.
+
+Seb has no licensed publisher feed, official injury feed, or official projection feed.
+
+Read the [AI SDK guide](AI_SDK.md) for the grounding and output rules.
 
 ## Sleeper
 
@@ -214,7 +248,9 @@ Seb never replaces a failed data request with model memory.
 
 Seb returns an unavailable result when a kickoff falls outside the forecast window.
 
-The doctor checks all three source families.
+The doctor checks the three direct public data source families.
+
+A grounded news request separately checks Gemini Search access.
 
 ```bash
 npm run doctor

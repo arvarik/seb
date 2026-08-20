@@ -19,7 +19,12 @@ import {
 import { TeamIdentityRegistry } from '../identity/teams.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
-import { SourceTracker, type DataSourceRecord } from '../sources.js';
+import {
+  normalizeSourceLabel,
+  normalizeWebUrl,
+  SourceTracker,
+  type DataSourceRecord,
+} from '../sources.js';
 import { WeatherClient } from '../weather/client.js';
 import {
   FileSetupProfileStore,
@@ -74,6 +79,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     });
     this.delegate = new DirectChatTransport({
       agent: options.agent,
+      sendSources: true,
     }) as unknown as ChatTransport<UIMessage>;
   }
 
@@ -97,7 +103,11 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       ...options,
       messages: this.modelMessages(options.messages),
     });
-    return appendContextualSuggestions(stream, this.options.session);
+    return appendContextualSuggestions(
+      stream,
+      this.options.session,
+      this.options.sources,
+    );
   }
 
   reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {
@@ -271,6 +281,23 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           ...sources.map(
             (source) => formatSourceRecord(source),
           ),
+        ].join('\n');
+      }
+      case 'devtools': {
+        const enabled = ['1', 'true'].includes(
+          this.options.environment.SEB_DEVTOOLS?.trim().toLowerCase() ?? '',
+        );
+        return [
+          '## AI SDK DevTools',
+          '',
+          `- Recording: ${enabled ? 'enabled' : 'disabled'}`,
+          '- Viewer: `npm run devtools`',
+          '- Local data: `.devtools/`',
+          '- Production use: prohibited',
+          '',
+          enabled
+            ? 'DevTools records prompts, model responses, and tool data in this local process.'
+            : 'Set `SEB_DEVTOOLS=true`, then restart Seb to record local agent runs.',
         ].join('\n');
       }
       case 'cache': {
@@ -462,11 +489,41 @@ function localTextStream(text: string): ReadableStream<UIMessageChunk> {
 function appendContextualSuggestions(
   stream: ReadableStream<UIMessageChunk>,
   state: SessionState,
+  sources: SourceTracker,
 ): ReadableStream<UIMessageChunk> {
+  const webSources = new Map<string, { title?: string; url: string }>();
   return stream.pipeThrough(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
       transform(chunk, controller) {
+        if (chunk.type === 'source-url') {
+          const url = normalizeWebUrl(chunk.url);
+          const source = {
+            id: chunk.sourceId,
+            ...(chunk.title ? { title: chunk.title } : {}),
+            url: chunk.url,
+          };
+          if (url && sources.recordUrlSource(source)) {
+            webSources.set(url, {
+              title: normalizeSourceLabel(chunk.title, new URL(url).hostname),
+              url,
+            });
+          }
+        }
         if (chunk.type === 'finish') {
+          if (webSources.size > 0) {
+            const sourceId = `sources-${crypto.randomUUID()}`;
+            controller.enqueue({ type: 'start-step' });
+            controller.enqueue({ type: 'text-start', id: sourceId });
+            controller.enqueue({
+              type: 'text-delta',
+              id: sourceId,
+              delta: `\n\n## Web sources\n\n${[...webSources.values()]
+                .map((source) => `- [${markdownLabel(source.title ?? source.url)}](<${source.url}>)`)
+                .join('\n')}`,
+            });
+            controller.enqueue({ type: 'text-end', id: sourceId });
+            controller.enqueue({ type: 'finish-step' });
+          }
           const id = `suggestion-${crypto.randomUUID()}`;
           const suggestions = getContextualSuggestions(state).slice(0, 3);
           controller.enqueue({ type: 'start-step' });
@@ -483,6 +540,10 @@ function appendContextualSuggestions(
       },
     }),
   );
+}
+
+function markdownLabel(value: string): string {
+  return value.replace(/[\[\]]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 function withSuggestions(text: string, state: SessionState): string {

@@ -6,6 +6,32 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-08-21
+
+### Added
+
+- The home screen and My Fantasy view now show urgent lineup, player status, reserve, trade deadline, and playoff actions.
+- Scoring-aware player projections now show a median, floor, ceiling, confidence, matchup adjustment, weather adjustment, and limits.
+- The waiver assistant now ranks available targets and shows transparent FAAB ranges from roster need, demand, risk, and recent production.
+- The trade impact tool now compares scoring value and roster position changes for both sides.
+- `Ctrl+G` now opens one visible selector for league, roster, week, player, and team context.
+- Each answer now keeps an immutable numbered Evidence section with live, cached, or stale retrieval details.
+- Scheduled live contracts now check Sleeper, nflverse, the National Weather Service, and Gemini structured answers.
+
+### Changed
+
+- A deterministic eligibility gate now withholds advice when required source, identity, status, news, scoring, or projection evidence is incomplete.
+- Explicit commands now select the active experience. Question keywords no longer change it silently.
+- Long answers now open at the latest Decision section or answer heading.
+- Seb now owns the terminal conversation loop through the public AI SDK transport contract.
+- The project now uses AI SDK `7.0.73` and Google provider `4.0.49`.
+
+### Fixed
+
+- Tool-selected players and teams no longer replace active context unless the user named that subject.
+- League and roster commands now reject values outside the discovered account context.
+- Connector, terminal, text, and JSON recommendations now use the same evidence rules.
+
 ## [0.0.9] - 2026-08-20
 
 ### Added

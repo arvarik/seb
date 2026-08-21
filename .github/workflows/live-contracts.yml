@@ -1,0 +1,55 @@
+name: Live contracts
+
+on:
+  schedule:
+    - cron: '17 15 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          cache: npm
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check live source contracts
+        run: npm run contract:sources
+
+  answer-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          cache: npm
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check the live answer contract
+        if: env.GOOGLE_GENERATIVE_AI_API_KEY != ''
+        run: npm run contract:answer
+
+      - name: Report a missing answer-contract secret
+        if: env.GOOGLE_GENERATIVE_AI_API_KEY == ''
+        run: echo 'The GOOGLE_GENERATIVE_AI_API_KEY secret is not set. The answer contract did not run.'

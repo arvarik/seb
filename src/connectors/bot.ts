@@ -19,12 +19,19 @@ import {
   DEFAULT_GEMINI_FALLBACK_MODEL,
   DEFAULT_GEMINI_MODEL,
 } from '../agent.js';
+import {
+  buildFreeformRecommendationEvidence,
+  enforceFreeformRecommendation,
+  questionRequestsRecommendation,
+  recommendationContextQuestion,
+  type RecommendationToolResult,
+} from '../analysis/recommendation-eligibility.js';
 import { isModelCapacityError } from '../model-capacity-error.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import { WeatherClient } from '../weather/client.js';
 import {
-  normalizeSourceLabel,
+  formatEvidenceMarkdown,
   normalizeWebUrl,
   SourceTracker,
   type SourceObserver,
@@ -218,14 +225,22 @@ async function postAgentResponse(
   } catch (error) {
     throw new ModelResponseError(error, false);
   }
-  await thread.post(withWebSources(result.fullStream, directSources));
+  await thread.post(withWebSources(
+    result.fullStream,
+    directSources,
+    latestRecommendationQuestion(prompt),
+  ));
 }
 
 export function withWebSources(
   stream: AsyncIterable<unknown>,
   directSources?: SourceTracker,
+  question = '',
 ) {
-  const sources = new Map<string, string>();
+  if (questionRequestsRecommendation(question)) {
+    return guardedRecommendationStream(stream, directSources ?? new SourceTracker(), question);
+  }
+  const answerSources = directSources ?? new SourceTracker();
   let emittedOutput = false;
   const monitored = (async function* () {
     try {
@@ -235,10 +250,11 @@ export function withWebSources(
         if (isUrlSourcePart(part)) {
           const url = normalizeWebUrl(part.url);
           if (url) {
-            sources.set(
+            answerSources.recordUrlSource({
+              id: sourcePartId(part),
+              ...(part.title ? { title: part.title } : {}),
               url,
-              normalizeSourceLabel(part.title, new URL(url).hostname),
-            );
+            });
           }
         }
         yield part;
@@ -251,23 +267,104 @@ export function withWebSources(
   const text = fromFullStream(monitored);
   return (async function* () {
     for await (const part of text) yield part;
-    const direct = directSources?.list().filter((source) => !source.id.startsWith('web:')) ?? [];
-    if (direct.length > 0) {
-      yield `\n\n**Data sources**\n\n${direct
-        .map((source) => {
-          const cache = source.cacheOutcome?.replace(/-/g, ' ') ?? 'source access';
-          const retrieved = source.retrievedAt ? `, retrieved ${source.retrievedAt}` : '';
-          const warning = source.warnings?.length ? `, warning: ${source.warnings.join(' ')}` : '';
-          return `- [${safeMarkdownLabel(source.label)}](<${source.url}>) (${cache}${retrieved}${warning})`;
-        })
-        .join('\n')}`;
-    }
-    if (sources.size > 0) {
-      yield `\n\n**Web sources**\n\n${[...sources]
-        .map(([url, title]) => `- [${safeMarkdownLabel(title)}](<${url}>)`)
-        .join('\n')}`;
-    }
+    yield sourceAppendix(answerSources);
   })();
+}
+
+function guardedRecommendationStream(
+  stream: AsyncIterable<unknown>,
+  directSources: SourceTracker,
+  question: string,
+) {
+  return (async function* () {
+    let answer = '';
+    const toolResults: RecommendationToolResult[] = [];
+    try {
+      for await (const part of stream) {
+        if (isErrorPart(part)) throw new ModelResponseError(part.error, false);
+        if (isTextDeltaPart(part)) answer += part.text;
+        if (isUrlSourcePart(part)) {
+          const url = normalizeWebUrl(part.url);
+          if (url) {
+            directSources.recordUrlSource({
+              id: sourcePartId(part),
+              ...(part.title ? { title: part.title } : {}),
+              url,
+            });
+          }
+        }
+        const toolResult = recommendationToolResult(part);
+        if (toolResult) toolResults.push(toolResult);
+      }
+    } catch (error) {
+      if (error instanceof ModelResponseError) throw error;
+      throw new ModelResponseError(error, false);
+    }
+    const guarded = enforceFreeformRecommendation(
+      answer,
+      buildFreeformRecommendationEvidence({
+        question,
+        sources: directSources.list(),
+        toolResults,
+      }),
+    );
+    yield guarded.answer;
+    yield sourceAppendix(directSources);
+  })();
+}
+
+function sourceAppendix(sources: SourceTracker): string {
+  const evidence = formatEvidenceMarkdown(sources.list());
+  return evidence ? `\n\n${evidence}` : '';
+}
+
+function recommendationToolResult(value: unknown): RecommendationToolResult | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (
+    record.type !== 'tool-result' ||
+    typeof record.toolName !== 'string' ||
+    !('output' in record)
+  ) return null;
+  return { output: record.output, toolName: record.toolName };
+}
+
+function sourcePartId(value: unknown): string {
+  if (!value || typeof value !== 'object') return crypto.randomUUID();
+  const id = (value as Record<string, unknown>).id;
+  return typeof id === 'string' ? id : crypto.randomUUID();
+}
+
+function latestRecommendationQuestion(prompt: unknown): string {
+  const prompts = userPrompts(prompt);
+  return recommendationContextQuestion(prompts.at(-1) ?? '', prompts.at(-2));
+}
+
+function userPrompts(prompt: unknown): string[] {
+  if (!Array.isArray(prompt)) return [];
+  const prompts: string[] = [];
+  for (let index = prompt.length - 1; index >= 0; index -= 1) {
+    const message = prompt[index];
+    if (!message || typeof message !== 'object') continue;
+    const record = message as Record<string, unknown>;
+    if (record.role !== 'user') continue;
+    if (typeof record.content === 'string') {
+      prompts.unshift(record.content);
+      if (prompts.length === 2) break;
+      continue;
+    }
+    if (!Array.isArray(record.content)) continue;
+    const text = record.content.flatMap((part) => {
+      if (!part || typeof part !== 'object') return [];
+      const partRecord = part as Record<string, unknown>;
+      return partRecord.type === 'text' && typeof partRecord.text === 'string'
+        ? [partRecord.text]
+        : [];
+    }).join('\n');
+    if (text) prompts.unshift(text);
+    if (prompts.length === 2) break;
+  }
+  return prompts;
 }
 
 function isTextDeltaPart(value: unknown): value is { text: string; type: 'text-delta' } {
@@ -316,10 +413,6 @@ function isUrlSourcePart(value: unknown): value is {
     return false;
   }
   return normalizeWebUrl(record.url) !== null;
-}
-
-function safeMarkdownLabel(value: string): string {
-  return value.replaceAll('[', '').replaceAll(']', '').replace(/\s+/g, ' ').trim();
 }
 
 async function buildPrompt(

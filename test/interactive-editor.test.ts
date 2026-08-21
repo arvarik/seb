@@ -39,6 +39,12 @@ describe('TerminalKeyParser', () => {
     ]);
   });
 
+  it('parses the context selector shortcut', () => {
+    const parser = new TerminalKeyParser();
+
+    expect(parser.parse('\u0007')).toEqual([{ type: 'ctrl-g' }]);
+  });
+
   it('collects bracketed paste across input chunks', () => {
     const parser = new TerminalKeyParser();
 

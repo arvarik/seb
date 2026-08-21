@@ -194,7 +194,7 @@ describe('interactive presentation', () => {
       id: 'nflverse:weekly',
       label: 'nflverse 2025 weekly stats',
       url: 'https://github.com/nflverse/nflverse-data/releases',
-    })).toBe('2025 STATS');
+    })).toBe('LIVE');
     expect(formatElapsed(1_250)).toBe('1.3s');
   });
 

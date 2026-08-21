@@ -11,6 +11,24 @@ export {
   formatFantasyAnalysis,
   type FantasyAnalysis,
 } from './analysis/output.js';
+export {
+  buildFreeformRecommendationEvidence,
+  buildRecommendationEvidence,
+  enforceFreeformRecommendation,
+  enforceRecommendationEligibility,
+  questionRequestsRecommendation,
+  recommendationContextQuestion,
+  type BuildRecommendationEvidenceInput,
+  type EnforcedFantasyAnalysis,
+  type EnforcedFreeformRecommendation,
+  type EvidenceState,
+  type IdentityEvidenceState,
+  type ProjectionEligibilityState,
+  type RecommendationEligibility,
+  type RecommendationEvidence,
+  type RecommendationToolResult,
+  type RequiredEvidenceState,
+} from './analysis/recommendation-eligibility.js';
 export { isModelCapacityError } from './model-capacity-error.js';
 export {
   NflverseApiError,
@@ -48,6 +66,46 @@ export {
   type WeatherClientOptions,
 } from './weather/client.js';
 export { GameWeatherService } from './weather/game-weather.js';
+export {
+  projectPlayer,
+  inspectPlayerScoringSettings,
+  scorePlayerWeek,
+  type ProjectPlayerInput,
+  type ScoringAwarePlayerProjection,
+} from './projection/player-projection.js';
+export {
+  PlayerProjectionService,
+  type PlayerProjectionRequest,
+} from './projection/service.js';
+export {
+  analyzeTradeImpact,
+  type AnalyzeTradeImpactInput,
+  type TradeImpactAnalysis,
+  type TradePlayerImpact,
+  type TradeRosterFitChange,
+  type TradeSideImpact,
+} from './trades/trade-impact.js';
+export {
+  TradeImpactService,
+  type TradeImpactRequest,
+} from './trades/service.js';
+export {
+  rankWaiverTargets,
+  type FaabRange,
+  type RankedWaiverCandidate,
+  type RankWaiverTargetsInput,
+  type WaiverAssistantResult,
+  type WaiverDemand,
+  type WaiverNeedLevel,
+  type WaiverProduction,
+  type WaiverRisk,
+  type WaiverRiskLevel,
+  type WaiverRosterNeed,
+} from './waivers/ranking.js';
+export {
+  WaiverAssistantService,
+  type WaiverAssistantRequest,
+} from './waivers/service.js';
 export { findHomeStadium, listHomeStadiums } from './weather/stadiums.js';
 export type {
   NwsAlert,

@@ -45,7 +45,7 @@ describe('SebTerminalRenderer prompt input', () => {
     await expect(selected).resolves.toBe('Compare these players');
   });
 
-  it('uses the mouse wheel for the transcript without recalling history', async () => {
+  it('opens a long answer at its start and scrolls without recalling history', async () => {
     const history = new MemoryPromptHistory(['older prompt']);
     const terminal = createTerminal();
     terminal.output.rows = 16;
@@ -68,14 +68,17 @@ describe('SebTerminalRenderer prompt input', () => {
       }),
     });
     const prompt = renderer.readPrompt();
+    const focusedFrame = terminal.output.text().split('\x1b[H').at(-1);
+    expect(focusedFrame).toContain('Transcript line 1');
+    expect(focusedFrame).toContain('Opened at answer');
 
-    terminal.input.type('\x1b[<64;10;5M');
+    terminal.input.type('\x1b[<65;10;5M');
 
     await expect.poll(() => terminal.output.text().split('\x1b[H').at(-1)).toContain(
       'Viewing earlier transcript',
     );
     const frame = terminal.output.text().split('\x1b[H').at(-1);
-    expect(frame).toContain('3 lines above latest');
+    expect(frame).not.toContain('older prompt');
     terminal.input.type('new request\r');
     await expect(prompt).resolves.toBe('new request');
     expect(terminal.output.text()).toContain('\x1b[?1000h\x1b[?1002h\x1b[?1006h');
@@ -102,19 +105,12 @@ describe('SebTerminalRenderer prompt input', () => {
     const scrollUp = '\x1b[<64;10;5M';
     const scrollDown = '\x1b[<65;10;5M';
 
-    const beforeTop = terminal.output.chunks.length;
+    const atAnswerStart = terminal.output.chunks.length;
     for (let index = 0; index < 100; index += 1) terminal.input.type(scrollUp);
-    await expect.poll(() => terminal.output.chunks.length).toBe(beforeTop + 1);
-    const afterTop = terminal.output.chunks.length;
-    expect(terminal.output.text().split('\x1b[H').at(-1)).toContain(
-      'Viewing earlier transcript',
-    );
-
-    for (let index = 0; index < 100; index += 1) terminal.input.type(scrollUp);
-    expect(terminal.output.chunks).toHaveLength(afterTop);
+    expect(terminal.output.chunks).toHaveLength(atAnswerStart);
 
     for (let index = 0; index < 100; index += 1) terminal.input.type(scrollDown);
-    await expect.poll(() => terminal.output.chunks.length).toBe(afterTop + 1);
+    await expect.poll(() => terminal.output.chunks.length).toBe(atAnswerStart + 1);
     const afterBottom = terminal.output.chunks.length;
     expect(terminal.output.text().split('\x1b[H').at(-1)).not.toContain(
       'Viewing earlier transcript',
@@ -122,6 +118,16 @@ describe('SebTerminalRenderer prompt input', () => {
 
     for (let index = 0; index < 100; index += 1) terminal.input.type(scrollDown);
     expect(terminal.output.chunks).toHaveLength(afterBottom);
+
+    for (let index = 0; index < 100; index += 1) terminal.input.type(scrollUp);
+    await expect.poll(() => terminal.output.chunks.length).toBe(afterBottom + 1);
+    const afterTop = terminal.output.chunks.length;
+    expect(terminal.output.text().split('\x1b[H').at(-1)).toContain(
+      'Viewing earlier transcript',
+    );
+
+    for (let index = 0; index < 100; index += 1) terminal.input.type(scrollUp);
+    expect(terminal.output.chunks).toHaveLength(afterTop);
     terminal.input.type('\u0003');
     await expect(prompt).rejects.toThrow('Interrupted');
   });
@@ -330,6 +336,87 @@ describe('SebTerminalRenderer prompt input', () => {
     await expect(prompt).rejects.toThrow('Interrupted');
   });
 
+  it('selects league context from one visible keyboard panel', async () => {
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    session.leagues = [
+      {
+        deadlines: [],
+        leagueId: '100',
+        name: 'Home League',
+        rosterIds: [4],
+        status: 'in_season',
+        warning: null,
+      },
+      {
+        deadlines: [],
+        leagueId: '200',
+        name: 'Dynasty League',
+        rosterIds: [8],
+        status: 'in_season',
+        warning: null,
+      },
+    ];
+    session.leagueOptions = ['100', '200'];
+    const terminal = createTerminal();
+    terminal.output.columns = 80;
+    terminal.output.rows = 24;
+    const renderer = createRenderer(
+      terminal,
+      new MemoryPromptHistory(),
+      new InteractiveUiState(),
+      () => undefined,
+      session,
+    );
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type('\u0007');
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame).toContain('ACTIVE CONTEXT');
+    expect(frame).toContain('League   All leagues');
+    expect(frame).toContain('Roster   Automatic');
+    expect(frame).toContain('Week     Unset');
+    expect(frame).toContain('Player   No player');
+    expect(frame).toContain('Team     No team');
+
+    terminal.input.type('\x1b[C\r');
+    await expect(prompt).resolves.toBe('/league 100');
+  });
+
+  it('opens a completed answer at its Decision section', async () => {
+    const terminal = createTerminal();
+    terminal.output.columns = 80;
+    terminal.output.rows = 18;
+    const renderer = createRenderer(terminal);
+    const preamble = Array.from({ length: 20 }, (_, index) => `Research note ${index + 1}`);
+    const details = Array.from({ length: 20 }, (_, index) => `Decision detail ${index + 1}`);
+
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'start', messageId: 'decision-answer' });
+          controller.enqueue({ type: 'text-start', id: 'decision-text' });
+          controller.enqueue({
+            type: 'text-delta',
+            id: 'decision-text',
+            delta: [...preamble, '## Decision', ...details].join('\n'),
+          });
+          controller.enqueue({ type: 'text-end', id: 'decision-text' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
+          controller.close();
+        },
+      }),
+    });
+
+    const prompt = renderer.readPrompt();
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame).toContain('DECISION');
+    expect(frame).toContain('Decision detail 1');
+    expect(frame).not.toContain('Research note 20');
+    expect(frame).toContain('Opened at Decision');
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
   it('explains the three experiences on the first screen', async () => {
     const terminal = createTerminal();
     const renderer = createRenderer(terminal);
@@ -341,6 +428,102 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(output).toContain('MY FANTASY');
     expect(output).toContain('ANALYZE');
     expect(output).toContain('/connect <Sleeper username>');
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
+  it('shows fantasy actions before the three experiences', async () => {
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    session.user = 'seb-user';
+    session.leagues = [
+      {
+        actionCenter: {
+          actions: [{
+            details: 'One starter slot is empty.',
+            id: 'league-1:roster-4:lineup',
+            kind: 'lineup',
+            nextStep: 'Fill the slot before kickoff.',
+            playerId: null,
+            rosterId: 4,
+            title: '1 open starter slot',
+            urgency: 'high',
+          }],
+          lineups: [],
+          playerStatusSignals: [],
+        },
+        deadlines: [],
+        leagueId: 'league-1',
+        name: 'Home League',
+        rosterIds: [4],
+        status: 'in_season',
+        warning: null,
+      },
+      {
+        actionCenter: {
+          actions: [
+            {
+              details: 'A starter is out.',
+              id: 'league-2:roster-8:player-1',
+              kind: 'player-status',
+              nextStep: 'Choose a healthy replacement.',
+              playerId: 'player-1',
+              rosterId: 8,
+              title: 'Jordan Example needs a lineup check',
+              urgency: 'high',
+            },
+            {
+              details: 'A starter is questionable.',
+              id: 'league-2:roster-8:player-2',
+              kind: 'player-status',
+              nextStep: 'Check the final status.',
+              playerId: 'player-2',
+              rosterId: 8,
+              title: 'Taylor Example needs a lineup check',
+              urgency: 'medium',
+            },
+            {
+              details: 'The playoffs start next week.',
+              id: 'league-2:playoffs',
+              kind: 'deadline',
+              nextStep: 'Review the roster.',
+              playerId: null,
+              rosterId: null,
+              title: 'Fantasy playoffs start next week',
+              urgency: 'low',
+            },
+          ],
+          lineups: [],
+          playerStatusSignals: [],
+        },
+        deadlines: [],
+        leagueId: 'league-2',
+        name: 'Dynasty League',
+        rosterIds: [8],
+        status: 'in_season',
+        warning: null,
+      },
+    ];
+    const terminal = createTerminal();
+    terminal.output.columns = 80;
+    terminal.output.rows = 24;
+    const renderer = createRenderer(
+      terminal,
+      new MemoryPromptHistory(),
+      new InteractiveUiState(),
+      () => undefined,
+      session,
+    );
+    const prompt = renderer.readPrompt();
+    const output = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+
+    expect(output.indexOf('WHAT NEEDS ATTENTION')).toBeLessThan(output.lastIndexOf('EXPLORE'));
+    expect(output).toContain('NOW · Home League · Roster 4 · 1 open starter slot');
+    expect(output).toContain('NOW · Dynasty League · Roster 8 · Jordan Example needs a lineup check');
+    expect(output).toContain('+1 more urgent action');
+    expect(output).not.toContain('Fantasy playoffs start next week');
+    expect(output).toContain('MY FANTASY');
+    expect(output).toContain('ANALYZE');
+    expect(output).toContain('Use a numbered action below');
     terminal.input.type('\u0003');
     await expect(prompt).rejects.toThrow('Interrupted');
   });
@@ -389,7 +572,7 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(uiState.latestAnswer).toContain('Weekly points');
   });
 
-  it('keeps the web source line inside the current Seb response', async () => {
+  it('keeps the evidence panel inside the current Seb response', async () => {
     const terminal = createTerminal();
     const renderer = createRenderer(terminal);
     const chunks: UIMessageChunk[] = [
@@ -410,7 +593,7 @@ describe('SebTerminalRenderer prompt input', () => {
       {
         type: 'text-delta',
         id: 'source-text',
-        delta: '\n\nWeb sources: [NFL report](<https://example.com/nfl-report>)',
+        delta: '\n\n## Evidence\n\n1. [NFL report](<https://example.com/nfl-report>) · **LIVE** · accessed now',
       },
       { type: 'text-end', id: 'source-text' },
       { type: 'finish-step' },
@@ -429,8 +612,9 @@ describe('SebTerminalRenderer prompt input', () => {
     const frame = terminal.output.text().split('\x1b[H').at(-1) ?? '';
     expect(frame.match(/◆ Seb/gu)).toHaveLength(1);
     expect(frame).toContain('Model answer.');
-    expect(frame).toContain('WEB SOURCES');
+    expect(frame).toContain('EVIDENCE');
     expect(frame).toContain('NFL report');
+    expect(frame).toContain('LIVE');
   });
 
   it('shows an intermediate tool error as a retry and removes it after success', async () => {
@@ -525,6 +709,7 @@ function createRenderer(
   history: PromptHistory = new MemoryPromptHistory(),
   uiState = new InteractiveUiState(),
   copyText: (text: string) => void = () => undefined,
+  session = createSessionState(new Date('2026-08-20T12:00:00Z')),
 ) {
   return new SebTerminalRenderer({
     copyText,
@@ -533,10 +718,10 @@ function createRenderer(
     input: terminal.input,
     model: 'test-model',
     output: terminal.output,
-    session: createSessionState(new Date('2026-08-20T12:00:00Z')),
+    session,
     sources: new SourceTracker(),
     uiState,
-    version: '0.0.9',
+    version: '0.0.10',
   });
 }
 

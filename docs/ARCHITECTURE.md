@@ -79,9 +79,9 @@ It also supports a `/new` model-context boundary.
 
 The transport records contextual actions for the renderer.
 
-The transport records the active player from compatible tool input.
+The transport records a tool-selected player only when the user named that player.
 
-The transport also appends validated grounded web sources.
+The transport also binds validated direct and web sources to the answer ID.
 
 This step uses no extra Gemini request.
 
@@ -101,15 +101,11 @@ It shows these rows on the first prompt and after `/new` or `/clear`.
 
 Arrow keys change the selection. Tab fills the selected value.
 
-AI SDK TUI has no public custom renderer hook in version `1.0.72`.
+Seb owns the conversation runner and local renderer.
 
-Seb pins that exact version and uses only the internal runner entry point.
-
-Seb does not import the private AI SDK terminal renderer.
+The runner uses the public AI SDK chat transport and UI message contracts.
 
 The local renderer uses the public `readUIMessageStream` function.
-
-Review the runner adapter before each TUI dependency update.
 
 Pure editor, history, theme, and presentation modules contain most terminal behavior.
 
@@ -177,7 +173,9 @@ Each direct source client accepts a source observer.
 
 The observer records exact URLs, retrieval times, and cache outcomes.
 
-The session source tracker records grounded HTTP and HTTPS source links.
+The source tracker records grounded HTTP and HTTPS source links.
+
+The interactive state stores one immutable source snapshot for each answer ID.
 
 `ResilientFetch` gives each client bounded retries and request timeouts.
 

@@ -18,6 +18,7 @@ Compare him with Saquon Barkley for this week's matchup and weather.
 - **Connect Sleeper once.** Seb discovers your current leagues, owned rosters, and useful league settings.
 - **Follow the evidence.** Seb uses Sleeper, nflverse, the National Weather Service, and grounded web sources.
 - **Move from facts to decisions.** Continue from a player profile into comparison, matchup, weather, news, or roster analysis.
+- **Protect each decision.** Seb withholds advice when current identity, status, news, scoring, or projection evidence is incomplete.
 - **Keep control.** Seb only reads data. It never changes a lineup, waiver claim, trade, or league setting.
 
 ## Three ways to use Seb
@@ -73,6 +74,8 @@ Seb separates source facts from model explanation.
 - Local storage keeps checked cache records, source snapshots, identities, and provenance.
 
 Seb reports source freshness and stale-data warnings. It never presents model memory as current news.
+
+Each answer keeps its own numbered Evidence section with live, cached, or stale retrieval details.
 
 Seb has no licensed publisher feed, official injury feed, or official projection feed.
 

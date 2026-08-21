@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   SleeperLeague,
+  SleeperPlayerMap,
   SleeperRoster,
   SleeperUser,
 } from '../src/sleeper/types.js';
@@ -187,6 +188,10 @@ describe('first-run setup wizard', () => {
       'Second League',
     ]);
     expect(session.leagues[0]?.deadlines).toContain('Trade deadline: end of NFL Week 11');
+    expect(session.leagues[0]?.actionCenter?.lineups).toEqual([
+      { filledSlots: 1, openSlots: 0, rosterId: 6, starterSlots: 1 },
+      { filledSlots: 1, openSlots: 0, rosterId: 7, starterSlots: 1 },
+    ]);
     expect(session.leagueId).toBeNull();
 
     focusSessionLeague(session, '200');
@@ -241,6 +246,22 @@ describe('first-run setup wizard', () => {
       rosterIds: [6],
       warning: null,
     });
+  });
+
+  it('keeps lineup actions when the player status refresh fails', async () => {
+    const session = createSessionState();
+    const sleeper = new FakeSleeperDiscovery();
+    vi.spyOn(sleeper, 'getPlayers').mockRejectedValue(new Error('Players unavailable'));
+
+    await refreshAutomaticSession(sleeper, session, 'arvarik');
+
+    expect(session.accountStatus).toBe('ready');
+    expect(session.accountError).toContain('Player status refresh failed: Players unavailable');
+    expect(session.leagues[0]?.actionCenter?.lineups).toEqual([
+      { filledSlots: 1, openSlots: 0, rosterId: 6, starterSlots: 1 },
+      { filledSlots: 1, openSlots: 0, rosterId: 7, starterSlots: 1 },
+    ]);
+    expect(session.leagues[0]?.actionCenter?.playerStatusSignals).toEqual([]);
   });
 });
 
@@ -321,6 +342,17 @@ class FakeSleeperDiscovery implements SleeperSetupDiscovery {
     });
   }
 
+  getPlayers(): Promise<SleeperPlayerMap> {
+    return Promise.resolve({
+      'player-1': {
+        full_name: 'Test Player',
+        injury_status: null,
+        player_id: 'player-1',
+        status: 'Active',
+      },
+    });
+  }
+
   getUser(): Promise<SleeperUser> {
     return Promise.resolve({ user_id: 'user-1', username: 'arvarik' });
   }
@@ -350,7 +382,7 @@ function league(leagueId: string, name: string): SleeperLeague {
     sport: 'nfl',
     status: 'in_season',
     total_rosters: 12,
-    roster_positions: [],
+    roster_positions: ['QB', 'BN'],
     scoring_settings: {},
     settings: {
       trade_deadline: 11,
@@ -373,6 +405,7 @@ function roster(
     ...(coOwners ? { co_owners: coOwners } : {}),
     players: ['player-1'],
     settings: {},
+    starters: ['player-1'],
   };
 }
 

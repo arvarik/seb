@@ -1,6 +1,6 @@
 # Interactive guide
 
-The interactive interface keeps a conversation and selects useful context automatically.
+The interactive interface keeps a conversation and loads useful automatic context.
 
 Start it with either command.
 
@@ -42,6 +42,8 @@ Seb then discovers every current league and owned roster for that account.
 
 Seb remembers the active player or team for a natural follow-up.
 
+Seb changes a subject only when the user names that subject or selects it explicitly.
+
 You do not need to select a week, league, roster, team, or workflow first.
 
 Use an advanced override only when you want another period or one league.
@@ -50,7 +52,7 @@ Read the [experience guide](EXPERIENCES.md) for complete user journeys.
 
 ## Home screen and contextual actions
 
-The home screen explains Explore, My Fantasy, and Analyze.
+The home screen shows urgent weekly actions before Explore, My Fantasy, and Analyze.
 
 The header shows the active experience and current NFL state.
 
@@ -83,6 +85,8 @@ It groups commands into nine clear sections.
 The empty palette starts with the three experiences, account connection, and navigation.
 
 It shows active context values and the selected command effect.
+
+Press `Ctrl+G` to select the active league, roster, week, player, or team in one panel.
 
 It places recent commands before equally relevant commands.
 
@@ -299,13 +303,15 @@ Read the [skill guide](SKILLS.md) for all available workflows.
 
 Run `/sources` after an answer.
 
-Seb shows each source URL that a data client or grounded search used during the session.
+Seb shows each source URL that the latest answer used.
 
 The source list records Sleeper endpoints, nflverse files, NWS endpoints, and web reporting.
 
-Current-news answers include one compact line with up to three web source links.
+Answers include one compact Evidence section with up to three source links.
 
-The line tells the user to ask for all sources. Seb keeps every validated source for `/sources`.
+The section labels each source as `LIVE`, `CACHED`, or `STALE` and shows retrieval details.
+
+Seb keeps an immutable source set for each answer during the session.
 
 Seb accepts only HTTP and HTTPS web source links.
 
@@ -315,7 +321,7 @@ The terminal keeps the visible transcript after `/new`.
 
 The header shows a short source state for the latest source.
 
-The states include `LIVE`, `WEB`, `CACHED`, `STATS`, and `STALE`.
+The states include `LIVE`, `CACHED`, and `STALE`.
 
 Run `/source INDEX` to print one numbered source as a clickable link.
 

@@ -14,6 +14,7 @@ import {
   completeInteractiveInput,
   findInteractiveCommand,
   interactiveCommandArgumentError,
+  NFL_TEAM_CODES,
   parseInteractiveCommandInput,
 } from './commands.js';
 import { PromptEditor, TerminalKeyParser, type TerminalKey } from './editor.js';
@@ -29,6 +30,10 @@ import {
   visibleLength,
   wrapTerminalLine,
 } from './presentation.js';
+import {
+  compareFantasyLeagueActions,
+  type FantasyLeagueAction,
+} from '../sleeper/action-center.js';
 import {
   experienceTitle,
   getContextualSuggestions,
@@ -114,6 +119,21 @@ interface ScreenSelection {
   moved: boolean;
 }
 
+type ContextField = 'league' | 'roster' | 'week' | 'player' | 'team';
+
+interface ContextChoice {
+  command: string;
+  label: string;
+  selected: boolean;
+}
+
+interface ContextItem {
+  choices: ContextChoice[];
+  field: ContextField;
+  label: string;
+  value: string;
+}
+
 const SPINNERS = ['◐', '◓', '◑', '◒'] as const;
 const FRAME_INTERVAL_MS = Math.ceil(1000 / 60);
 const MOUSE_WHEEL_LINES = 3;
@@ -125,6 +145,9 @@ export class SebTerminalRenderer {
   private active = false;
   private activeStartedAt = 0;
   private activeToolIds = new Set<string>();
+  private answerFocus: 'Decision' | 'answer' | null = null;
+  private contextChoices = new Map<ContextField, number>();
+  private contextSelection = 0;
   private editor = new PromptEditor();
   private exitRequested = false;
   private framePlainLines: string[] = [];
@@ -138,7 +161,7 @@ export class SebTerminalRenderer {
   private menuSelection = 0;
   private onData: ((chunk: Buffer) => void) | undefined;
   private onResize: (() => void) | undefined;
-  private overlay: 'none' | 'shortcuts' | 'history' = 'none';
+  private overlay: 'none' | 'shortcuts' | 'history' | 'context' = 'none';
   private readonly options: SebRendererOptions;
   private paintTimer: ReturnType<typeof setTimeout> | undefined;
   private scrollOffset = 0;
@@ -231,6 +254,7 @@ export class SebTerminalRenderer {
         : `Ready · ${formatElapsed(Date.now() - this.streamStartedAt)}`;
       this.captureAnswer(response);
       this.options.uiState.sources = this.options.sources.list();
+      this.focusLatestAnswer();
       this.paint();
       this.streamStop = undefined;
     }
@@ -281,6 +305,10 @@ export class SebTerminalRenderer {
       } else if (key.type === 'escape' || key.type === 'enter') {
         this.leaveSelectionMode();
       }
+      return;
+    }
+    if (this.overlay === 'context') {
+      await this.handleContextKey(key, resolve, reject);
       return;
     }
     if (this.overlay !== 'none') {
@@ -354,6 +382,7 @@ export class SebTerminalRenderer {
       case 'scroll-up': this.scroll(MOUSE_WHEEL_LINES); return;
       case 'scroll-down': this.scroll(-MOUSE_WHEEL_LINES); return;
       case 'ctrl-r': this.reverseSearch(); break;
+      case 'ctrl-g': this.openContextSelector(); break;
       case 'ctrl-k': this.menuOpen = true; if (!this.editor.text()) this.editor.set('/'); break;
       case 'ctrl-l': this.paint(true); return;
       case 'escape': this.stop(); reject(new Error('Interrupted')); return;
@@ -472,10 +501,147 @@ export class SebTerminalRenderer {
     await this.finishSubmission(prompt, resolve);
   }
 
+  private async handleContextKey(
+    key: TerminalKey,
+    resolve: (value: string | undefined) => void,
+    reject: (reason: Error) => void,
+  ): Promise<void> {
+    const items = this.contextItems();
+    const item = items[this.contextSelection];
+    if (key.type === 'ctrl-c') {
+      this.stop();
+      reject(new Error('Interrupted'));
+      return;
+    }
+    if (key.type === 'escape' || key.type === 'ctrl-g') {
+      this.overlay = 'none';
+      this.status = 'Ready';
+      this.paint();
+      return;
+    }
+    if (key.type === 'up' || key.type === 'down') {
+      this.contextSelection = cycle(
+        this.contextSelection,
+        key.type === 'up' ? -1 : 1,
+        items.length,
+      );
+      this.paint();
+      return;
+    }
+    if ((key.type === 'left' || key.type === 'right') && item?.choices.length) {
+      const current = this.contextChoices.get(item.field) ?? 0;
+      this.contextChoices.set(
+        item.field,
+        cycle(current, key.type === 'left' ? -1 : 1, item.choices.length),
+      );
+      this.paint();
+      return;
+    }
+    if (key.type !== 'enter' || !item) return;
+    if (item.field === 'player') {
+      this.overlay = 'none';
+      this.editor.set('/skill player-info ');
+      this.status = 'Type a player name and question';
+      this.paint();
+      return;
+    }
+    const choiceIndex = this.contextChoices.get(item.field) ?? 0;
+    const choice = item.choices[choiceIndex];
+    if (!choice) return;
+    this.overlay = 'none';
+    this.editor.set(choice.command);
+    await this.submitPrompt(resolve);
+  }
+
+  private openContextSelector(): void {
+    this.overlay = 'context';
+    this.menuOpen = false;
+    this.contextSelection = 0;
+    this.contextChoices.clear();
+    for (const item of this.contextItems()) {
+      const selected = item.choices.findIndex((choice) => choice.selected);
+      this.contextChoices.set(item.field, Math.max(0, selected));
+    }
+    this.status = 'Context selector';
+  }
+
+  private contextItems(): ContextItem[] {
+    const session = this.options.session;
+    const focusedLeague = session.leagues.find(
+      (league) => league.leagueId === session.leagueId,
+    );
+    const rosterOptions = focusedLeague?.rosterIds ?? session.rosterOptions;
+    const items: Array<Omit<ContextItem, 'value'>> = [
+      {
+        choices: [
+          { command: '/league all', label: 'All leagues', selected: session.leagueId === null },
+          ...session.leagues.map((league) => ({
+            command: `/league ${league.leagueId}`,
+            label: league.name,
+            selected: session.leagueId === league.leagueId,
+          })),
+        ],
+        field: 'league',
+        label: 'League',
+      },
+      {
+        choices: [
+          { command: '/roster clear', label: 'Automatic', selected: session.rosterId === null },
+          ...[...new Set(rosterOptions)].map((rosterId) => ({
+            command: `/roster ${rosterId}`,
+            label: `Roster ${rosterId}`,
+            selected: session.rosterId === rosterId,
+          })),
+        ],
+        field: 'roster',
+        label: 'Roster',
+      },
+      {
+        choices: [
+          { command: '/week current', label: 'Refresh current', selected: false },
+          { command: '/week clear', label: 'Unset', selected: session.week === null },
+          ...Array.from({ length: 22 }, (_, index) => index + 1).map((week) => ({
+            command: `/week ${week}`,
+            label: `Week ${week}`,
+            selected: session.week === week,
+          })),
+        ],
+        field: 'week',
+        label: 'Week',
+      },
+      {
+        choices: [],
+        field: 'player',
+        label: 'Player',
+      },
+      {
+        choices: [
+          { command: '/team clear', label: 'No team', selected: session.team === null },
+          ...NFL_TEAM_CODES.map((team) => ({
+            command: `/team ${team}`,
+            label: team,
+            selected: session.team === team,
+          })),
+        ],
+        field: 'team',
+        label: 'Team',
+      },
+    ];
+    return items.map((item) => {
+      if (item.field === 'player') {
+        return { ...item, value: session.player ?? 'No player' };
+      }
+      const fallback = Math.max(0, item.choices.findIndex((choice) => choice.selected));
+      const choice = item.choices[this.contextChoices.get(item.field) ?? fallback];
+      return { ...item, value: choice?.label ?? 'Not available' };
+    });
+  }
+
   private async finishSubmission(
     prompt: string,
     resolve: (value: string | undefined) => void,
   ): Promise<void> {
+    this.answerFocus = null;
     this.scrollOffset = 0;
     this.options.uiState.showSuggestions = false;
     try {
@@ -531,7 +697,7 @@ export class SebTerminalRenderer {
     for (const [index, part] of message.parts.entries()) {
       const id = `${message.id}:${index}`;
       if (part.type === 'text' && part.text.trim()) {
-        const continuationIndex = part.text.trimStart().startsWith('Web sources:')
+        const continuationIndex = /^(?:##\s+Evidence\b|Web sources:)/u.test(part.text.trimStart())
           ? previousTextPartIndex(message.parts, index)
           : undefined;
         if (continuationIndex !== undefined) {
@@ -805,8 +971,44 @@ export class SebTerminalRenderer {
       this.maximumScrollOffset,
     );
     if (nextOffset === this.scrollOffset) return;
+    this.answerFocus = null;
     this.scrollOffset = nextOffset;
     this.requestPaint();
+  }
+
+  private focusLatestAnswer(): void {
+    const width = Math.max(40, this.options.output.columns ?? 80);
+    const height = Math.max(16, this.options.output.rows ?? 24);
+    const bodyHeight = Math.max(
+      3,
+      height - this.renderHeader(width).length - this.renderFooter(width).length,
+    );
+    const body = this.renderBody(width);
+    const assistantMarker = `${symbol(this.theme, 'assistant')} Seb`;
+    let assistantStart = -1;
+    for (let index = body.length - 1; index >= 0; index -= 1) {
+      if (stripAnsi(body[index] ?? '').trim() === assistantMarker) {
+        assistantStart = index;
+        break;
+      }
+    }
+    if (assistantStart < 0) return;
+    const decision = body.findIndex((line, index) =>
+      index > assistantStart && /\bDECISION\b/u.test(stripAnsi(line).toUpperCase()),
+    );
+    const anchor = decision >= 0 ? decision : assistantStart;
+    const maximumOffset = Math.max(0, body.length - bodyHeight);
+    const targetOffset = clamp(
+      body.length - anchor - bodyHeight,
+      0,
+      maximumOffset,
+    );
+    this.maximumScrollOffset = maximumOffset;
+    this.viewportHeight = bodyHeight;
+    this.scrollOffset = targetOffset;
+    this.answerFocus = targetOffset > 0
+      ? decision >= 0 ? 'Decision' : 'answer'
+      : null;
   }
 
   private pageScrollLines(): number {
@@ -845,8 +1047,14 @@ export class SebTerminalRenderer {
     this.scrollOffset = Math.min(this.scrollOffset, maximumOffset);
     const footer = this.renderFooter(width);
     const end = body.length - this.scrollOffset;
-    const visible = body.slice(Math.max(0, end - bodyHeight), end);
-    while (visible.length < bodyHeight) visible.unshift('');
+    const topAligned = this.overlay !== 'none' || this.sections.length === 0;
+    const visible = topAligned
+      ? body.slice(0, bodyHeight)
+      : body.slice(Math.max(0, end - bodyHeight), end);
+    while (visible.length < bodyHeight) {
+      if (topAligned) visible.push('');
+      else visible.unshift('');
+    }
     const cleanLines = [...header, ...visible, ...footer].slice(0, height);
     this.framePlainLines = cleanLines.map(stripAnsi);
     const lines = this.screenSelection?.moved
@@ -880,8 +1088,9 @@ export class SebTerminalRenderer {
       ...(session.leagueId
         ? [`FOCUS ${session.leagues.find((league) => league.leagueId === session.leagueId)?.name ?? session.leagueId}`]
         : []),
+      ...(session.rosterId ? [`ROSTER ${session.rosterId}`] : []),
       ...(session.player ? [`PLAYER ${session.player}`] : []),
-      ...(!session.player && session.team ? [`TEAM ${session.team}`] : []),
+      ...(session.team ? [`TEAM ${session.team}`] : []),
       ...(session.skillId !== 'general'
         ? [`WORKFLOW ${getSkill(session.skillId).title}`]
         : []),
@@ -900,7 +1109,8 @@ export class SebTerminalRenderer {
   private renderBody(width: number): string[] {
     if (this.overlay === 'shortcuts') return this.shortcuts(width);
     if (this.overlay === 'history') return this.historyRows(width);
-    if (this.sections.length === 0) return this.home();
+    if (this.overlay === 'context') return this.contextRows(width);
+    if (this.sections.length === 0) return this.home(width);
     const lines: string[] = [];
     for (const section of this.sections) {
       const color = section.kind === 'error' ? 'danger' : section.kind === 'tool' ? 'tool' : section.kind === 'assistant' ? 'assistant' : 'accent';
@@ -924,13 +1134,18 @@ export class SebTerminalRenderer {
     const menu = this.menuOpen || this.editor.text().startsWith('/')
       ? this.renderMenu(width)
       : [];
-    const suggestions = this.options.uiState.showSuggestions &&
+    const suggestions = this.overlay === 'none' &&
+      this.options.uiState.showSuggestions &&
       !this.editor.text() && menu.length === 0
       ? this.suggestions()
       : [];
-    const promptLines = renderEditor(this.editor, width - 4, this.theme);
-    const status = this.scrollOffset > 0
-      ? `Viewing earlier transcript · ${this.scrollOffset} ${this.scrollOffset === 1 ? 'line' : 'lines'} above latest · scroll down to return`
+    const promptLines = this.overlay === 'none'
+      ? renderEditor(this.editor, width - 4, this.theme)
+      : [];
+    const status = this.answerFocus
+      ? `Opened at ${this.answerFocus} · ${this.scrollOffset} ${this.scrollOffset === 1 ? 'line' : 'lines'} to latest · PgDn continues`
+      : this.scrollOffset > 0
+        ? `Viewing earlier transcript · ${this.scrollOffset} ${this.scrollOffset === 1 ? 'line' : 'lines'} above latest · PgDn returns`
       : this.status;
     return [
       ...menu,
@@ -938,7 +1153,7 @@ export class SebTerminalRenderer {
         paint(this.theme, 'source', fit(` ${index + 1}  ${sanitizeTerminalText(value)}`, width))),
       paint(this.theme, 'dim', '─'.repeat(width)),
       ...promptLines.map((line, index) => `${index === 0 ? `${symbol(this.theme, 'prompt')} ` : '  '}${line}`),
-      paint(this.theme, 'dim', fit(` ${sanitizeTerminalText(status)} · drag copy · Ctrl+K commands · /exit quit · ? shortcuts`, width)),
+      paint(this.theme, 'dim', fit(` ${sanitizeTerminalText(status)} · Ctrl+G context · Ctrl+K commands · ? help`, width)),
     ];
   }
 
@@ -964,27 +1179,52 @@ export class SebTerminalRenderer {
     return lines;
   }
 
-  private home(): string[] {
+  private home(width: number): string[] {
     const session = this.options.session;
+    const attention = homeFantasyActions(session);
+    const visibleAttention = attention.slice(0, 2);
+    const remainingAttention = attention.length - visibleAttention.length;
     const fantasy = session.user
       ? session.accountError
         ? `Connected as @${session.user}. Refresh warning: ${session.accountError}`
         : `Connected as @${session.user} with ${session.leagues.length} discovered league${session.leagues.length === 1 ? '' : 's'}.`
       : 'Optional. Run /connect <Sleeper username> once for automatic league context.';
+    const experienceRow = (title: string, description: string): string => fit(
+      `${paint(this.theme, 'accent', title.padEnd(12))}${sanitizeTerminalText(description)}`,
+      width,
+    );
     return [
       '',
-      paint(this.theme, 'assistant', `${symbol(this.theme, 'assistant')} Ask naturally. Seb selects the current NFL week and the right data.`),
+      fit(paint(this.theme, 'assistant', `${symbol(this.theme, 'assistant')} Ask naturally. Seb selects the current NFL week and the right data.`), width),
       '',
-      paint(this.theme, 'accent', 'EXPLORE'),
-      '  Player profiles, team information, statistics, schedules, and verified news.',
+      ...(session.user
+        ? [
+            paint(
+              this.theme,
+              attention.length > 0 || session.accountError ? 'warning' : 'accent',
+              fit('WHAT NEEDS ATTENTION  /fantasy shows details and next steps', width),
+            ),
+            ...(session.accountError
+              ? [paint(this.theme, 'warning', fit('  CHECK · Fantasy data needs a refresh. Run /refresh.', width))]
+              : visibleAttention.map(({ action, leagueName }) => paint(
+                this.theme,
+                action.urgency === 'high' ? 'warning' : 'source',
+                fit(`  ${homeUrgencyLabel(action)} · ${leagueName}${action.rosterId === null ? '' : ` · Roster ${action.rosterId}`} · ${action.title}`, width),
+              ))),
+            ...(!session.accountError && remainingAttention > 0
+              ? [paint(this.theme, 'dim', fit(`  +${remainingAttention} more urgent action${remainingAttention === 1 ? '' : 's'}`, width))]
+              : []),
+            ...(!session.accountError && attention.length === 0
+              ? [paint(this.theme, 'accent', fit('  CLEAR · No urgent lineup, player-status, or deadline actions.', width))]
+              : []),
+            '',
+          ]
+        : []),
+      experienceRow('EXPLORE', 'Players, teams, statistics, schedules, and verified news.'),
+      experienceRow('MY FANTASY', fantasy),
+      experienceRow('ANALYZE', 'Compare players with matchup, usage, roster, news, and weather.'),
       '',
-      paint(this.theme, 'accent', 'MY FANTASY'),
-      `  ${sanitizeTerminalText(fantasy)}`,
-      '',
-      paint(this.theme, 'accent', 'ANALYZE'),
-      '  Compare players, then add matchup, usage, roster, news, and weather context.',
-      '',
-      paint(this.theme, 'dim', 'Use the numbered actions below, or type any question.'),
+      paint(this.theme, 'dim', fit('Use a numbered action below, or type any question.', width)),
     ];
   }
 
@@ -993,6 +1233,7 @@ export class SebTerminalRenderer {
       paint(this.theme, 'accent', 'KEYBOARD SHORTCUTS'),
       '',
       '  Ctrl+K       Open the command palette',
+      '  Ctrl+G       Select the active context',
       '  ?            Open this guide from an empty prompt',
       '  Tab          Fill the selected command',
       '  1 / 2 / 3    Select a contextual suggestion',
@@ -1026,6 +1267,27 @@ export class SebTerminalRenderer {
         : ['  No saved prompts.']),
       '',
       paint(this.theme, 'dim', 'Run /history clear to delete this file.'),
+    ];
+  }
+
+  private contextRows(width: number): string[] {
+    const items = this.contextItems();
+    return [
+      paint(this.theme, 'accent', fit('ACTIVE CONTEXT', width)),
+      paint(this.theme, 'dim', fit('Use ↑/↓ to select. Use ←/→ to choose. Press Enter to apply.', width)),
+      '',
+      ...items.map((item, index) => {
+        const marker = index === this.contextSelection ? symbol(this.theme, 'prompt') : ' ';
+        const playerHint = item.field === 'player' ? '  Enter to change' : '  ←/→';
+        const row = `${marker} ${item.label.padEnd(8)} ${item.value}${playerHint}`;
+        return paint(
+          this.theme,
+          index === this.contextSelection ? 'accent' : 'dim',
+          fit(row, width),
+        );
+      }),
+      '',
+      paint(this.theme, 'dim', fit('Escape closes this selector without applying the staged value.', width)),
     ];
   }
 }
@@ -1068,6 +1330,24 @@ function packRows(values: readonly string[], width: number): string[] {
   }
   if (row) rows.push(row);
   return rows;
+}
+
+function homeFantasyActions(session: SessionState): Array<{
+  action: FantasyLeagueAction;
+  leagueName: string;
+}> {
+  return session.leagues.flatMap((league) =>
+    (league.actionCenter?.actions ?? [])
+      .filter((action) => action.urgency !== 'low')
+      .map((action) => ({ action, leagueName: league.name })),
+  ).sort((left, right) =>
+    compareFantasyLeagueActions(left.action, right.action) ||
+    left.leagueName.localeCompare(right.leagueName),
+  );
+}
+
+function homeUrgencyLabel(action: FantasyLeagueAction): 'CHECK' | 'NOW' {
+  return action.urgency === 'high' ? 'NOW' : 'CHECK';
 }
 
 function toReadableStream<T>(source: AsyncIterable<T> | ReadableStream<T>): ReadableStream<T> {

@@ -1,4 +1,7 @@
-import type { DataSourceRecord } from '../sources.js';
+import {
+  sourceEvidenceBadge,
+  type DataSourceRecord,
+} from '../sources.js';
 import { paint, symbol, type SebTheme } from './theme.js';
 
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/gu;
@@ -42,6 +45,9 @@ export function friendlyToolName(toolName: string): string {
     getUserLeagues: 'Read user leagues',
     getWeekWeather: 'Screen weekly weather risk',
     predictMatchup: 'Estimate the matchup',
+    projectPlayer: 'Build a scoring-aware projection',
+    rankWaiverTargets: 'Rank waiver and FAAB targets',
+    analyzeTradeImpact: 'Compare trade impact',
     readNewsUrl: 'Read the supplied web page',
     searchCurrentNews: 'Search current news',
   };
@@ -49,16 +55,7 @@ export function friendlyToolName(toolName: string): string {
 }
 
 export function sourceBadge(source: DataSourceRecord, now = new Date()): string {
-  if (source.id.startsWith('web:')) return 'WEB';
-  if (source.cacheOutcome === 'stale-if-error') return 'STALE';
-  const retrieved = Date.parse(source.retrievedAt ?? source.accessedAt);
-  const age = Math.max(0, now.getTime() - retrieved);
-  if (source.cacheOutcome === 'cache-fresh') return `CACHED ${shortAge(age)}`;
-  if (source.id.toLowerCase().includes('nflverse') || source.url.toLowerCase().includes('nflverse')) {
-    const season = `${source.label} ${source.url}`.match(/\b(20\d{2})\b/u)?.[1];
-    return season ? `${season} STATS` : 'STATS';
-  }
-  return 'LIVE';
+  return sourceEvidenceBadge(source, now);
 }
 
 export function renderAnalysisText(
@@ -866,12 +863,6 @@ function sparkline(values: number[], theme: SebTheme): string {
     const index = maximum === minimum ? 3 : Math.round(((value - minimum) / (maximum - minimum)) * 7);
     return levels[index] ?? '▄';
   }).join('');
-}
-
-function shortAge(milliseconds: number): string {
-  if (milliseconds < 60_000) return '<1m';
-  if (milliseconds < 3_600_000) return `${Math.floor(milliseconds / 60_000)}m`;
-  return `${Math.floor(milliseconds / 3_600_000)}h`;
 }
 
 function humanize(value: string): string {

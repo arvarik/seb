@@ -95,7 +95,7 @@ export const SEB_SKILLS: readonly SebSkill[] = [
     title: 'Waiver scout',
     category: 'Fantasy',
     description: 'Combine Sleeper demand with nflverse usage and recent production.',
-    instructions: 'Start with Sleeper add trends. Verify targets, carries, recent PPR output, and schedule context before ranking players.',
+    instructions: 'Use rankWaiverTargets with the selected league and roster. Explain roster need, scoring-aware recent production, Sleeper demand, risk, and the FAAB range. State that Sleeper demand covers the complete platform.',
     suggestions: ['Show trending adds.', 'Rank waiver targets by opportunity.', 'Find a high-upside bench add.'],
   },
   {

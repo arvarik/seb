@@ -11,9 +11,9 @@ import {
   createSessionState,
   formatSessionContext,
   getContextualSuggestions,
-  inferExperienceMode,
   inferPlayerNameFromPrompt,
-  recordSessionToolInput,
+  recordUserConfirmedToolContext,
+  resolveDecisionContext,
 } from '../src/interactive/session.js';
 import {
   formatSkillList,
@@ -110,28 +110,111 @@ describe('interactive skills', () => {
   it('updates the active player from player tool input', () => {
     const session = createSessionState();
 
-    recordSessionToolInput(session, 'getPlayerWeeklyStats', {
+    recordUserConfirmedToolContext(session, 'getPlayerWeeklyStats', {
       playerName: 'Derrick Henry',
       season: 2025,
-    });
+    }, 'Show Derrick Henry statistics.');
 
     expect(session.player).toBe('Derrick Henry');
-    recordSessionToolInput(session, 'getNflSchedule', { team: 'BAL' });
+    recordUserConfirmedToolContext(session, 'getNflSchedule', { team: 'BAL' }, 'Show BAL next game.');
     expect(session.player).toBe('Derrick Henry');
-    recordSessionToolInput(session, 'findPlayers', { query: '\u001b[2Jfake' });
+    recordUserConfirmedToolContext(session, 'findPlayers', { query: '\u001b[2Jfake' });
     expect(session.player).toBe('Derrick Henry');
     expect(inferPlayerNameFromPrompt('show Derrick Henry')).toBeNull();
   });
 
-  it('routes natural questions into the three experiences', () => {
-    expect(inferExperienceMode('Show player statistics.', 'analyze')).toBe('explore');
-    expect(inferExperienceMode('What needs my attention across my leagues?', 'explore'))
-      .toBe('fantasy');
-    expect(inferExperienceMode('Look deeper into their stats.', 'explore')).toBe('analyze');
+  it('does not let model-selected tool input replace the user context', () => {
+    const session = createSessionState();
+    session.player = 'Derrick Henry';
+    session.team = 'BAL';
+
+    recordUserConfirmedToolContext(
+      session,
+      'getPlayerWeeklyStats',
+      { playerName: 'Lamar Jackson', season: 2025 },
+      'Explain his recent role.',
+    );
+    recordUserConfirmedToolContext(
+      session,
+      'getNflSchedule',
+      { team: 'BUF' },
+      'Explain his recent role.',
+    );
+
+    expect(session.player).toBe('Derrick Henry');
+    expect(session.team).toBe('BAL');
   });
+
+  it('marks ambiguous league and roster choices in the decision context', () => {
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    session.week = 2;
+    session.leagues = [
+      leagueContext('100', 'First', [1, 2]),
+      leagueContext('200', 'Second', [3]),
+    ];
+
+    expect(resolveDecisionContext(session)).toMatchObject({
+      league: { resolution: 'ambiguous', value: null, options: ['100', '200'] },
+      player: { resolution: 'unset', value: null },
+      season: { resolution: 'resolved', value: 2026 },
+      week: { resolution: 'resolved', value: 2 },
+    });
+
+    session.leagueId = '100';
+    session.rosterOptions = [1, 2];
+    expect(resolveDecisionContext(session).roster).toMatchObject({
+      resolution: 'ambiguous',
+      value: null,
+      options: [1, 2],
+    });
+    expect(formatSessionContext(session)).toContain('League: 100 (resolved).');
+    expect(formatSessionContext(session)).toContain('Roster: ambiguous (1, 2).');
+  });
+
 });
 
+function leagueContext(leagueId: string, name: string, rosterIds: number[]) {
+  return {
+    deadlines: [],
+    leagueId,
+    name,
+    rosterIds,
+    status: 'in_season',
+    warning: null,
+  };
+}
+
 describe('SebInteractiveTransport', () => {
+  it('rejects league and roster selections outside discovered context', async () => {
+    const clients = dataClients();
+    const session = createSessionState();
+    session.leagues = [leagueContext('100', 'First', [4])];
+    session.leagueOptions = ['100'];
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({
+        languageModel: new MockLanguageModelV4({}),
+        ...clients,
+      }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session,
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      version: '0.0.10',
+      weather: clients.weatherClient,
+    });
+
+    const invalidLeague = await sendCommand(transport, '/league 999', 'league-1');
+    expect(invalidLeague).toContain('not one of the discovered leagues');
+    expect(session.leagueId).toBeNull();
+
+    await sendCommand(transport, '/league 100', 'league-2');
+    const invalidRoster = await sendCommand(transport, '/roster 7', 'roster-1');
+    expect(invalidRoster).toContain('not one of the discovered roster options');
+    expect(session.rosterId).toBe(4);
+  });
+
   it('runs an inline question with the selected skill', async () => {
     const model = new MockLanguageModelV4({
       doStream: async () => ({
@@ -214,7 +297,7 @@ describe('SebInteractiveTransport', () => {
     const followUpPrompt = JSON.stringify(model.doStreamCalls[1]?.prompt);
 
     expect(session.player).toBe('Derrick Henry');
-    expect(session.mode).toBe('analyze');
+    expect(session.mode).toBe('explore');
     expect(session.skillId).toBe('player-info');
     expect(followUpPrompt).toContain('Derrick Henry');
     expect(followUpPrompt).toContain('Player profile.');
@@ -314,9 +397,49 @@ describe('SebInteractiveTransport', () => {
     expect(alias).toContain('Source 1: [Test source](https://example.test/data)');
   });
 
+  it('withholds an unsupported freeform decision before display', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'Start Example Player with high confidence.' },
+            { type: 'text-end', id: 'text-1' },
+            {
+              type: 'finish',
+              finishReason: { unified: 'stop', raw: undefined },
+              usage: {
+                inputTokens: { total: 4, noCache: 4, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 4, text: 4, reasoning: undefined },
+              },
+            },
+          ],
+        }),
+      }),
+    });
+    const clients = dataClients();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      version: '0.0.1',
+      weather: clients.weatherClient,
+    });
+
+    const output = await sendCommand(transport, 'Should I start Example Player?', 'message-1');
+
+    expect(output).toContain('Decision unavailable');
+    expect(output).not.toContain('Start Example Player with high confidence');
+  });
+
   it('adds web sources without repeating suggestions after a streamed answer', async () => {
     const model = new MockLanguageModelV4({
-      doStream: {
+      doStream: async () => ({
         stream: simulateReadableStream({
           chunks: [
             { type: 'stream-start', warnings: [] },
@@ -370,10 +493,11 @@ describe('SebInteractiveTransport', () => {
             },
           ],
         }),
-      },
+      }),
     });
     const clients = dataClients();
     const sources = new SourceTracker();
+    const uiState = new InteractiveUiState();
     const transport = new SebInteractiveTransport({
       agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
       environment: {},
@@ -382,6 +506,7 @@ describe('SebInteractiveTransport', () => {
       session: createSessionState(),
       sleeper: clients.sleeperClient,
       sources,
+      uiState,
       version: '0.0.1',
       weather: clients.weatherClient,
     });
@@ -390,16 +515,25 @@ describe('SebInteractiveTransport', () => {
 
     expect(output).toContain('Model answer.');
     expect(output).toContain(
-      'Web sources: [NFL report](<https://example.com/nfl-report>) · ' +
-      '[Injury report](<https://example.com/injury-report>) · ' +
-      '[Weather report](<https://example.com/weather-report>) · Ask to see all sources.',
+      '1. [NFL report](<https://example.com/nfl-report>) · **LIVE**',
     );
+    expect(output).toContain('2. [Injury report](<https://example.com/injury-report>)');
+    expect(output).toContain('3. [Weather report](<https://example.com/weather-report>)');
+    expect(output).toContain('1 more source · Run `/sources` for the exact set.');
     expect(output).not.toContain('Hidden report');
-    expect(output.match(/Web sources:/gu)).toHaveLength(1);
+    expect(output.match(/## Evidence/gu)).toHaveLength(1);
     expect(output).not.toContain('Try next:');
     expect(sources.list()).toHaveLength(4);
     expect(sources.list().map((source) => source.label)).toContain('Hidden report');
-    expect(model.doStreamCalls).toHaveLength(1);
+    const evidence = await sendCommand(transport, '/sources', 'message-2');
+    expect(evidence).toContain('Evidence for the latest answer');
+    expect(evidence).toContain('Hidden report');
+    const firstAnswerId = uiState.latestEvidence()?.answerId;
+    expect(firstAnswerId).toBeTruthy();
+    await sendCommand(transport, 'Give me another answer.', 'message-3');
+    expect(uiState.latestEvidence()?.answerId).not.toBe(firstAnswerId);
+    expect(uiState.evidenceForAnswer(firstAnswerId ?? '')?.sources).toHaveLength(4);
+    expect(model.doStreamCalls).toHaveLength(2);
   });
 
   it('shows suggestions again when the user clears the session', async () => {
@@ -418,7 +552,7 @@ describe('SebInteractiveTransport', () => {
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
       uiState,
-      version: '0.0.9',
+      version: '0.0.10',
       weather: clients.weatherClient,
     });
 
@@ -459,7 +593,7 @@ describe('SebInteractiveTransport', () => {
       session: createSessionState(),
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
-      version: '0.0.9',
+      version: '0.0.10',
       weather: clients.weatherClient,
     });
     await sendCommand(transport, '/clear', 'clear-message');

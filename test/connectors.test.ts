@@ -137,9 +137,9 @@ describe('connector web sources', () => {
     }
 
     expect(output).toContain('Current news.');
-    expect(output).toContain('**Web sources**');
+    expect(output).toContain('## Evidence');
     expect(output).toContain(
-      '- [NFL News](<https://www.nfl.com/news/example>)',
+      '1. [NFL News](<https://www.nfl.com/news/example>) · **LIVE**',
     );
     expect(output).not.toContain('file:///tmp/unsafe');
   });
@@ -162,9 +162,28 @@ describe('connector web sources', () => {
       if (typeof part === 'string') output += part;
     }
 
-    expect(output).toContain('**Data sources**');
+    expect(output).toContain('## Evidence');
     expect(output).toContain('Sleeper API');
+    expect(output).toContain('**CACHED');
     expect(output).toContain('cache fresh');
+  });
+
+  it('withholds an unsupported connector decision before posting it', async () => {
+    const stream = (async function* () {
+      yield { type: 'text-delta', text: 'Start Example Player with high confidence.' };
+    })();
+    let output = '';
+
+    for await (const part of withWebSources(
+      stream,
+      new SourceTracker(),
+      'Should I start Example Player?',
+    )) {
+      if (typeof part === 'string') output += part;
+    }
+
+    expect(output).toContain('Decision unavailable');
+    expect(output).not.toContain('Start Example Player with high confidence');
   });
 
   it('marks a model error and records whether text already streamed', async () => {

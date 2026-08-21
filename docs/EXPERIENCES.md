@@ -2,9 +2,11 @@
 
 Seb supports three connected experiences.
 
-Users can ask normal questions without selecting a mode first.
+Users can ask normal questions without selecting an experience first.
 
-Seb changes the active experience from the question and keeps the current subject.
+The `/explore`, `/fantasy`, and `/analyze` commands change the visible experience.
+
+Seb does not change that selection from a keyword in a question.
 
 ## Explore
 
@@ -38,6 +40,7 @@ At startup, Seb completes these actions:
 4. It discovers every NFL league for the current league season.
 5. It finds every roster that the user owns or co-owns.
 6. It reads available trade, playoff, and waiver settings.
+7. It checks open starter slots, player status signals, and nearby deadlines.
 
 Seb keeps an account-wide view when several leagues remain relevant.
 
@@ -61,6 +64,14 @@ Analyze turns an active subject into a decision or comparison.
 
 It can combine statistics, recent usage, matchup strength, weather, news, and fantasy roster fit.
 
+Scoring-aware projections show a median, floor, ceiling, confidence, adjustments, and limits.
+
+The waiver assistant ranks unrostered targets and shows a transparent FAAB range when the league uses FAAB.
+
+The trade impact tool compares recent scoring value and roster position changes on both sides.
+
+Seb requires current sources, resolved player identity, player status, current news, and league scoring before it displays a recommendation.
+
 Seb keeps the active player from the previous answer.
 
 Therefore, a follow-up can use a pronoun without repeating the player name.
@@ -77,7 +88,7 @@ Most users do not need to select a workflow.
 
 ## Progressive disclosure
 
-The home screen shows only the three experiences, current NFL state, account status, active subject, and latest source.
+The home screen shows urgent weekly actions before the three experiences when a Sleeper account is connected.
 
 The command palette shows common experience and account actions first.
 

@@ -12,6 +12,14 @@ import {
   formatFantasyAnalysis,
   type FantasyAnalysis,
 } from './analysis/output.js';
+import {
+  buildFreeformRecommendationEvidence,
+  buildRecommendationEvidence,
+  enforceFreeformRecommendation,
+  enforceRecommendationEligibility,
+  questionRequestsRecommendation,
+  type RecommendationEligibility,
+} from './analysis/recommendation-eligibility.js';
 import { configureAiDevTools } from './ai/devtools.js';
 import {
   CLI_HELP,
@@ -34,7 +42,6 @@ import { InteractiveUiState } from './interactive/ui-state.js';
 import {
   createSessionState,
   formatSessionContext,
-  inferExperienceMode,
   recordUsage,
 } from './interactive/session.js';
 import { isModelCapacityError } from './model-capacity-error.js';
@@ -88,6 +95,7 @@ interface AnswerResult {
   finishReason: string;
   generatedAt: string;
   model: string;
+  recommendationEligibility: RecommendationEligibility;
   sources: DataSourceRecord[];
   toolCalls: string[];
   usage: {
@@ -454,8 +462,8 @@ async function generateWithModel(
   const automaticContext = await loadAutomaticContext(
     environment,
     clients.sleeperClient,
-    prompt,
   );
+  sources.clear();
   const researchAgent = createFantasyFootballAgent({
     apiKey: selection.apiKey,
     model,
@@ -473,7 +481,22 @@ async function generateWithModel(
   const result = await analysisAgent.generate({
     prompt: buildAnalysisPrompt(prompt, research.text, sources.list()),
   });
-  const analysis = result.output;
+  const sourceRecords = sources.list();
+  const enforced = enforceRecommendationEligibility(
+    result.output,
+    buildRecommendationEvidence({
+      analysis: result.output,
+      question: prompt,
+      sources: sourceRecords,
+      toolResults: research.toolResults
+        .filter((toolResult) => toolResult !== undefined)
+        .map((toolResult) => ({
+          output: toolResult.output,
+          toolName: toolResult.toolName,
+        })),
+    }),
+  );
+  const analysis = enforced.analysis;
   return {
     analysis,
     answer: formatFantasyAnalysis(analysis).trimEnd(),
@@ -481,7 +504,8 @@ async function generateWithModel(
     finishReason: result.finishReason,
     generatedAt: new Date().toISOString(),
     model,
-    sources: sources.list(),
+    recommendationEligibility: enforced.eligibility,
+    sources: sourceRecords,
     toolCalls: [
       ...new Set(
         research.toolCalls
@@ -536,11 +560,16 @@ async function streamAnswer(
   progressEnabled: boolean,
   environment: NodeJS.ProcessEnv,
 ): Promise<void> {
+  const decisionRequested = questionRequestsRecommendation(prompt);
+  let bufferedText = '';
+  let decisionToolResults: Array<{ output: unknown; toolName: string }> = [];
   let wroteText = false;
   const webSources = new Map<string, { title?: string; url: string }>();
   const directSources = new SourceTracker();
 
   const run = async (model: string): Promise<void> => {
+    bufferedText = '';
+    decisionToolResults = [];
     directSources.clear();
     webSources.clear();
     const clients = createDataClients(
@@ -550,7 +579,6 @@ async function streamAnswer(
     const automaticContext = await loadAutomaticContext(
       environment,
       clients.sleeperClient,
-      prompt,
     );
     const agent = createFantasyFootballAgent({
       apiKey: selection.apiKey,
@@ -562,8 +590,11 @@ async function streamAnswer(
 
     for await (const part of result.fullStream) {
       if (part.type === 'text-delta') {
-        streams.stdout.write(part.text);
-        wroteText = true;
+        if (decisionRequested) bufferedText += part.text;
+        else {
+          streams.stdout.write(part.text);
+          wroteText = true;
+        }
       } else if (
         part.type === 'tool-call' &&
         progressEnabled &&
@@ -573,11 +604,21 @@ async function streamAnswer(
       } else if (part.type === 'source' && part.sourceType === 'url') {
         const url = normalizeWebUrl(part.url);
         if (url) {
+          directSources.recordUrlSource({
+            id: part.id,
+            ...(part.title ? { title: part.title } : {}),
+            url,
+          });
           webSources.set(url, {
             title: normalizeSourceLabel(part.title, new URL(url).hostname),
             url,
           });
         }
+      } else if (part.type === 'tool-result') {
+        decisionToolResults.push({
+          output: part.output,
+          toolName: part.toolName,
+        });
       } else if (part.type === 'error') {
         throw part.error;
       }
@@ -596,6 +637,22 @@ async function streamAnswer(
     }
     writeFallbackNotice(streams.stderr, selection);
     await run(selection.fallbackModel);
+  }
+
+  if (decisionRequested) {
+    if (!bufferedText.trim()) {
+      throw new Error('Gemini returned an empty answer. Try the request again.');
+    }
+    const guarded = enforceFreeformRecommendation(
+      bufferedText,
+      buildFreeformRecommendationEvidence({
+        question: prompt,
+        sources: directSources.list(),
+        toolResults: decisionToolResults,
+      }),
+    );
+    streams.stdout.write(guarded.answer);
+    wroteText = true;
   }
 
   if (!wroteText) {
@@ -629,15 +686,12 @@ async function streamAnswer(
 async function loadAutomaticContext(
   environment: NodeJS.ProcessEnv,
   sleeper: SleeperClient,
-  prompt: string,
 ): Promise<string> {
   const session = createSessionState();
-  session.mode = inferExperienceMode(prompt, session.mode);
   const profileStore = new FileSetupProfileStore({ environment });
   try {
     const profile = await profileStore.load();
     if (profile) applySetupProfile(profile, session);
-    session.mode = inferExperienceMode(prompt, session.mode);
   } catch (error) {
     session.accountError = `Seb could not read the local profile: ${errorMessage(error)}`;
     session.accountStatus = 'error';
@@ -725,6 +779,9 @@ function describeTool(toolName: string): string {
     readNewsUrl: 'Reading the supplied web page',
     searchCurrentNews: 'Searching current news',
     predictMatchup: 'Estimating the matchup',
+    projectPlayer: 'Building a scoring-aware projection',
+    rankWaiverTargets: 'Ranking waiver and FAAB targets',
+    analyzeTradeImpact: 'Comparing trade impact',
   };
   return descriptions[toolName] ?? `Running ${toolName}`;
 }

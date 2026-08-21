@@ -1,9 +1,11 @@
 import type {
   SleeperLeague,
   SleeperNflState,
+  SleeperPlayerMap,
   SleeperRoster,
   SleeperUser,
 } from '../sleeper/types.js';
+import { buildFantasyLeagueActionCenter } from '../sleeper/action-center.js';
 import type { SessionState } from '../interactive/session.js';
 import { normalizeSessionSeasonType } from '../interactive/session.js';
 import {
@@ -15,6 +17,7 @@ import {
 export interface SleeperSetupDiscovery {
   getLeagueRosters(leagueId: string): Promise<SleeperRoster[]>;
   getNflState(): Promise<SleeperNflState>;
+  getPlayers(): Promise<SleeperPlayerMap>;
   getUser(identifier: string): Promise<SleeperUser>;
   getUserLeagues(userId: string, season: string): Promise<SleeperLeague[]>;
 }
@@ -168,7 +171,11 @@ export async function connectSleeperSession(
       username,
       session.leagueSeason,
     );
-    const leagues = await Promise.all(account.leagues.map(async (league) => {
+    const playersPromise = sleeper.getPlayers().then(
+      (players) => ({ error: null, players }),
+      (error: unknown) => ({ error: errorMessage(error), players: {} }),
+    );
+    const discoveredLeagues = await Promise.all(account.leagues.map(async (league) => {
       try {
         const rosters = await discoverOwnedRosters(
           sleeper,
@@ -176,28 +183,41 @@ export async function connectSleeperSession(
           account.user.user_id,
         );
         return {
-          deadlines: leagueDeadlines(league),
-          leagueId: league.league_id,
-          name: league.name,
-          rosterIds: rosters.map((roster) => roster.roster_id),
-          status: league.status,
+          league,
+          rosters,
           warning: null,
         };
       } catch (error) {
         return {
-          deadlines: leagueDeadlines(league),
-          leagueId: league.league_id,
-          name: league.name,
-          rosterIds: [],
-          status: league.status,
+          league,
+          rosters: [],
           warning: errorMessage(error),
         };
       }
     }));
+    const playerResult = await playersPromise;
+    const leagues = discoveredLeagues.map(({ league, rosters, warning }) => ({
+      actionCenter: buildFantasyLeagueActionCenter({
+        league,
+        players: playerResult.players,
+        rosters,
+        week: session.week,
+      }),
+      deadlines: leagueDeadlines(league),
+      leagueId: league.league_id,
+      name: league.name,
+      rosterIds: rosters.map((roster) => roster.roster_id),
+      status: league.status,
+      warning,
+    }));
     const warningCount = leagues.filter((league) => league.warning).length;
-    session.accountError = warningCount > 0
-      ? `${warningCount} league roster refresh${warningCount === 1 ? '' : 'es'} failed.`
-      : null;
+    const warnings = [
+      warningCount > 0
+        ? `${warningCount} league roster refresh${warningCount === 1 ? '' : 'es'} failed.`
+        : null,
+      playerResult.error ? `Player status refresh failed: ${playerResult.error}` : null,
+    ].filter((warning): warning is string => warning !== null);
+    session.accountError = warnings.join(' ') || null;
     session.accountStatus = 'ready';
     session.leagues = leagues;
     session.leagueOptions = leagues.map((league) => league.leagueId);

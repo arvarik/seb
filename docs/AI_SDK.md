@@ -4,9 +4,9 @@ Seb uses AI SDK features to improve news research, analysis, context size, tool 
 
 ## Interactive stream integration
 
-The AI SDK runner controls the message loop and chat transport.
+Seb owns the conversation loop and terminal renderer.
 
-Seb supplies a local renderer through the runner renderer interface.
+The loop uses the public AI SDK chat transport and UI message contracts.
 
 The renderer reads public AI SDK UI message streams with `readUIMessageStream`.
 
@@ -14,13 +14,9 @@ This design keeps the agent and transport behavior unchanged.
 
 It also gives Seb complete control over prompt editing and screen layout.
 
-The installed TUI release does not export the renderer hook from its public entry point.
+Seb does not import private package source files.
 
-Seb pins `@ai-sdk/tui` to `1.0.72` and imports only the internal runner entry point.
-
-Seb never imports the private default terminal renderer.
-
-Review this adapter before every TUI dependency update.
+This design lets AI SDK package updates stay independent from the terminal interface.
 
 ## 1. Grounded current news
 
@@ -73,6 +69,14 @@ Seb formats the validated object into the existing `answer` field.
 The `sources` field stays separate from the model object.
 
 This rule lets Seb validate each HTTP or HTTPS source before output.
+
+Seb applies a deterministic eligibility gate after schema validation.
+
+The gate removes a recommendation when required source, identity, player status, current news, league scoring, or projection evidence is missing.
+
+The gate limits confidence when a fresh required source has a stale supplemental source.
+
+Interactive and connector answers use the same gate for direct action requests.
 
 Select useful fields with `jq`.
 

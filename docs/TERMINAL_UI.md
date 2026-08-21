@@ -1,8 +1,8 @@
 # Terminal interface guide
 
-Seb `0.0.9` includes a local terminal renderer for interactive research.
+Seb `0.0.10` includes a local terminal renderer for interactive research.
 
-The AI SDK still controls the agent message loop and tool transport.
+Seb owns the conversation loop and uses the public AI SDK transport contract.
 
 Seb controls prompt editing, screen layout, accessibility, history, and terminal actions.
 
@@ -16,6 +16,8 @@ npm run seb
 ```
 
 The home screen shows the current NFL state and the active Seb experience.
+
+It shows the two most urgent fantasy actions when a Sleeper account is connected.
 
 Explore covers player, team, league, statistic, schedule, result, and news questions.
 
@@ -95,6 +97,22 @@ Press `Tab` to place the selected value in the editor.
 Press `Escape` to close the palette.
 
 Run `/commands SEARCH` when you need the same search in a transcript.
+
+## Select active context
+
+Press `Ctrl+G` to open the active context selector.
+
+Use `Up` and `Down` to select league, roster, week, player, or team.
+
+Use `Left` and `Right` to choose an available value.
+
+Press `Enter` to apply that value with the related local command.
+
+The selector shows only discovered leagues and rosters.
+
+Seb opens a long answer at its Decision section or answer heading.
+
+Press `Page Down` to continue toward the latest line.
 
 ## Use prompt history
 

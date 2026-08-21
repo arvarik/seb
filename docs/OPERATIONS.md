@@ -112,6 +112,32 @@ Do not restart the service only because Gemini returns one capacity error.
 
 Seb already retries the configured fallback model.
 
+## Live contract checks
+
+The `Live contracts` GitHub Actions workflow runs each Monday and supports manual runs.
+
+The source job calls Sleeper, nflverse, and the National Weather Service without local cache data.
+
+Run the same source contracts locally.
+
+```bash
+npm run contract:sources
+```
+
+The answer job sends a fixed evidence object to Gemini.
+
+It requires the `GOOGLE_GENERATIVE_AI_API_KEY` repository secret.
+
+The job validates the structured answer schema, player identity, and recommendation limit.
+
+Run the same answer contract locally when the environment contains the key.
+
+```bash
+npm run contract:answer
+```
+
+Treat a contract failure as a provider or integration change until the evidence shows another cause.
+
 ## Secrets
 
 Store these values in the deployment secret store.

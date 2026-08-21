@@ -84,7 +84,7 @@ export type TerminalKey =
   | { type: 'page-up' | 'page-down' }
   | { type: 'scroll-up' | 'scroll-down' }
   | { type: 'mouse'; action: 'press' | 'drag' | 'release'; column: number; row: number }
-  | { type: 'ctrl-a' | 'ctrl-c' | 'ctrl-e' | 'ctrl-k' | 'ctrl-l' | 'ctrl-r' | 'ctrl-u' | 'ctrl-w' }
+  | { type: 'ctrl-a' | 'ctrl-c' | 'ctrl-e' | 'ctrl-g' | 'ctrl-k' | 'ctrl-l' | 'ctrl-r' | 'ctrl-u' | 'ctrl-w' }
   | { type: 'escape' | 'tab' | 'ignore' };
 
 export class TerminalKeyParser {
@@ -164,6 +164,7 @@ function parseOne(value: string): { key: TerminalKey; length: number } | null {
     '\u0001': { type: 'ctrl-a' },
     '\u0003': { type: 'ctrl-c' },
     '\u0005': { type: 'ctrl-e' },
+    '\u0007': { type: 'ctrl-g' },
     '\u000b': { type: 'ctrl-k' },
     '\u000c': { type: 'ctrl-l' },
     '\u0012': { type: 'ctrl-r' },

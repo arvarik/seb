@@ -10,6 +10,13 @@ import {
 } from 'ai';
 
 import type { createFantasyFootballAgent } from '../agent.js';
+import {
+  buildFreeformRecommendationEvidence,
+  enforceFreeformRecommendation,
+  questionRequestsRecommendation,
+  recommendationContextQuestion,
+  type RecommendationToolResult,
+} from '../analysis/recommendation-eligibility.js';
 import { getSharedSebDatabase } from '../data/sqlite-store.js';
 import { formatDoctorReport, runDoctor } from '../doctor.js';
 import {
@@ -20,8 +27,9 @@ import { TeamIdentityRegistry } from '../identity/teams.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import {
-  normalizeSourceLabel,
+  formatEvidenceMarkdown,
   normalizeWebUrl,
+  sourceRetrievalDetail,
   SourceTracker,
   type DataSourceRecord,
 } from '../sources.js';
@@ -55,10 +63,9 @@ import {
   formatFantasyDashboard,
   formatSessionStatus,
   getContextualSuggestions,
-  inferExperienceMode,
   inferPlayerNameFromPrompt,
   normalizeSessionSeasonType,
-  recordSessionToolInput,
+  recordUserConfirmedToolContext,
   type SessionState,
 } from './session.js';
 import { formatSkillList, parseSkillInvocation } from './skills.js';
@@ -112,6 +119,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     if (lastMessage?.role === 'user' && parsed?.command?.name === 'skill') {
       const invocation = parseSkillInvocation(parsed.argumentText);
       if (invocation?.prompt) {
+        this.options.sources.clear();
         this.options.session.skillId = invocation.skill.id;
         if (invocation.skill.id === 'player-info') {
           const player = inferPlayerNameFromPrompt(invocation.prompt);
@@ -129,11 +137,17 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           this.options.session,
           this.options.sources,
           this.uiState,
+          invocation.prompt,
+          recommendationContextQuestion(
+            invocation.prompt,
+            previousUserPrompt(options.messages),
+          ),
         );
       }
     }
     const selectedMode = parsed?.command ? experienceModeForCommand(parsed.command.name) : null;
     if (lastMessage?.role === 'user' && selectedMode && parsed?.argumentText) {
+      this.options.sources.clear();
       this.options.session.mode = selectedMode;
       this.options.session.skillId = 'general';
       this.uiState.latestPrompt = parsed.argumentText;
@@ -148,6 +162,11 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         this.options.session,
         this.options.sources,
         this.uiState,
+        parsed.argumentText,
+        recommendationContextQuestion(
+          parsed.argumentText,
+          previousUserPrompt(options.messages),
+        ),
       );
     }
     if (lastMessage?.role === 'user' && parsed) {
@@ -161,9 +180,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       return localTextStream(recordSuggestions(response, this.options.session, this.uiState));
     }
 
-    if (text) {
-      this.options.session.mode = inferExperienceMode(text, this.options.session.mode);
-    }
+    this.options.sources.clear();
     const stream = await this.delegate.sendMessages({
       ...options,
       messages: this.modelMessages(options.messages),
@@ -173,6 +190,8 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       this.options.session,
       this.options.sources,
       this.uiState,
+      text,
+      recommendationContextQuestion(text, previousUserPrompt(options.messages)),
     );
   }
 
@@ -379,6 +398,13 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         const leagueId = value?.toLowerCase() === 'clear' || value?.toLowerCase() === 'all'
           ? null
           : optionalIdentifier(value, /^\d+$/, 'Sleeper league ID');
+        if (
+          leagueId &&
+          state.leagueOptions.length > 0 &&
+          !state.leagueOptions.includes(leagueId)
+        ) {
+          throw new Error(`League ${leagueId} is not one of the discovered leagues.`);
+        }
         focusSessionLeague(state, leagueId);
         const label = leagueId
           ? state.leagues.find((league) => league.leagueId === leagueId)?.name ?? leagueId
@@ -388,9 +414,20 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'roster': {
         state.mode = 'fantasy';
         const value = arguments_[0];
-        state.rosterId = value?.toLowerCase() === 'clear'
+        const rosterId = value?.toLowerCase() === 'clear'
           ? null
           : validInteger(value, 1, 1_000_000, 'roster ID');
+        if (
+          rosterId !== null &&
+          state.rosterOptions.length > 0 &&
+          !state.rosterOptions.includes(rosterId)
+        ) {
+          const leagueLabel = state.leagueId ? ` in league ${state.leagueId}` : '';
+          throw new Error(
+            `Roster ${rosterId} is not one of the discovered roster options${leagueLabel}.`,
+          );
+        }
+        state.rosterId = rosterId;
         return `The active Sleeper roster ID is now ${state.rosterId ?? 'unset'}.`;
       }
       case 'user': {
@@ -414,13 +451,15 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'profile':
         return this.runProfileCommand(arguments_[0]);
       case 'sources': {
-        const sources = this.options.sources.list();
+        const evidence = this.uiState.latestEvidence();
+        const sources = evidence?.sources ?? this.options.sources.list();
         if (sources.length === 0) {
-          return 'No data source has answered a request in this session.';
+          return 'The latest answer has no recorded evidence.';
         }
         return [
-          '## Recent data sources',
+          '## Evidence for the latest answer',
           '',
+          ...(evidence ? [`Answer: \`${evidence.answerId}\` · captured ${evidence.capturedAt}`, ''] : []),
           ...sources.map(
             (source, index) => formatSourceRecord(source, index + 1),
           ),
@@ -429,9 +468,9 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'source':
       case 'open': {
         const index = validInteger(arguments_[0], 1, 1_000, 'source number');
-        const source = this.options.sources.list()[index - 1];
+        const source = (this.uiState.latestEvidence()?.sources ?? this.options.sources.list())[index - 1];
         if (!source) throw new Error(`Seb found no source ${index}. Run /sources.`);
-        return `Source ${index}: [${source.label}](${source.url}) · ${sourceBadge(source)}`;
+        return `Source ${index}: [${source.label}](${source.url}) · ${sourceBadge(source)} · ${sourceRetrievalDetail(source)}`;
       }
       case 'devtools': {
         const enabled = ['1', 'true'].includes(
@@ -532,6 +571,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         state.skillId = 'general';
         state.team = null;
         this.options.sources.clear();
+        this.uiState.clearAnswerEvidence();
         this.uiState.showSuggestions = true;
         return 'Seb started a new Explore context. It kept the automatic NFL state and Sleeper account.';
       case 'history':
@@ -710,13 +750,25 @@ function decorateResponseStream(
   state: SessionState,
   sources: SourceTracker,
   uiState: InteractiveUiState,
+  userPrompt: string,
+  recommendationQuestion = userPrompt,
 ): ReadableStream<UIMessageChunk> {
-  const webSources = new Map<string, { title?: string; url: string }>();
+  const decisionRequested = questionRequestsRecommendation(recommendationQuestion);
+  const toolNames = new Map<string, string>();
+  const toolResults: RecommendationToolResult[] = [];
+  let bufferedText = '';
+  let answerId = `answer-${crypto.randomUUID()}`;
   return stream.pipeThrough(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
       transform(chunk, controller) {
+        if (chunk.type === 'start' && chunk.messageId) answerId = chunk.messageId;
         if (chunk.type === 'tool-input-available') {
-          recordSessionToolInput(state, chunk.toolName, chunk.input);
+          toolNames.set(chunk.toolCallId, chunk.toolName);
+          recordUserConfirmedToolContext(state, chunk.toolName, chunk.input, userPrompt);
+        }
+        if (chunk.type === 'tool-output-available') {
+          const toolName = toolNames.get(chunk.toolCallId);
+          if (toolName) toolResults.push({ output: chunk.output, toolName });
         }
         if (chunk.type === 'source-url') {
           const url = normalizeWebUrl(chunk.url);
@@ -725,26 +777,42 @@ function decorateResponseStream(
             ...(chunk.title ? { title: chunk.title } : {}),
             url: chunk.url,
           };
-          if (url && sources.recordUrlSource(source)) {
-            webSources.set(url, {
-              title: normalizeSourceLabel(chunk.title, new URL(url).hostname),
-              url,
-            });
-          }
+          if (url) sources.recordUrlSource(source);
         }
         if (chunk.type === 'finish') {
-          uiState.sources = sources.list();
-          if (webSources.size > 0) {
+          const evidence = sources.snapshot(answerId);
+          uiState.recordAnswerEvidence(evidence);
+          if (decisionRequested) {
+            const guarded = enforceFreeformRecommendation(
+              bufferedText,
+              buildFreeformRecommendationEvidence({
+                question: recommendationQuestion,
+                sources: evidence.sources,
+                toolResults,
+              }),
+            );
+            const decisionId = `decision-${crypto.randomUUID()}`;
+            controller.enqueue({ type: 'start-step' });
+            controller.enqueue({ type: 'text-start', id: decisionId });
+            controller.enqueue({
+              type: 'text-delta',
+              id: decisionId,
+              delta: guarded.answer,
+            });
+            controller.enqueue({ type: 'text-end', id: decisionId });
+            controller.enqueue({ type: 'finish-step' });
+          }
+          const evidenceText = formatEvidenceMarkdown(evidence.sources, {
+            limit: VISIBLE_WEB_SOURCE_LIMIT,
+          });
+          if (evidenceText) {
             const sourceId = `sources-${crypto.randomUUID()}`;
-            const visibleSources = [...webSources.values()].slice(0, VISIBLE_WEB_SOURCE_LIMIT);
             controller.enqueue({ type: 'start-step' });
             controller.enqueue({ type: 'text-start', id: sourceId });
             controller.enqueue({
               type: 'text-delta',
               id: sourceId,
-              delta: `\n\nWeb sources: ${visibleSources
-                .map((source) => `[${markdownLabel(source.title ?? source.url)}](<${source.url}>)`)
-                .join(' · ')} · Ask to see all sources.`,
+              delta: `\n\n${evidenceText}`,
             });
             controller.enqueue({ type: 'text-end', id: sourceId });
             controller.enqueue({ type: 'finish-step' });
@@ -752,14 +820,25 @@ function decorateResponseStream(
           const suggestions = getContextualSuggestions(state).slice(0, 3);
           uiState.suggestions = suggestions;
         }
+        if (
+          decisionRequested &&
+          (chunk.type === 'text-start' || chunk.type === 'text-delta' || chunk.type === 'text-end')
+        ) {
+          if (chunk.type === 'text-delta') bufferedText += chunk.delta;
+          return;
+        }
         controller.enqueue(chunk);
       },
     }),
   );
 }
 
-function markdownLabel(value: string): string {
-  return value.replaceAll('[', '').replaceAll(']', '').replace(/\s+/g, ' ').trim();
+function previousUserPrompt(messages: readonly UIMessage[]): string | undefined {
+  for (let index = messages.length - 2; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === 'user') return messageText(message).trim() || undefined;
+  }
+  return undefined;
 }
 
 function recordSuggestions(
@@ -799,9 +878,6 @@ function experienceModeForCommand(
 }
 
 function formatSourceRecord(source: DataSourceRecord, index: number): string {
-  const cache = source.cacheOutcome
-    ? source.cacheOutcome.replace(/-/g, ' ')
-    : 'source access';
   const retrieved = source.retrievedAt ?? source.accessedAt;
   const warning = source.cacheOutcome === 'stale-if-error'
     ? ` Warning: Seb used stale data because the refresh failed${source.error ? ` (${source.error})` : ''}.`
@@ -809,7 +885,7 @@ function formatSourceRecord(source: DataSourceRecord, index: number): string {
   const storageWarning = source.warnings?.length
     ? ` Storage warning: ${source.warnings.join(' ')}`
     : '';
-  return `${index}. [${source.label}](${source.url}) · ${sourceBadge(source)} · ${cache} · retrieved ${retrieved}.${warning}${storageWarning}`;
+  return `${index}. [${source.label}](${source.url}) · **${sourceBadge(source)}** · ${sourceRetrievalDetail(source)} · timestamp ${retrieved}.${warning}${storageWarning}`;
 }
 
 function formatStorageBytes(bytes: number): string {

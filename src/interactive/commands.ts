@@ -53,7 +53,7 @@ export interface CompletionContext {
   recentCommands?: readonly string[];
 }
 
-const NFL_TEAMS = [
+export const NFL_TEAM_CODES = [
   'ARI', 'ATL', 'BAL', 'BUF', 'CAR', 'CHI', 'CIN', 'CLE',
   'DAL', 'DEN', 'DET', 'GB', 'HOU', 'IND', 'JAX', 'KC',
   'LAC', 'LAR', 'LV', 'MIA', 'MIN', 'NE', 'NO', 'NYG',
@@ -102,7 +102,7 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('league', '/league ID|all', 'Focus My Fantasy on one discovered league.', 'My Fantasy', 'Focus one league or return to all leagues.', undefined, ['all', 'clear'], undefined, 1),
   command('rosters', '/rosters [LEAGUE_ID]', 'List rosters for one league.', 'Advanced', 'Read the league rosters from Sleeper.', undefined, undefined, undefined, 1),
   command('roster', '/roster ID|clear', 'Override the automatic owned roster.', 'Advanced', 'Change the focused fantasy roster.', undefined, ['clear'], undefined, 1),
-  command('team', '/team CODE|clear', 'Focus Explore on one NFL team.', 'Advanced', 'Change the current NFL team subject.', undefined, [...NFL_TEAMS, 'clear']),
+  command('team', '/team CODE|clear', 'Focus Explore on one NFL team.', 'Advanced', 'Change the current NFL team subject.', undefined, [...NFL_TEAM_CODES, 'clear']),
   command('skills', '/skills', 'List advanced analysis workflows.', 'Advanced', 'Print every focused analysis workflow.', undefined, undefined, undefined, 0),
   command(
     'skill',
@@ -117,7 +117,7 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('edit', '/edit', 'Edit the last question.', 'Conversation', 'Place the last prompt in the editor.', undefined, undefined, undefined, 0),
   command('setup', '/setup [SLEEPER_USERNAME]', 'Save the local account profile.', 'Advanced', 'Save the current or supplied Sleeper username.', undefined, undefined, undefined, 1),
   command('profile', '/profile [show|load|clear]', 'Inspect the local account profile file.', 'Advanced', 'Read or change the local profile file.', undefined, ['show', 'load', 'clear'], undefined, 1),
-  command('sources', '/sources', 'Show sources used in this session.', 'Sources', 'Print recent source links and freshness.', undefined, undefined, undefined, 0),
+  command('sources', '/sources', 'Show evidence for the latest answer.', 'Sources', 'Print the latest answer source links and freshness.', undefined, undefined, undefined, 0),
   command('source', '/source INDEX', 'Show one numbered source link.', 'Sources', 'Print one validated source as a clickable link.', ['open'], undefined, undefined, 1),
   command('cache', '/cache', 'Show the local data cache status.', 'Sources', 'Print local cache and snapshot counts.', undefined, undefined, undefined, 0),
   command('snapshots', '/snapshots [KIND]', 'List recent source snapshots.', 'Sources', 'Read recent immutable source snapshots.', undefined, undefined, undefined, 1),

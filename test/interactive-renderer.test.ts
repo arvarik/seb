@@ -6,6 +6,7 @@ import type { UIMessageChunk } from 'ai';
 import { MemoryPromptHistory } from '../src/interactive/history.js';
 import type { PromptHistory } from '../src/interactive/history.js';
 import { SebTerminalRenderer } from '../src/interactive/renderer.js';
+import { stripAnsi } from '../src/interactive/presentation.js';
 import { createSessionState } from '../src/interactive/session.js';
 import { InteractiveUiState } from '../src/interactive/ui-state.js';
 import { SourceTracker } from '../src/sources.js';
@@ -77,7 +78,7 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(frame).toContain('3 lines above latest');
     terminal.input.type('new request\r');
     await expect(prompt).resolves.toBe('new request');
-    expect(terminal.output.text()).toContain('\x1b[?1000h\x1b[?1006h');
+    expect(terminal.output.text()).toContain('\x1b[?1000h\x1b[?1002h\x1b[?1006h');
   });
 
   it('coalesces fast scrolling and skips redraws at both boundaries', async () => {
@@ -177,6 +178,70 @@ describe('SebTerminalRenderer prompt input', () => {
     await expect(prompt).rejects.toThrow('Interrupted');
   });
 
+  it('releases mouse reporting for native text selection', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type('/select\r');
+    expect(terminal.output.text()).toContain('Selection mode');
+    expect(terminal.output.text()).toContain('\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l');
+
+    terminal.input.type('ignored while selecting');
+    terminal.input.type('\x1b');
+    expect(terminal.output.text()).toContain('\x1b[?1000h\x1b[?1002h\x1b[?1006h');
+
+    terminal.input.type('new request\r');
+    await expect(prompt).resolves.toBe('new request');
+  });
+
+  it('selects visible text by dragging and copies it on release', async () => {
+    const copied: string[] = [];
+    const terminal = createTerminal();
+    const renderer = createRenderer(
+      terminal,
+      new MemoryPromptHistory(),
+      new InteractiveUiState(),
+      (text) => copied.push(text),
+    );
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'start', messageId: 'selectable-answer' });
+          controller.enqueue({ type: 'text-start', id: 'answer-text' });
+          controller.enqueue({
+            type: 'text-delta',
+            id: 'answer-text',
+            delta: 'Selectable text remains visible.',
+          });
+          controller.enqueue({ type: 'text-end', id: 'answer-text' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
+          controller.close();
+        },
+      }),
+    });
+    const prompt = renderer.readPrompt();
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    const rows = frame.split('\r\n');
+    const rowIndex = rows.findIndex((row) => row.includes('Selectable text'));
+    const columnIndex = rows[rowIndex]?.indexOf('Selectable text') ?? -1;
+    expect(rowIndex).toBeGreaterThanOrEqual(0);
+    expect(columnIndex).toBeGreaterThanOrEqual(0);
+    const row = rowIndex + 1;
+    const startColumn = columnIndex + 1;
+    const endColumn = startColumn + 'Selectable text'.length - 1;
+
+    terminal.input.type(`\x1b[<0;${startColumn};${row}M`);
+    terminal.input.type(`\x1b[<32;${endColumn};${row}M`);
+    terminal.input.type(`\x1b[<0;${endColumn};${row}m`);
+
+    expect(copied).toEqual(['Selectable text']);
+    expect(terminal.output.text()).toContain(Buffer.from('Selectable text').toString('base64'));
+    expect(terminal.output.text().split('\x1b[H').at(-1)).toContain('\x1b[7m');
+    terminal.input.type('new request\r');
+    await expect(prompt).resolves.toBe('new request');
+  });
+
   it('runs terminal commands without case-sensitive matching', async () => {
     const uiState = new InteractiveUiState();
     uiState.latestAnswer = 'Latest answer';
@@ -217,7 +282,7 @@ describe('SebTerminalRenderer prompt input', () => {
     await expect(prompt).rejects.toThrow('Interrupted');
     expect(terminal.input.rawModes.at(-1)).toBe(false);
     expect(terminal.output.text()).toContain('\x1b[?1049l');
-    expect(terminal.output.text()).toContain('\x1b[?1006l\x1b[?1000l');
+    expect(terminal.output.text()).toContain('\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l');
   });
 
   it.each(['/exit', '/quit', '/q'])('exits interactive mode with %s', async (command) => {
@@ -323,14 +388,146 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(terminal.output.text()).toContain('72%');
     expect(uiState.latestAnswer).toContain('Weekly points');
   });
+
+  it('keeps the web source line inside the current Seb response', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    const chunks: UIMessageChunk[] = [
+      { type: 'start', messageId: 'answer-with-sources' },
+      { type: 'start-step' },
+      { type: 'text-start', id: 'answer-text' },
+      { type: 'text-delta', id: 'answer-text', delta: 'Model answer.' },
+      { type: 'text-end', id: 'answer-text' },
+      { type: 'finish-step' },
+      {
+        type: 'source-url',
+        sourceId: 'news-1',
+        url: 'https://example.com/nfl-report',
+        title: 'NFL report',
+      },
+      { type: 'start-step' },
+      { type: 'text-start', id: 'source-text' },
+      {
+        type: 'text-delta',
+        id: 'source-text',
+        delta: '\n\nWeb sources: [NFL report](<https://example.com/nfl-report>)',
+      },
+      { type: 'text-end', id: 'source-text' },
+      { type: 'finish-step' },
+      { type: 'finish', finishReason: 'stop' },
+    ];
+
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(chunk);
+          controller.close();
+        },
+      }),
+    });
+
+    const frame = terminal.output.text().split('\x1b[H').at(-1) ?? '';
+    expect(frame.match(/◆ Seb/gu)).toHaveLength(1);
+    expect(frame).toContain('Model answer.');
+    expect(frame).toContain('WEB SOURCES');
+    expect(frame).toContain('NFL report');
+  });
+
+  it('shows an intermediate tool error as a retry and removes it after success', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    let streamController: ReadableStreamDefaultController<UIMessageChunk> | undefined;
+    const rendered = renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue({ type: 'start', messageId: 'retried-search' });
+          controller.enqueue({
+            type: 'tool-input-available',
+            toolCallId: 'search-1',
+            toolName: 'searchCurrentNews',
+            input: {},
+          });
+          controller.enqueue({
+            type: 'tool-output-error',
+            toolCallId: 'search-1',
+            errorText: 'Temporary provider error',
+          });
+        },
+      }),
+    });
+
+    await expect.poll(() => terminal.output.text().split('\x1b[H').at(-1)).toContain('retrying');
+    const retryFrame = terminal.output.text().split('\x1b[H').at(-1) ?? '';
+    expect(retryFrame).not.toContain('Temporary provider error');
+
+    streamController?.enqueue({
+      type: 'tool-input-available',
+      toolCallId: 'search-2',
+      toolName: 'searchCurrentNews',
+      input: {},
+    });
+    streamController?.enqueue({
+      type: 'tool-output-available',
+      toolCallId: 'search-2',
+      output: { result: 'Found' },
+    });
+    streamController?.enqueue({ type: 'text-start', id: 'answer-text' });
+    streamController?.enqueue({
+      type: 'text-delta',
+      id: 'answer-text',
+      delta: 'Search completed.',
+    });
+    streamController?.enqueue({ type: 'text-end', id: 'answer-text' });
+    streamController?.enqueue({ type: 'finish', finishReason: 'stop' });
+    streamController?.close();
+    await rendered;
+
+    const finalFrame = terminal.output.text().split('\x1b[H').at(-1) ?? '';
+    expect(finalFrame).not.toContain('Temporary provider error');
+    expect(finalFrame).not.toContain('retrying');
+    expect(finalFrame).toContain('Search completed.');
+  });
+
+  it('shows an unrecovered tool error after the stream ends', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'start', messageId: 'failed-search' });
+          controller.enqueue({
+            type: 'tool-input-available',
+            toolCallId: 'search-1',
+            toolName: 'searchCurrentNews',
+            input: {},
+          });
+          controller.enqueue({
+            type: 'tool-output-error',
+            toolCallId: 'search-1',
+            errorText: 'Final provider error',
+          });
+          controller.enqueue({ type: 'finish', finishReason: 'error' });
+          controller.close();
+        },
+      }),
+    });
+
+    const frame = terminal.output.text().split('\x1b[H').at(-1) ?? '';
+    expect(frame).toContain('Final provider error');
+    expect(frame).not.toContain('retrying');
+  });
 });
 
 function createRenderer(
   terminal: ReturnType<typeof createTerminal>,
   history: PromptHistory = new MemoryPromptHistory(),
   uiState = new InteractiveUiState(),
+  copyText: (text: string) => void = () => undefined,
 ) {
   return new SebTerminalRenderer({
+    copyText,
     environment: { NO_COLOR: '1' },
     history,
     input: terminal.input,
@@ -339,7 +536,7 @@ function createRenderer(
     session: createSessionState(new Date('2026-08-20T12:00:00Z')),
     sources: new SourceTracker(),
     uiState,
-    version: '0.0.8',
+    version: '0.0.9',
   });
 }
 

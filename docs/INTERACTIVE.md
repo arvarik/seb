@@ -166,6 +166,7 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/new` or `/clear` | Starts a new model context. |
 | `/history [clear]` | Shows or clears private prompt history. |
 | `/copy` | Copies the latest Seb answer. |
+| `/select` | Enables native terminal text selection until you press `Escape`. |
 | `/theme NAME` | Selects a display theme. |
 | `/icons MODE` | Selects Unicode or ASCII symbols. |
 | `/export [NAME] [md|json]` | Exports the transcript. |
@@ -302,7 +303,9 @@ Seb shows each source URL that a data client or grounded search used during the 
 
 The source list records Sleeper endpoints, nflverse files, NWS endpoints, and web reporting.
 
-Current-news answers include a `Web sources` section when Gemini returns source links.
+Current-news answers include one compact line with up to three web source links.
+
+The line tells the user to ask for all sources. Seb keeps every validated source for `/sources`.
 
 Seb accepts only HTTP and HTTPS web source links.
 
@@ -328,7 +331,9 @@ Use `Up` and `Down` to read prior prompts.
 
 Use the mouse wheel or `Page Up` and `Page Down` to scroll the transcript.
 
-Each mouse wheel event moves one transcript row.
+Each mouse wheel event moves three transcript rows.
+
+Seb batches rapid wheel events at 60 frames per second.
 
 Press `Ctrl+R` to search history with the current editor text.
 
@@ -348,7 +353,11 @@ Run `/edit` to place that prompt in the editor.
 
 Run `/copy` to send the latest answer to the terminal clipboard.
 
-The clipboard action needs terminal OSC 52 support.
+Seb uses the local system clipboard when available. It also sends OSC 52 for compatible terminals.
+
+Drag across visible text to select it. Seb highlights the selection and copies it when you release the mouse button.
+
+Run `/select` only when you need the terminal's native selection mode. Press `Escape` to return.
 
 ## Themes and symbols
 

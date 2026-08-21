@@ -6,6 +6,20 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-08-20
+
+### Added
+
+- Mouse drag now selects visible terminal text and copies it on release.
+- The `/select` command now enables native terminal text selection and copying.
+
+### Fixed
+
+- Wide comparison cards now render inline Markdown in every header and value.
+- Web answers now show up to three sources on one compact line.
+- The web source line now stays inside the current Seb response.
+- Recoverable tool errors now show a retry state instead of a temporary failure.
+
 ## [0.0.8] - 2026-08-20
 
 ### Changed

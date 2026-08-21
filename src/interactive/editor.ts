@@ -83,6 +83,7 @@ export type TerminalKey =
   | { type: 'home' | 'end' | 'up' | 'down' }
   | { type: 'page-up' | 'page-down' }
   | { type: 'scroll-up' | 'scroll-down' }
+  | { type: 'mouse'; action: 'press' | 'drag' | 'release'; column: number; row: number }
   | { type: 'ctrl-a' | 'ctrl-c' | 'ctrl-e' | 'ctrl-k' | 'ctrl-l' | 'ctrl-r' | 'ctrl-u' | 'ctrl-w' }
   | { type: 'escape' | 'tab' | 'ignore' };
 
@@ -110,12 +111,15 @@ export class TerminalKeyParser {
 }
 
 function parseOne(value: string): { key: TerminalKey; length: number } | null {
-  const sgrMouse = value.match(/^\x1b\[<(\d+);\d+;\d+([Mm])/u);
+  const sgrMouse = value.match(/^\x1b\[<(\d+);(\d+);(\d+)([Mm])/u);
   if (sgrMouse) {
     const button = Number(sgrMouse[1]);
-    const wheel = sgrMouse[2] === 'M' ? mouseWheelKey(button) : null;
+    const column = Number(sgrMouse[2]);
+    const row = Number(sgrMouse[3]);
+    const suffix = sgrMouse[4];
+    const wheel = suffix === 'M' ? mouseWheelKey(button) : null;
     return {
-      key: wheel ?? { type: 'ignore' },
+      key: wheel ?? mouseSelectionKey(button, column, row, suffix) ?? { type: 'ignore' },
       length: sgrMouse[0].length,
     };
   }
@@ -188,6 +192,22 @@ function mouseWheelKey(button: number): TerminalKey | null {
   if (direction === 0) return { type: 'scroll-up' };
   if (direction === 1) return { type: 'scroll-down' };
   return null;
+}
+
+function mouseSelectionKey(
+  button: number,
+  column: number,
+  row: number,
+  suffix: string | undefined,
+): TerminalKey | null {
+  if ((button & 64) !== 0 || (button & 3) !== 0) return null;
+  const action = suffix === 'm' ? 'release' : (button & 32) !== 0 ? 'drag' : 'press';
+  return {
+    action,
+    column: Math.max(1, column),
+    row: Math.max(1, row),
+    type: 'mouse',
+  };
 }
 
 function previousCodePointIndex(value: string, index: number): number {

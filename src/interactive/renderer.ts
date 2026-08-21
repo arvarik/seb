@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { spawn } from 'node:child_process';
 
 import {
   getToolName,
@@ -81,6 +82,7 @@ export interface SebRendererToolApprovalRequest {
 }
 
 export interface SebRendererOptions {
+  copyText?: (text: string) => void;
   environment: NodeJS.ProcessEnv;
   history: PromptHistory;
   input: SebTerminalInput;
@@ -101,9 +103,23 @@ interface Section {
   title: string;
 }
 
+interface ScreenPoint {
+  column: number;
+  row: number;
+}
+
+interface ScreenSelection {
+  anchor: ScreenPoint;
+  focus: ScreenPoint;
+  moved: boolean;
+}
+
 const SPINNERS = ['◐', '◓', '◑', '◒'] as const;
 const FRAME_INTERVAL_MS = Math.ceil(1000 / 60);
 const MOUSE_WHEEL_LINES = 3;
+const MOUSE_REPORTING_OFF = '\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l';
+const MOUSE_REPORTING_ON = '\x1b[?1000h\x1b[?1002h\x1b[?1006h';
+const TERMINAL_CONTROL_AT_START = /^\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/u;
 
 export class SebTerminalRenderer {
   private active = false;
@@ -111,6 +127,7 @@ export class SebTerminalRenderer {
   private activeToolIds = new Set<string>();
   private editor = new PromptEditor();
   private exitRequested = false;
+  private framePlainLines: string[] = [];
   private historyIndex = -1;
   private interrupted = false;
   private keyParser = new TerminalKeyParser();
@@ -125,6 +142,8 @@ export class SebTerminalRenderer {
   private readonly options: SebRendererOptions;
   private paintTimer: ReturnType<typeof setTimeout> | undefined;
   private scrollOffset = 0;
+  private screenSelection: ScreenSelection | undefined;
+  private selectionMode = false;
   private sections: Section[] = [];
   private status = 'Ready';
   private streamMessage: UIMessage | undefined;
@@ -205,6 +224,7 @@ export class SebTerminalRenderer {
       if (this.interrupted) result.abort?.();
       this.stopTicker();
       this.detachInput();
+      if (!this.interrupted && response) this.renderMessage(response, true);
       this.activeToolIds.clear();
       this.status = this.interrupted
         ? 'Request stopped'
@@ -248,6 +268,21 @@ export class SebTerminalRenderer {
     resolve: (value: string | undefined) => void,
     reject: (reason: Error) => void,
   ): Promise<void> {
+    if (this.handleMouseSelection(key)) return;
+    if (key.type === 'ctrl-c' && this.copyScreenSelection()) return;
+    if (this.screenSelection) {
+      this.screenSelection = undefined;
+      this.requestPaint();
+    }
+    if (this.selectionMode) {
+      if (key.type === 'ctrl-c') {
+        this.stop();
+        reject(new Error('Interrupted'));
+      } else if (key.type === 'escape' || key.type === 'enter') {
+        this.leaveSelectionMode();
+      }
+      return;
+    }
     if (this.overlay !== 'none') {
       if (key.type === 'ctrl-c') {
         this.stop();
@@ -382,13 +417,17 @@ export class SebTerminalRenderer {
     if (localCommand?.name === 'copy') {
       const answer = this.options.uiState.latestAnswer;
       if (answer && this.options.output.isTTY !== false) {
-        this.options.output.write(osc52(answer));
+        this.copyText(answer);
         this.status = 'Copied the latest answer';
       } else {
         this.status = 'No answer is available to copy';
       }
       this.editor.set('');
       this.paint();
+      return;
+    }
+    if (localCommand?.name === 'select') {
+      this.enterSelectionMode();
       return;
     }
     if (localCommand?.name === 'history' && (
@@ -456,6 +495,12 @@ export class SebTerminalRenderer {
   }
 
   private handleStreamKey(key: TerminalKey): void {
+    if (this.handleMouseSelection(key)) return;
+    if (key.type === 'ctrl-c' && this.copyScreenSelection()) return;
+    if (this.screenSelection) {
+      this.screenSelection = undefined;
+      this.requestPaint();
+    }
     if (key.type === 'escape') {
       this.interrupted = true;
       this.status = 'Stopping the current request';
@@ -477,7 +522,7 @@ export class SebTerminalRenderer {
     }
   }
 
-  private renderMessage(message: UIMessage): void {
+  private renderMessage(message: UIMessage, final = false): void {
     const width = Math.max(40, this.options.output.columns ?? 80);
     const previousBodyLength = this.scrollOffset > 0
       ? this.renderBody(width).length
@@ -486,13 +531,33 @@ export class SebTerminalRenderer {
     for (const [index, part] of message.parts.entries()) {
       const id = `${message.id}:${index}`;
       if (part.type === 'text' && part.text.trim()) {
-        active.add(id);
-        this.upsert({ content: part.text, id, kind: 'assistant', title: 'Seb' });
+        const continuationIndex = part.text.trimStart().startsWith('Web sources:')
+          ? previousTextPartIndex(message.parts, index)
+          : undefined;
+        if (continuationIndex !== undefined) {
+          const continuationId = `${message.id}:${continuationIndex}`;
+          const previousPart = message.parts[continuationIndex];
+          active.add(continuationId);
+          this.upsert({
+            content: `${previousPart?.type === 'text' ? previousPart.text : ''}${part.text}`,
+            id: continuationId,
+            kind: 'assistant',
+            title: 'Seb',
+          });
+        } else {
+          active.add(id);
+          this.upsert({ content: part.text, id, kind: 'assistant', title: 'Seb' });
+        }
       } else if (isToolUIPart(part)) {
-        active.add(id);
         const state = part.state;
         const name = getToolName(part);
-        const running = state === 'input-streaming' || state === 'input-available' || state === 'approval-requested';
+        if (state === 'output-error' && hasLaterToolAttempt(message.parts, index, name)) {
+          this.activeToolIds.delete(id);
+          continue;
+        }
+        active.add(id);
+        const retrying = state === 'output-error' && !final;
+        const running = retrying || state === 'input-streaming' || state === 'input-available' || state === 'approval-requested';
         if (running) {
           this.activeToolIds.add(id);
           if (!this.toolStartedAt.has(id)) this.toolStartedAt.set(id, Date.now());
@@ -503,7 +568,7 @@ export class SebTerminalRenderer {
             this.toolDurations.set(id, Date.now() - startedAt);
           }
         }
-        const failed = state === 'output-error' || state === 'output-denied';
+        const failed = state === 'output-denied' || (state === 'output-error' && final);
         const marker = failed ? symbol(this.theme, 'danger') : running ? this.spinner() : symbol(this.theme, 'done');
         const startedAt = this.toolStartedAt.get(id) ?? this.activeStartedAt;
         const elapsed = formatElapsed(running
@@ -511,12 +576,16 @@ export class SebTerminalRenderer {
           : this.toolDurations.get(id) ?? Date.now() - startedAt);
         const detail = failed && 'errorText' in part ? ` · ${part.errorText}` : '';
         this.upsert({
-          content: `${marker} ${friendlyToolName(name)} · ${elapsed}${detail}`,
+          content: `${marker} ${friendlyToolName(name)} · ${retrying ? 'retrying' : elapsed}${detail}`,
           id,
           kind: failed ? 'error' : 'tool',
           title: running ? 'Working' : 'Tool',
         });
-        if (running) this.status = `${friendlyToolName(name)} · ${elapsed}`;
+        if (running) {
+          this.status = retrying
+            ? `Retrying ${friendlyToolName(name).toLowerCase()}`
+            : `${friendlyToolName(name)} · ${elapsed}`;
+        }
       }
     }
     this.sections = this.sections.filter((section) =>
@@ -603,7 +672,9 @@ export class SebTerminalRenderer {
     this.active = true;
     this.lastFrame = '';
     this.lastPaintAt = 0;
-    this.options.output.write('\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[?1000h\x1b[?1006h');
+    this.screenSelection = undefined;
+    this.selectionMode = false;
+    this.options.output.write(`\x1b[?1049h\x1b[?25l\x1b[?2004h${MOUSE_REPORTING_ON}`);
     if (this.options.input.isTTY) {
       this.options.input.setRawMode?.(true);
       this.options.input.resume();
@@ -622,7 +693,9 @@ export class SebTerminalRenderer {
       this.options.input.pause();
     }
     if (this.onResize) this.options.output.off('resize', this.onResize);
-    this.options.output.write('\x1b[?1006l\x1b[?1000l\x1b[?2004l\x1b[?25h\x1b[?1049l');
+    this.screenSelection = undefined;
+    this.selectionMode = false;
+    this.options.output.write(`${MOUSE_REPORTING_OFF}\x1b[?2004l\x1b[?25h\x1b[?1049l`);
     this.active = false;
   }
 
@@ -657,7 +730,75 @@ export class SebTerminalRenderer {
     return SPINNERS[Math.floor(Date.now() / 250) % SPINNERS.length] ?? '◌';
   }
 
+  private handleMouseSelection(key: TerminalKey): boolean {
+    if (key.type !== 'mouse') return false;
+    if (this.selectionMode || this.framePlainLines.length === 0) return true;
+    const point = clampScreenPoint(key, this.framePlainLines);
+    if (key.action === 'press') {
+      this.screenSelection = {
+        anchor: point,
+        focus: point,
+        moved: false,
+      };
+      this.status = 'Selecting text';
+      this.paint();
+      return true;
+    }
+    const selection = this.screenSelection;
+    if (!selection) return true;
+    selection.focus = point;
+    selection.moved = selection.moved || !sameScreenPoint(selection.anchor, point);
+    if (key.action === 'drag') {
+      this.requestPaint();
+      return true;
+    }
+    if (!selection.moved || !this.copyScreenSelection()) {
+      this.screenSelection = undefined;
+      this.status = 'Ready';
+    }
+    this.paint();
+    return true;
+  }
+
+  private copyScreenSelection(): boolean {
+    if (!this.screenSelection?.moved) return false;
+    const text = selectedScreenText(this.framePlainLines, this.screenSelection);
+    if (!text) return false;
+    this.copyText(text);
+    this.status = `Copied selection · ${text.length} character${text.length === 1 ? '' : 's'}`;
+    this.requestPaint();
+    return true;
+  }
+
+  private copyText(text: string): void {
+    this.options.output.write(osc52(text));
+    try {
+      if (this.options.copyText) this.options.copyText(text);
+      else copyToLocalClipboard(text);
+    } catch {
+      // OSC 52 remains available when the local clipboard command fails.
+    }
+  }
+
+  private enterSelectionMode(): void {
+    this.screenSelection = undefined;
+    this.selectionMode = true;
+    this.editor.set('');
+    this.status = 'Selection mode · drag to select, copy with the terminal shortcut, then press Escape';
+    this.options.output.write(MOUSE_REPORTING_OFF);
+    this.paint();
+  }
+
+  private leaveSelectionMode(): void {
+    if (!this.selectionMode) return;
+    this.selectionMode = false;
+    this.status = 'Ready';
+    this.options.output.write(MOUSE_REPORTING_ON);
+    this.paint(true);
+  }
+
   private scroll(delta: number): void {
+    this.screenSelection = undefined;
     const nextOffset = clamp(
       this.scrollOffset + delta,
       0,
@@ -706,7 +847,11 @@ export class SebTerminalRenderer {
     const end = body.length - this.scrollOffset;
     const visible = body.slice(Math.max(0, end - bodyHeight), end);
     while (visible.length < bodyHeight) visible.unshift('');
-    const lines = [...header, ...visible, ...footer].slice(0, height);
+    const cleanLines = [...header, ...visible, ...footer].slice(0, height);
+    this.framePlainLines = cleanLines.map(stripAnsi);
+    const lines = this.screenSelection?.moved
+      ? highlightScreenSelection(cleanLines, this.screenSelection)
+      : cleanLines;
     const frame = `${width}x${height}\n${lines.join('\n')}`;
     if (!clear && frame === this.lastFrame) return;
     const output = [
@@ -793,7 +938,7 @@ export class SebTerminalRenderer {
         paint(this.theme, 'source', fit(` ${index + 1}  ${sanitizeTerminalText(value)}`, width))),
       paint(this.theme, 'dim', '─'.repeat(width)),
       ...promptLines.map((line, index) => `${index === 0 ? `${symbol(this.theme, 'prompt')} ` : '  '}${line}`),
-      paint(this.theme, 'dim', fit(` ${sanitizeTerminalText(status)} · Ctrl+K commands · /exit quit · ? shortcuts`, width)),
+      paint(this.theme, 'dim', fit(` ${sanitizeTerminalText(status)} · drag copy · Ctrl+K commands · /exit quit · ? shortcuts`, width)),
     ];
   }
 
@@ -861,6 +1006,8 @@ export class SebTerminalRenderer {
       '  Ctrl+R       Search prompt history',
       '  PgUp/PgDn    Scroll the transcript',
       '  Mouse wheel   Scroll the transcript',
+      '  Mouse drag    Select and copy visible text',
+      '  /select       Use native selection as a fallback',
       '  Escape       Close a panel or stop a request',
       '  Ctrl+C       Exit Seb',
       '  /exit        Exit Seb',
@@ -936,6 +1083,146 @@ function toReadableStream<T>(source: AsyncIterable<T> | ReadableStream<T>): Read
       await iterator.return?.(reason);
     },
   });
+}
+
+function previousTextPartIndex(parts: UIMessage['parts'], index: number): number | undefined {
+  for (let candidateIndex = index - 1; candidateIndex >= 0; candidateIndex -= 1) {
+    const candidate = parts[candidateIndex];
+    if (candidate?.type === 'source-url' || candidate?.type === 'source-document' || candidate?.type === 'step-start') {
+      continue;
+    }
+    return candidate?.type === 'text' ? candidateIndex : undefined;
+  }
+  return undefined;
+}
+
+function clampScreenPoint(point: ScreenPoint, lines: readonly string[]): ScreenPoint {
+  const row = clamp(point.row, 1, Math.max(1, lines.length));
+  const line = lines[row - 1] ?? '';
+  return {
+    column: clamp(point.column, 1, Math.max(1, line.length)),
+    row,
+  };
+}
+
+function sameScreenPoint(left: ScreenPoint, right: ScreenPoint): boolean {
+  return left.column === right.column && left.row === right.row;
+}
+
+function orderedSelection(selection: ScreenSelection): [ScreenPoint, ScreenPoint] {
+  const { anchor, focus } = selection;
+  return anchor.row < focus.row || (anchor.row === focus.row && anchor.column <= focus.column)
+    ? [anchor, focus]
+    : [focus, anchor];
+}
+
+function selectedColumnsForRow(
+  selection: ScreenSelection,
+  row: number,
+  lineLength: number,
+): { end: number; start: number } | undefined {
+  const [start, end] = orderedSelection(selection);
+  if (row < start.row || row > end.row) return undefined;
+  if (start.row === end.row) {
+    return {
+      end: Math.min(lineLength, end.column),
+      start: Math.min(lineLength, start.column - 1),
+    };
+  }
+  if (row === start.row) {
+    return { end: lineLength, start: Math.min(lineLength, start.column - 1) };
+  }
+  if (row === end.row) {
+    return { end: Math.min(lineLength, end.column), start: 0 };
+  }
+  return { end: lineLength, start: 0 };
+}
+
+function selectedScreenText(
+  lines: readonly string[],
+  selection: ScreenSelection,
+): string {
+  const [start, end] = orderedSelection(selection);
+  const selected: string[] = [];
+  for (let row = start.row; row <= end.row; row += 1) {
+    const line = lines[row - 1] ?? '';
+    const columns = selectedColumnsForRow(selection, row, line.length);
+    selected.push(columns ? line.slice(columns.start, columns.end) : '');
+  }
+  return selected.join('\n');
+}
+
+function highlightScreenSelection(
+  lines: readonly string[],
+  selection: ScreenSelection,
+): string[] {
+  return lines.map((line, index) => {
+    const columns = selectedColumnsForRow(selection, index + 1, visibleLength(line));
+    return columns && columns.end > columns.start
+      ? highlightTerminalColumns(line, columns.start, columns.end)
+      : line;
+  });
+}
+
+function highlightTerminalColumns(value: string, start: number, end: number): string {
+  let highlighted = false;
+  let index = 0;
+  let output = '';
+  let visibleIndex = 0;
+  while (index < value.length) {
+    const control = value.slice(index).match(TERMINAL_CONTROL_AT_START)?.[0];
+    if (control) {
+      output += control;
+      if (highlighted) output += '\x1b[7m';
+      index += control.length;
+      continue;
+    }
+    const codePoint = value.codePointAt(index);
+    const characterLength = codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
+    const nextVisibleIndex = visibleIndex + characterLength;
+    const selected = nextVisibleIndex > start && visibleIndex < end;
+    if (selected && !highlighted) {
+      output += '\x1b[7m';
+      highlighted = true;
+    }
+    output += value.slice(index, index + characterLength);
+    visibleIndex = nextVisibleIndex;
+    index += characterLength;
+    if (highlighted && visibleIndex >= end) {
+      output += '\x1b[27m';
+      highlighted = false;
+    }
+  }
+  if (highlighted) output += '\x1b[27m';
+  return output;
+}
+
+function copyToLocalClipboard(text: string): void {
+  const command = process.platform === 'darwin'
+    ? { executable: 'pbcopy', arguments: [] as string[] }
+    : process.platform === 'win32'
+      ? { executable: 'clip.exe', arguments: [] as string[] }
+      : process.env.WAYLAND_DISPLAY
+        ? { executable: 'wl-copy', arguments: [] as string[] }
+        : process.env.DISPLAY
+          ? { executable: 'xclip', arguments: ['-selection', 'clipboard'] }
+          : undefined;
+  if (!command) return;
+  const child = spawn(command.executable, command.arguments, {
+    stdio: ['pipe', 'ignore', 'ignore'],
+  });
+  child.on('error', () => undefined);
+  child.stdin.on('error', () => undefined);
+  child.stdin.end(text);
+}
+
+function hasLaterToolAttempt(
+  parts: UIMessage['parts'],
+  index: number,
+  toolName: string,
+): boolean {
+  return parts.slice(index + 1).some((part) =>
+    isToolUIPart(part) && getToolName(part) === toolName);
 }
 
 function errorMessage(error: unknown): string {

@@ -76,6 +76,22 @@ describe('interactive presentation', () => {
     expect(output.split('\n').every((line) => visibleLength(line) <= 44)).toBe(true);
   });
 
+  it('renders inline Markdown in every wide-table card field', () => {
+    const theme = createTheme({ NO_COLOR: '1' });
+    const output = renderAnalysisText([
+      '| **Player** | Team | Recommendation | Floor | Ceiling | Rationale |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| **Lamar Jackson** | **BAL** | **Start** | *High* | __Elite__ | ~~Old~~ Current |',
+    ].join('\n'), theme, 44);
+
+    expect(output).toContain('PLAYER Lamar Jackson · TEAM BAL');
+    expect(output).toContain('RECOMMENDATION Start');
+    expect(output).toContain('FLOOR High');
+    expect(output).toContain('CEILING Elite');
+    expect(output).toContain('RATIONALE Old Current');
+    expect(output).not.toMatch(/[*_~]{1,3}/u);
+  });
+
   it('styles deep headings, Unicode bullets, and fenced code blocks', () => {
     const theme = createTheme({ NO_COLOR: '1' });
     const output = renderAnalysisText([

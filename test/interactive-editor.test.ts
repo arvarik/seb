@@ -80,6 +80,30 @@ describe('TerminalKeyParser', () => {
     ]);
   });
 
+  it('parses left-button press, drag, and release coordinates', () => {
+    const parser = new TerminalKeyParser();
+
+    expect(parser.parse(
+      '\x1b[<0;12;8M\x1b[<32;20;10M\x1b[<0;20;10m',
+    )).toEqual([
+      { type: 'mouse', action: 'press', column: 12, row: 8 },
+      { type: 'mouse', action: 'drag', column: 20, row: 10 },
+      { type: 'mouse', action: 'release', column: 20, row: 10 },
+    ]);
+  });
+
+  it('ignores non-primary mouse buttons and motion without a pressed button', () => {
+    const parser = new TerminalKeyParser();
+
+    expect(parser.parse(
+      '\x1b[<1;12;8M\x1b[<35;20;10M\x1b[<1;20;10m',
+    )).toEqual([
+      { type: 'ignore' },
+      { type: 'ignore' },
+      { type: 'ignore' },
+    ]);
+  });
+
   it('collects an incomplete legacy mouse event across chunks', () => {
     const parser = new TerminalKeyParser();
 

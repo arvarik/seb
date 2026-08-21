@@ -1,6 +1,6 @@
 # Terminal interface guide
 
-Seb `0.0.8` includes a local terminal renderer for interactive research.
+Seb `0.0.9` includes a local terminal renderer for interactive research.
 
 The AI SDK still controls the agent message loop and tool transport.
 
@@ -145,9 +145,15 @@ Run `/edit` to place that prompt in the editor.
 
 Run `/copy` to copy the latest Seb answer.
 
-The copy command uses the terminal OSC 52 clipboard sequence.
+The copy command uses the local system clipboard when available.
 
-The terminal must allow OSC 52 for this action.
+It also sends the terminal OSC 52 clipboard sequence for compatible terminals.
+
+Drag across visible text to select and copy it without a command.
+
+Seb highlights the selected cells and copies the text when you release the mouse button.
+
+Run `/select` as a fallback for native terminal selection. Press `Escape` to return.
 
 Run `/source 1` to show the first validated source link.
 
@@ -336,5 +342,7 @@ If colors remain incorrect, start Seb with `NO_COLOR=1`.
 If a paste submits early, confirm that the terminal supports bracketed paste.
 
 If `/copy` does not change the clipboard, enable OSC 52 in the terminal settings.
+
+Use `/select` when the terminal blocks in-app selection or clipboard access.
 
 Run `seb doctor` when a model or data request fails.

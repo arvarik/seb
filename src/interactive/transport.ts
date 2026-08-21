@@ -67,6 +67,8 @@ import { InteractiveUiState } from './ui-state.js';
 
 type SebAgent = ReturnType<typeof createFantasyFootballAgent>;
 
+const VISIBLE_WEB_SOURCE_LIMIT = 3;
+
 export interface SebInteractiveTransportOptions {
   agent: SebAgent;
   environment: NodeJS.ProcessEnv;
@@ -538,6 +540,8 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           : 'Run `/history` in the Seb terminal to view its private prompt history.';
       case 'copy':
         return 'Run `/copy` in the Seb terminal to copy the latest answer with OSC 52.';
+      case 'select':
+        return 'Run `/select` in the Seb terminal to select and copy visible text with the terminal clipboard.';
       case 'theme':
         return 'Use `/theme default`, `/theme high-contrast`, or `/theme compact` in the Seb terminal.';
       case 'icons':
@@ -732,14 +736,15 @@ function decorateResponseStream(
           uiState.sources = sources.list();
           if (webSources.size > 0) {
             const sourceId = `sources-${crypto.randomUUID()}`;
+            const visibleSources = [...webSources.values()].slice(0, VISIBLE_WEB_SOURCE_LIMIT);
             controller.enqueue({ type: 'start-step' });
             controller.enqueue({ type: 'text-start', id: sourceId });
             controller.enqueue({
               type: 'text-delta',
               id: sourceId,
-              delta: `\n\n## Web sources\n\n${[...webSources.values()]
-                .map((source) => `- [${markdownLabel(source.title ?? source.url)}](<${source.url}>)`)
-                .join('\n')}`,
+              delta: `\n\nWeb sources: ${visibleSources
+                .map((source) => `[${markdownLabel(source.title ?? source.url)}](<${source.url}>)`)
+                .join(' · ')} · Ask to see all sources.`,
             });
             controller.enqueue({ type: 'text-end', id: sourceId });
             controller.enqueue({ type: 'finish-step' });

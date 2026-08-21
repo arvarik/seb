@@ -364,16 +364,20 @@ function renderTableCards(
   const identityCount = table.headers.length > 4 ? 2 : 1;
   const output: string[] = [];
   for (const row of table.rows) {
-    const identity = table.headers.slice(0, identityCount).map((header, index) =>
-      `${header.toUpperCase()} ${row[index] ?? '—'}`).join(' · ');
-    const identityLines = wrapPlainWords(identity, Math.max(10, width - 3));
+    const identity = table.headers.slice(0, identityCount).map((header, index) => {
+      const label = inlineMarkup(header, theme, (value) => value.toUpperCase());
+      const value = inlineMarkup(row[index] ?? '—', theme);
+      return `${label} ${value}`;
+    }).join(' · ');
+    const identityLines = wrapTerminalLine(identity, Math.max(10, width - 3));
     output.push(`${paint(theme, 'dim', top)} ${paint(theme, 'assistant', identityLines[0] ?? '')}`);
     for (const continuation of identityLines.slice(1)) {
       output.push(`${paint(theme, 'dim', side)}${paint(theme, 'assistant', continuation)}`);
     }
     const fields = table.headers.slice(identityCount).map((header, index) => {
       const value = row[index + identityCount] ?? '—';
-      return `${paint(theme, 'source', header.toUpperCase())} ${inlineMarkup(value, theme)}`;
+      const label = inlineMarkup(header, theme, (text) => text.toUpperCase());
+      return `${paint(theme, 'source', label)} ${inlineMarkup(value, theme)}`;
     });
     for (const packed of packVisible(fields, Math.max(10, width - 2))) {
       output.push(`${paint(theme, 'dim', side)}${packed}`);
@@ -476,7 +480,7 @@ function fitColumnWidths(
   ));
   const minimum = natural.map((value, index) => Math.min(
     value,
-    Math.max(3, Math.min(10, visibleLength(table.headers[index] ?? ''))),
+    Math.max(3, Math.min(10, visibleLength(inlineMarkup(table.headers[index] ?? '', theme)))),
   ));
   if (minimum.reduce((total, value) => total + value, 0) > available) {
     return null;
@@ -557,33 +561,6 @@ function packVisible(values: readonly string[], width: number): string[] {
   }
   if (line) lines.push(line);
   return lines;
-}
-
-function wrapPlainWords(value: string, width: number): string[] {
-  if (width <= 1 || value.length <= width) return [value];
-  const words = value.split(/\s+/u).filter(Boolean);
-  const lines: string[] = [];
-  let line = '';
-  for (const word of words) {
-    if (word.length > width) {
-      if (line) {
-        lines.push(line);
-        line = '';
-      }
-      const chunks = hardWrap(word, width);
-      lines.push(...chunks.slice(0, -1));
-      line = chunks.at(-1) ?? '';
-      continue;
-    }
-    if (line && line.length + word.length + 1 > width) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = line ? `${line} ${word}` : word;
-    }
-  }
-  if (line) lines.push(line);
-  return lines.length > 0 ? lines : [''];
 }
 
 function hardWrap(value: string, width: number): string[] {

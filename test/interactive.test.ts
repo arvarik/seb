@@ -331,6 +331,27 @@ describe('SebInteractiveTransport', () => {
               title: 'NFL report',
             },
             {
+              type: 'source',
+              sourceType: 'url',
+              id: 'news-2',
+              url: 'https://example.com/injury-report',
+              title: 'Injury report',
+            },
+            {
+              type: 'source',
+              sourceType: 'url',
+              id: 'news-3',
+              url: 'https://example.com/weather-report',
+              title: 'Weather report',
+            },
+            {
+              type: 'source',
+              sourceType: 'url',
+              id: 'news-4',
+              url: 'https://example.com/hidden-report',
+              title: 'Hidden report',
+            },
+            {
               type: 'finish',
               finishReason: { unified: 'stop', raw: undefined },
               usage: {
@@ -368,10 +389,16 @@ describe('SebInteractiveTransport', () => {
     const output = await sendCommand(transport, 'Give me an answer.', 'message-1');
 
     expect(output).toContain('Model answer.');
-    expect(output).toContain('## Web sources');
-    expect(output).toContain('[NFL report](<https://example.com/nfl-report>)');
+    expect(output).toContain(
+      'Web sources: [NFL report](<https://example.com/nfl-report>) · ' +
+      '[Injury report](<https://example.com/injury-report>) · ' +
+      '[Weather report](<https://example.com/weather-report>) · Ask to see all sources.',
+    );
+    expect(output).not.toContain('Hidden report');
+    expect(output.match(/Web sources:/gu)).toHaveLength(1);
     expect(output).not.toContain('Try next:');
-    expect(sources.list()[0]?.label).toBe('NFL report');
+    expect(sources.list()).toHaveLength(4);
+    expect(sources.list().map((source) => source.label)).toContain('Hidden report');
     expect(model.doStreamCalls).toHaveLength(1);
   });
 
@@ -391,7 +418,7 @@ describe('SebInteractiveTransport', () => {
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
       uiState,
-      version: '0.0.8',
+      version: '0.0.9',
       weather: clients.weatherClient,
     });
 
@@ -432,7 +459,7 @@ describe('SebInteractiveTransport', () => {
       session: createSessionState(),
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
-      version: '0.0.8',
+      version: '0.0.9',
       weather: clients.weatherClient,
     });
     await sendCommand(transport, '/clear', 'clear-message');

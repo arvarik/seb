@@ -127,6 +127,7 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('new', '/new', 'Start a new conversation context.', 'Conversation', 'Exclude earlier messages from the next model call.', ['clear'], undefined, true, 0),
   command('history', '/history [clear]', 'Show or clear question history.', 'Conversation', 'Read or delete the private prompt history.', undefined, ['clear'], undefined, 1),
   command('copy', '/copy', 'Copy the latest Seb answer.', 'Conversation', 'Send the latest answer to the terminal clipboard.', undefined, undefined, undefined, 0),
+  command('select', '/select', 'Enable native terminal text selection.', 'Conversation', 'Release the mouse so text can be selected and copied.', ['copy-mode'], undefined, undefined, 0),
   command('export', '/export [NAME] [md|json]', 'Export the conversation under exports/.', 'Conversation', 'Create a transcript file under exports/.', ['save'], ['md', 'json'], undefined, 2),
   command('theme', '/theme default|high-contrast|compact', 'Select the terminal theme.', 'Preferences', 'Change colors and terminal spacing.', undefined, ['default', 'high-contrast', 'compact'], undefined, 1),
   command('icons', '/icons unicode|ascii', 'Select Unicode or ASCII symbols.', 'Preferences', 'Change terminal symbols for this session.', undefined, ['unicode', 'ascii'], undefined, 1),

@@ -1,3 +1,5 @@
+import { performance } from 'node:perf_hooks';
+
 import {
   getToolName,
   isToolUIPart,
@@ -100,6 +102,8 @@ interface Section {
 }
 
 const SPINNERS = ['◐', '◓', '◑', '◒'] as const;
+const FRAME_INTERVAL_MS = Math.ceil(1000 / 60);
+const MOUSE_WHEEL_LINES = 3;
 
 export class SebTerminalRenderer {
   private active = false;
@@ -110,12 +114,16 @@ export class SebTerminalRenderer {
   private historyIndex = -1;
   private interrupted = false;
   private keyParser = new TerminalKeyParser();
+  private lastFrame = '';
+  private lastPaintAt = 0;
+  private maximumScrollOffset = 0;
   private menuOpen = false;
   private menuSelection = 0;
   private onData: ((chunk: Buffer) => void) | undefined;
   private onResize: (() => void) | undefined;
   private overlay: 'none' | 'shortcuts' | 'history' = 'none';
   private readonly options: SebRendererOptions;
+  private paintTimer: ReturnType<typeof setTimeout> | undefined;
   private scrollOffset = 0;
   private sections: Section[] = [];
   private status = 'Ready';
@@ -126,6 +134,7 @@ export class SebTerminalRenderer {
   private ticker: ReturnType<typeof setInterval> | undefined;
   private toolDurations = new Map<string, number>();
   private toolStartedAt = new Map<string, number>();
+  private viewportHeight = 3;
 
   constructor(options: SebRendererOptions) {
     this.options = options;
@@ -305,10 +314,10 @@ export class SebTerminalRenderer {
       case 'newline': this.editor.insert('\n'); break;
       case 'up': this.recallHistory(1); break;
       case 'down': this.recallHistory(-1); break;
-      case 'page-up': this.scroll(8); break;
-      case 'page-down': this.scroll(-8); break;
-      case 'scroll-up': this.scroll(1); break;
-      case 'scroll-down': this.scroll(-1); break;
+      case 'page-up': this.scroll(this.pageScrollLines()); return;
+      case 'page-down': this.scroll(-this.pageScrollLines()); return;
+      case 'scroll-up': this.scroll(MOUSE_WHEEL_LINES); return;
+      case 'scroll-down': this.scroll(-MOUSE_WHEEL_LINES); return;
       case 'ctrl-r': this.reverseSearch(); break;
       case 'ctrl-k': this.menuOpen = true; if (!this.editor.text()) this.editor.set('/'); break;
       case 'ctrl-l': this.paint(true); return;
@@ -458,11 +467,11 @@ export class SebTerminalRenderer {
       this.streamStop?.();
       this.stop();
     } else if (key.type === 'page-up' || key.type === 'up') {
-      this.scroll(key.type === 'page-up' ? 8 : 1);
+      this.scroll(key.type === 'page-up' ? this.pageScrollLines() : 1);
     } else if (key.type === 'page-down' || key.type === 'down') {
-      this.scroll(key.type === 'page-down' ? -8 : -1);
+      this.scroll(key.type === 'page-down' ? -this.pageScrollLines() : -1);
     } else if (key.type === 'scroll-up' || key.type === 'scroll-down') {
-      this.scroll(key.type === 'scroll-up' ? 1 : -1);
+      this.scroll(key.type === 'scroll-up' ? MOUSE_WHEEL_LINES : -MOUSE_WHEEL_LINES);
     } else if (key.type === 'ctrl-l') {
       this.paint(true);
     }
@@ -513,12 +522,18 @@ export class SebTerminalRenderer {
     this.sections = this.sections.filter((section) =>
       !section.id.startsWith(`${message.id}:`) || active.has(section.id));
     if (previousBodyLength !== null) {
-      this.scrollOffset = Math.max(
+      const bodyLengthChange = this.renderBody(width).length - previousBodyLength;
+      this.maximumScrollOffset = Math.max(
         0,
-        this.scrollOffset + this.renderBody(width).length - previousBodyLength,
+        this.maximumScrollOffset + bodyLengthChange,
+      );
+      this.scrollOffset = clamp(
+        this.scrollOffset + bodyLengthChange,
+        0,
+        this.maximumScrollOffset,
       );
     }
-    this.paint();
+    this.requestPaint();
   }
 
   private captureAnswer(message: UIMessage | undefined): void {
@@ -586,6 +601,8 @@ export class SebTerminalRenderer {
   private start(): void {
     if (this.active) return;
     this.active = true;
+    this.lastFrame = '';
+    this.lastPaintAt = 0;
     this.options.output.write('\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[?1000h\x1b[?1006h');
     if (this.options.input.isTTY) {
       this.options.input.setRawMode?.(true);
@@ -598,6 +615,7 @@ export class SebTerminalRenderer {
   private stop(): void {
     this.detachInput();
     this.stopTicker();
+    this.cancelPaint();
     if (!this.active) return;
     if (this.options.input.isTTY) {
       this.options.input.setRawMode?.(false);
@@ -623,7 +641,7 @@ export class SebTerminalRenderer {
       if (this.activeToolIds.size > 0) this.renderMessage(this.streamMessage ?? { id: '', role: 'assistant', parts: [] });
       else {
         this.status = `Thinking · ${formatElapsed(Date.now() - this.streamStartedAt)}`;
-        this.paint();
+        this.requestPaint();
       }
     }, 250);
     this.ticker.unref?.();
@@ -640,11 +658,39 @@ export class SebTerminalRenderer {
   }
 
   private scroll(delta: number): void {
-    this.scrollOffset = Math.max(0, this.scrollOffset + delta);
-    this.paint();
+    const nextOffset = clamp(
+      this.scrollOffset + delta,
+      0,
+      this.maximumScrollOffset,
+    );
+    if (nextOffset === this.scrollOffset) return;
+    this.scrollOffset = nextOffset;
+    this.requestPaint();
+  }
+
+  private pageScrollLines(): number {
+    return Math.max(1, this.viewportHeight - 1);
+  }
+
+  private requestPaint(): void {
+    if (!this.active) return;
+    if (this.paintTimer) return;
+    const elapsed = performance.now() - this.lastPaintAt;
+    const delay = Math.max(0, FRAME_INTERVAL_MS - elapsed);
+    this.paintTimer = setTimeout(() => {
+      this.paintTimer = undefined;
+      this.paint();
+    }, delay);
+    this.paintTimer.unref?.();
+  }
+
+  private cancelPaint(): void {
+    if (this.paintTimer) clearTimeout(this.paintTimer);
+    this.paintTimer = undefined;
   }
 
   private paint(clear = false): void {
+    this.cancelPaint();
     if (!this.active) return;
     const width = Math.max(40, this.options.output.columns ?? 80);
     const height = Math.max(16, this.options.output.rows ?? 24);
@@ -653,12 +699,16 @@ export class SebTerminalRenderer {
     const bodyHeight = Math.max(3, height - header.length - footerHeight);
     const body = this.renderBody(width);
     const maximumOffset = Math.max(0, body.length - bodyHeight);
+    this.maximumScrollOffset = maximumOffset;
+    this.viewportHeight = bodyHeight;
     this.scrollOffset = Math.min(this.scrollOffset, maximumOffset);
     const footer = this.renderFooter(width);
     const end = body.length - this.scrollOffset;
     const visible = body.slice(Math.max(0, end - bodyHeight), end);
     while (visible.length < bodyHeight) visible.unshift('');
     const lines = [...header, ...visible, ...footer].slice(0, height);
+    const frame = `${width}x${height}\n${lines.join('\n')}`;
+    if (!clear && frame === this.lastFrame) return;
     const output = [
       '\x1b[?2026h',
       clear ? '\x1b[2J\x1b[H' : '\x1b[H',
@@ -666,6 +716,8 @@ export class SebTerminalRenderer {
       '\x1b[?2026l',
     ].join('');
     this.options.output.write(output);
+    this.lastFrame = frame;
+    this.lastPaintAt = performance.now();
   }
 
   private renderHeader(width: number): string[] {
@@ -850,6 +902,10 @@ function fit(value: string, width: number): string {
 function cycle(index: number, delta: number, length: number): number {
   if (length <= 0) return 0;
   return (index + delta + length) % length;
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function packRows(values: readonly string[], width: number): string[] {

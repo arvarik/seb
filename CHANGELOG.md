@@ -6,6 +6,20 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-08-20
+
+### Changed
+
+- Mouse wheel events now move the transcript by three rows.
+- Page Up and Page Down now use the available viewport height.
+
+### Fixed
+
+- The terminal now combines rapid scroll events into a maximum of 60 frames per second.
+- The terminal now skips unchanged frames. Extra events at either scroll boundary no longer redraw the screen.
+- Horizontal trackpad gestures and mouse release events no longer move the transcript.
+- Streamed text now updates the scroll boundary before the next input event.
+
 ## [0.0.7] - 2026-08-20
 
 ### Added

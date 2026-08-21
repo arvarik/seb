@@ -1,6 +1,6 @@
 # Terminal interface guide
 
-Seb `0.0.7` includes a local terminal renderer for interactive research.
+Seb `0.0.8` includes a local terminal renderer for interactive research.
 
 The AI SDK still controls the agent message loop and tool transport.
 
@@ -244,7 +244,9 @@ Use `Page Up` and `Page Down` to scroll the transcript.
 
 Use the mouse wheel or a trackpad gesture to scroll the transcript.
 
-Each wheel event moves one transcript row.
+Seb moves three lines for each vertical wheel event. It batches rapid events at 60 frames per second.
+
+Seb ignores horizontal gestures and release events. It stops redraws when the transcript reaches either boundary.
 
 The footer shows when the screen displays earlier transcript rows.
 

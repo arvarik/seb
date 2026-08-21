@@ -391,7 +391,7 @@ describe('SebInteractiveTransport', () => {
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
       uiState,
-      version: '0.0.7',
+      version: '0.0.8',
       weather: clients.weatherClient,
     });
 
@@ -432,7 +432,7 @@ describe('SebInteractiveTransport', () => {
       session: createSessionState(),
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
-      version: '0.0.7',
+      version: '0.0.8',
       weather: clients.weatherClient,
     });
     await sendCommand(transport, '/clear', 'clear-message');

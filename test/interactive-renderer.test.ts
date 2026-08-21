@@ -70,12 +70,59 @@ describe('SebTerminalRenderer prompt input', () => {
 
     terminal.input.type('\x1b[<64;10;5M');
 
+    await expect.poll(() => terminal.output.text().split('\x1b[H').at(-1)).toContain(
+      'Viewing earlier transcript',
+    );
     const frame = terminal.output.text().split('\x1b[H').at(-1);
-    expect(frame).toContain('Viewing earlier transcript');
-    expect(frame).toContain('1 line above latest');
+    expect(frame).toContain('3 lines above latest');
     terminal.input.type('new request\r');
     await expect(prompt).resolves.toBe('new request');
     expect(terminal.output.text()).toContain('\x1b[?1000h\x1b[?1006h');
+  });
+
+  it('coalesces fast scrolling and skips redraws at both boundaries', async () => {
+    const terminal = createTerminal();
+    terminal.output.rows = 16;
+    const renderer = createRenderer(terminal);
+    const lines = Array.from({ length: 100 }, (_, index) => `Transcript line ${index + 1}`);
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'start', messageId: 'long-answer' });
+          controller.enqueue({ type: 'text-start', id: 'long-text' });
+          controller.enqueue({ type: 'text-delta', id: 'long-text', delta: lines.join('\n') });
+          controller.enqueue({ type: 'text-end', id: 'long-text' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
+          controller.close();
+        },
+      }),
+    });
+    const prompt = renderer.readPrompt();
+    const scrollUp = '\x1b[<64;10;5M';
+    const scrollDown = '\x1b[<65;10;5M';
+
+    const beforeTop = terminal.output.chunks.length;
+    for (let index = 0; index < 100; index += 1) terminal.input.type(scrollUp);
+    await expect.poll(() => terminal.output.chunks.length).toBe(beforeTop + 1);
+    const afterTop = terminal.output.chunks.length;
+    expect(terminal.output.text().split('\x1b[H').at(-1)).toContain(
+      'Viewing earlier transcript',
+    );
+
+    for (let index = 0; index < 100; index += 1) terminal.input.type(scrollUp);
+    expect(terminal.output.chunks).toHaveLength(afterTop);
+
+    for (let index = 0; index < 100; index += 1) terminal.input.type(scrollDown);
+    await expect.poll(() => terminal.output.chunks.length).toBe(afterTop + 1);
+    const afterBottom = terminal.output.chunks.length;
+    expect(terminal.output.text().split('\x1b[H').at(-1)).not.toContain(
+      'Viewing earlier transcript',
+    );
+
+    for (let index = 0; index < 100; index += 1) terminal.input.type(scrollDown);
+    expect(terminal.output.chunks).toHaveLength(afterBottom);
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
   });
 
   it('shows each contextual suggestion on its own footer row', async () => {
@@ -292,7 +339,7 @@ function createRenderer(
     session: createSessionState(new Date('2026-08-20T12:00:00Z')),
     sources: new SourceTracker(),
     uiState,
-    version: '0.0.7',
+    version: '0.0.8',
   });
 }
 

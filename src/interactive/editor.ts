@@ -113,7 +113,7 @@ function parseOne(value: string): { key: TerminalKey; length: number } | null {
   const sgrMouse = value.match(/^\x1b\[<(\d+);\d+;\d+([Mm])/u);
   if (sgrMouse) {
     const button = Number(sgrMouse[1]);
-    const wheel = mouseWheelKey(button);
+    const wheel = sgrMouse[2] === 'M' ? mouseWheelKey(button) : null;
     return {
       key: wheel ?? { type: 'ignore' },
       length: sgrMouse[0].length,
@@ -184,7 +184,10 @@ function parseOne(value: string): { key: TerminalKey; length: number } | null {
 
 function mouseWheelKey(button: number): TerminalKey | null {
   if ((button & 64) === 0) return null;
-  return { type: (button & 1) === 0 ? 'scroll-up' : 'scroll-down' };
+  const direction = button & 3;
+  if (direction === 0) return { type: 'scroll-up' };
+  if (direction === 1) return { type: 'scroll-down' };
+  return null;
 }
 
 function previousCodePointIndex(value: string, index: number): number {

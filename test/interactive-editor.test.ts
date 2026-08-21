@@ -67,6 +67,19 @@ describe('TerminalKeyParser', () => {
     ]);
   });
 
+  it('ignores mouse-wheel releases and horizontal trackpad events', () => {
+    const parser = new TerminalKeyParser();
+
+    expect(parser.parse(
+      '\x1b[<64;12;8m\x1b[<65;12;8m\x1b[<66;12;8M\x1b[<67;12;8M',
+    )).toEqual([
+      { type: 'ignore' },
+      { type: 'ignore' },
+      { type: 'ignore' },
+      { type: 'ignore' },
+    ]);
+  });
+
   it('collects an incomplete legacy mouse event across chunks', () => {
     const parser = new TerminalKeyParser();
 

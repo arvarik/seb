@@ -44,7 +44,7 @@ Seb uses these SQLite settings.
 
 Seb applies numbered schema migrations when it opens the database.
 
-Version `0.0.7` uses database schema `3`.
+Version `0.0.8` uses database schema `3`.
 
 Schema `3` adds a checksum for each provenance manifest.
 
@@ -253,7 +253,7 @@ Version `0.0.1` stored the Sleeper player catalog in `.cache/sleeper/players-nfl
 
 Some development builds stored other source values as JSON files under `.cache/`.
 
-Version `0.0.7` does not import those JSON files.
+Version `0.0.8` does not import those JSON files.
 
 It creates `.cache/seb.sqlite` and downloads each source again when necessary.
 
@@ -285,7 +285,7 @@ Use this migration sequence.
 
 5. Remove only the old Seb JSON files after you inspect the list.
 
-The old JSON files do not affect version `0.0.7` reads.
+The old JSON files do not affect version `0.0.8` reads.
 
 Do not delete `.cache/seb.sqlite` when you need the stored snapshots.
 

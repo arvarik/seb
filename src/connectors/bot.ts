@@ -3,6 +3,7 @@ import { createSlackAdapter } from '@chat-adapter/slack';
 import { createMemoryState } from '@chat-adapter/state-memory';
 import { createRedisState } from '@chat-adapter/state-redis';
 import { createTelegramAdapter } from '@chat-adapter/telegram';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   Chat,
   fromFullStream,
@@ -22,7 +23,12 @@ import { isModelCapacityError } from '../model-capacity-error.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import { WeatherClient } from '../weather/client.js';
-import { normalizeSourceLabel, normalizeWebUrl } from '../sources.js';
+import {
+  normalizeSourceLabel,
+  normalizeWebUrl,
+  SourceTracker,
+  type SourceObserver,
+} from '../sources.js';
 import {
   CONNECTOR_NAMES,
   readConnectorConfig,
@@ -34,6 +40,18 @@ import {
 const HISTORY_LIMIT = 20;
 const FAILURE_MESSAGE =
   'Seb could not answer this request. Check the connector service logs, then retry.';
+
+export class ModelResponseError extends Error {
+  readonly emittedOutput: boolean;
+  override readonly cause: unknown;
+
+  constructor(cause: unknown, emittedOutput: boolean) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'ModelResponseError';
+    this.cause = cause;
+    this.emittedOutput = emittedOutput;
+  }
+}
 
 export interface ConnectorRuntime {
   bot: Chat<Record<string, Adapter>>;
@@ -141,9 +159,12 @@ function createAgentReply(environment: Environment): ConnectorReply {
   const fallbackModel =
     environment.GEMINI_FALLBACK_MODEL?.trim() ||
     DEFAULT_GEMINI_FALLBACK_MODEL;
-  const sleeperClient = new SleeperClient();
-  const nflverseClient = new NflverseClient();
+  const sourceContext = new AsyncLocalStorage<SourceTracker>();
+  const onSource: SourceObserver = (source) => sourceContext.getStore()?.record(source);
+  const sleeperClient = new SleeperClient({ onSource });
+  const nflverseClient = new NflverseClient({ onSource });
   const weatherClient = new WeatherClient({
+    onSource,
     ...(environment.NWS_USER_AGENT?.trim()
       ? { userAgent: environment.NWS_USER_AGENT.trim() }
       : {}),
@@ -164,45 +185,119 @@ function createAgentReply(environment: Environment): ConnectorReply {
         });
 
   return async (thread, message, context) => {
-    const prompt = await buildPrompt(thread, message, context);
-    try {
-      const result = await primaryAgent.stream({ prompt });
-      await thread.post(withWebSources(result.fullStream));
-    } catch (error) {
-      if (!isModelCapacityError(error) || fallbackAgent === primaryAgent) {
-        throw error;
+    await sourceContext.run(new SourceTracker(), async () => {
+      const sources = sourceContext.getStore() as SourceTracker;
+      const prompt = await buildPrompt(thread, message, context);
+      try {
+        await postAgentResponse(thread, primaryAgent, prompt, sources);
+      } catch (error) {
+        if (
+          !(error instanceof ModelResponseError) ||
+          error.emittedOutput ||
+          !isModelCapacityError(error.cause) ||
+          fallbackAgent === primaryAgent
+        ) {
+          throw error;
+        }
+        sources.clear();
+        await postAgentResponse(thread, fallbackAgent, prompt, sources);
       }
-      const result = await fallbackAgent.stream({ prompt });
-      await thread.post(withWebSources(result.fullStream));
-    }
+    });
   };
 }
 
-export function withWebSources(stream: AsyncIterable<unknown>) {
+async function postAgentResponse(
+  thread: Thread,
+  agent: ReturnType<typeof createFantasyFootballAgent>,
+  prompt: Awaited<ReturnType<typeof buildPrompt>>,
+  directSources: SourceTracker,
+): Promise<void> {
+  let result: Awaited<ReturnType<typeof agent.stream>>;
+  try {
+    result = await agent.stream({ prompt });
+  } catch (error) {
+    throw new ModelResponseError(error, false);
+  }
+  await thread.post(withWebSources(result.fullStream, directSources));
+}
+
+export function withWebSources(
+  stream: AsyncIterable<unknown>,
+  directSources?: SourceTracker,
+) {
   const sources = new Map<string, string>();
+  let emittedOutput = false;
   const monitored = (async function* () {
-    for await (const part of stream) {
-      if (isUrlSourcePart(part)) {
-        const url = normalizeWebUrl(part.url);
-        if (url) {
-          sources.set(
-            url,
-            normalizeSourceLabel(part.title, new URL(url).hostname),
-          );
+    try {
+      for await (const part of stream) {
+        if (isErrorPart(part)) throw new ModelResponseError(part.error, emittedOutput);
+        if (isModelOutputPart(part)) emittedOutput = true;
+        if (isUrlSourcePart(part)) {
+          const url = normalizeWebUrl(part.url);
+          if (url) {
+            sources.set(
+              url,
+              normalizeSourceLabel(part.title, new URL(url).hostname),
+            );
+          }
         }
+        yield part;
       }
-      yield part;
+    } catch (error) {
+      if (error instanceof ModelResponseError) throw error;
+      throw new ModelResponseError(error, emittedOutput);
     }
   })();
   const text = fromFullStream(monitored);
   return (async function* () {
     for await (const part of text) yield part;
+    const direct = directSources?.list().filter((source) => !source.id.startsWith('web:')) ?? [];
+    if (direct.length > 0) {
+      yield `\n\n**Data sources**\n\n${direct
+        .map((source) => {
+          const cache = source.cacheOutcome?.replace(/-/g, ' ') ?? 'source access';
+          const retrieved = source.retrievedAt ? `, retrieved ${source.retrievedAt}` : '';
+          const warning = source.warnings?.length ? `, warning: ${source.warnings.join(' ')}` : '';
+          return `- [${safeMarkdownLabel(source.label)}](<${source.url}>) (${cache}${retrieved}${warning})`;
+        })
+        .join('\n')}`;
+    }
     if (sources.size > 0) {
       yield `\n\n**Web sources**\n\n${[...sources]
         .map(([url, title]) => `- [${safeMarkdownLabel(title)}](<${url}>)`)
         .join('\n')}`;
     }
   })();
+}
+
+function isTextDeltaPart(value: unknown): value is { text: string; type: 'text-delta' } {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    (value as { type?: unknown }).type === 'text-delta' &&
+    typeof (value as { text?: unknown }).text === 'string',
+  );
+}
+
+function isModelOutputPart(value: unknown): boolean {
+  if (isTextDeltaPart(value)) return value.text.length > 0;
+  if (!value || typeof value !== 'object') return false;
+  const record = value as { text?: unknown; type?: unknown };
+  return typeof record.type === 'string' && [
+    'reasoning-delta',
+    'tool-call',
+    'tool-error',
+    'tool-result',
+  ].includes(record.type);
+}
+
+function isErrorPart(value: unknown): value is { error: unknown; type: 'error' } {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    (value as { type?: unknown }).type === 'error' &&
+    'error' in value,
+  );
 }
 
 function isUrlSourcePart(value: unknown): value is {
@@ -224,7 +319,7 @@ function isUrlSourcePart(value: unknown): value is {
 }
 
 function safeMarkdownLabel(value: string): string {
-  return value.replace(/[\[\]]/g, '').replace(/\s+/g, ' ').trim();
+  return value.replaceAll('[', '').replaceAll(']', '').replace(/\s+/g, ' ').trim();
 }
 
 async function buildPrompt(

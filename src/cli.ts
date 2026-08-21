@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { loadEnvFile } from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -48,6 +47,7 @@ import {
   type DataSourceRecord,
 } from './sources.js';
 import { WeatherClient } from './weather/client.js';
+import { SEB_VERSION } from './version.js';
 import {
   FileSetupProfileStore,
   formatSetupProfile,
@@ -59,10 +59,6 @@ import {
 } from './setup/wizard.js';
 
 const MAX_STDIN_BYTES = 128 * 1024;
-const packageJson = createRequire(import.meta.url)('../package.json') as {
-  version: string;
-};
-
 interface CliInput extends AsyncIterable<string | Buffer | Uint8Array> {
   isTTY?: boolean;
 }
@@ -116,7 +112,7 @@ export async function runCli(
       streams.stdout.write(CLI_HELP);
       return 0;
     case 'version':
-      streams.stdout.write(`seb ${packageJson.version}\n`);
+      streams.stdout.write(`seb ${SEB_VERSION}\n`);
       return 0;
     case 'completion':
       streams.stdout.write(`${generateShellCompletion(command.shell)}\n`);
@@ -130,6 +126,24 @@ export async function runCli(
         streams.stdout.write(command.json
           ? `${JSON.stringify(result)}\n`
           : `Seb removed ${removed} cache entries. It preserved ${result.snapshotsPreserved} snapshots.\n`);
+      } else if (command.action === 'prune') {
+        const result = database.pruneStorage({
+          ...(command.maxBytes === undefined ? {} : { maxBytes: command.maxBytes }),
+          ...(command.snapshotMaxAgeDays === undefined
+            ? {}
+            : { snapshotMaxAgeDays: command.snapshotMaxAgeDays }),
+          ...(command.snapshotRetention === undefined
+            ? {}
+            : { snapshotRetention: command.snapshotRetention }),
+        });
+        streams.stdout.write(command.json
+          ? `${JSON.stringify(result)}\n`
+          : [
+              `Seb removed ${result.cacheEntriesRemoved} expired cache entries.`,
+              `Seb removed ${result.snapshotsRemoved} old snapshots.`,
+              `Database size: ${formatBytes(result.before.fileBytes)} to ${formatBytes(result.after.fileBytes)}.`,
+              '',
+            ].join('\n'));
       } else {
         const status = database.status();
         streams.stdout.write(command.json
@@ -151,11 +165,11 @@ export async function runCli(
           : formatSnapshotProvenance(inspectable));
         return 0;
       }
-      const snapshots = database.listSnapshots({
+      const snapshots = database.listSnapshotMetadata({
         limit: command.limit,
         ...(command.kind ? { kind: command.kind } : {}),
         ...(command.entityKey ? { entityKey: command.entityKey } : {}),
-      }).map(({ payload: _payload, provenance: _provenance, ...snapshot }) => snapshot);
+      });
       streams.stdout.write(command.json
         ? `${JSON.stringify(snapshots)}\n`
         : formatSnapshots(snapshots));
@@ -274,7 +288,7 @@ async function startInteractiveChat(
       session,
       sleeper: clients.sleeperClient,
       sources,
-      version: packageJson.version,
+      version: SEB_VERSION,
       weather: clients.weatherClient,
       profileStore,
       uiState,
@@ -285,7 +299,7 @@ async function startInteractiveChat(
     title: `Seb · ${selection.primaryModel}`,
     session,
     uiState,
-    version: packageJson.version,
+    version: SEB_VERSION,
     input: streams.stdin as NodeJS.ReadStream,
     output: streams.stdout as NodeJS.WriteStream,
   });
@@ -321,21 +335,35 @@ async function runSetupWizard(
 
 function formatCacheStatus(status: {
   cacheEntries: number;
+  cacheValueBytes: number;
   file: string;
+  fileBytes: number;
   identities: number;
   identityLinks: number;
   schemaVersion: number;
+  snapshotPayloadBytes: number;
+  snapshotProvenanceBytes: number;
   snapshots: number;
 }): string {
   return [
     `Database: ${status.file}`,
     `Schema: ${status.schemaVersion}`,
+    `Database size: ${formatBytes(status.fileBytes)}`,
     `Cache entries: ${status.cacheEntries}`,
+    `Cache values: ${formatBytes(status.cacheValueBytes)}`,
     `Snapshots: ${status.snapshots}`,
+    `Snapshot payloads: ${formatBytes(status.snapshotPayloadBytes)}`,
+    `Snapshot provenance: ${formatBytes(status.snapshotProvenanceBytes)}`,
     `Canonical identities: ${status.identities}`,
     `Identity source links: ${status.identityLinks}`,
     '',
   ].join('\n');
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function formatSnapshots(
@@ -510,11 +538,14 @@ async function streamAnswer(
 ): Promise<void> {
   let wroteText = false;
   const webSources = new Map<string, { title?: string; url: string }>();
+  const directSources = new SourceTracker();
 
   const run = async (model: string): Promise<void> => {
+    directSources.clear();
+    webSources.clear();
     const clients = createDataClients(
       selection.nwsUserAgent,
-      new SourceTracker(),
+      directSources,
     );
     const automaticContext = await loadAutomaticContext(
       environment,
@@ -570,10 +601,25 @@ async function streamAnswer(
   if (!wroteText) {
     throw new Error('Gemini returned an empty answer. Try the request again.');
   }
-  if (webSources.size > 0) {
+  const sources = new Map<string, string>();
+  for (const source of directSources.list()) {
+    const details = [
+      source.label,
+      source.cacheOutcome?.replace(/-/g, ' '),
+      source.retrievedAt ? `retrieved ${source.retrievedAt}` : undefined,
+      source.warnings?.join(' '),
+    ].filter(Boolean).join(' · ');
+    sources.set(source.url, details);
+  }
+  for (const source of webSources.values()) {
+    if (!sources.has(source.url)) {
+      sources.set(source.url, source.title?.trim() || source.url);
+    }
+  }
+  if (sources.size > 0) {
     streams.stdout.write(
-      `\n\nSources:\n${[...webSources.values()]
-        .map((source) => `- ${source.title?.trim() || source.url}: ${source.url}`)
+      `\n\nSources:\n${[...sources]
+        .map(([url, label]) => `- ${label}: ${url}`)
         .join('\n')}`,
     );
   }

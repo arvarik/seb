@@ -2,7 +2,7 @@
 
 Seb uses [Semantic Versioning](https://semver.org/) with the `MAJOR.MINOR.PATCH` format.
 
-The current version is `0.0.6`.
+The current version is `0.0.7`.
 
 ## Version meaning
 
@@ -38,12 +38,12 @@ seb --version
 
 ## Release names
 
-Git tags use a lowercase `v` prefix. Version `0.0.6` uses the `v0.0.6` tag.
+Git tags use a lowercase `v` prefix. Version `0.0.7` uses the `v0.0.7` tag.
 
 Release commit subjects use this format.
 
 ```text
-chore(release): v0.0.6
+chore(release): v0.0.7
 ```
 
 ## Prepare a release
@@ -54,13 +54,14 @@ Complete these steps from a clean branch.
 2. Update the package files without creating a tag.
 
    ```bash
-   npm version 0.0.6 --no-git-tag-version
+   npm version 0.0.7 --no-git-tag-version
    ```
 
 3. Run all checks.
 
    ```bash
    npm run check
+   npm run test:coverage
    npm run deps:check
    npm audit
    ```

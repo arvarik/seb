@@ -5,9 +5,20 @@ import {
   type ResourceLoadContext,
   type ResourceResult,
 } from '../data/cached-resource.js';
+import { readResponseJson, readResponseText, ResponseBodyLimitError } from '../data/response-body.js';
 import { ResilientFetch, type RequestPolicy } from '../data/resilient-fetch.js';
 import { getSharedSebDatabase, type SebDatabase } from '../data/sqlite-store.js';
 import type { SourceObserver } from '../sources.js';
+import { SEB_USER_AGENT } from '../version.js';
+import { z } from 'zod';
+import {
+  nwsAlertListSchema,
+  nwsAlertsDocumentSchema,
+  nwsForecastDocumentSchema,
+  nwsHourlyForecastSchema,
+  nwsPointDocumentSchema,
+  nwsPointMetadataSchema,
+} from './schemas.js';
 import type {
   NwsAlert,
   NwsForecastPeriod,
@@ -22,6 +33,8 @@ const ALERT_TTL_MS = 2 * 60 * 1_000;
 const POINT_STALE_IF_ERROR_MS = 30 * 24 * 60 * 60 * 1_000;
 const FORECAST_STALE_IF_ERROR_MS = 6 * 60 * 60 * 1_000;
 const ALERT_STALE_IF_ERROR_MS = 30 * 60 * 1_000;
+const MAX_JSON_BYTES = 8 * 1024 * 1024;
+const MAX_ERROR_BYTES = 4 * 1024;
 
 type Fetch = typeof globalThis.fetch;
 type JsonObject = Record<string, unknown>;
@@ -72,7 +85,7 @@ export class WeatherClient {
     this.onSource = options.onSource;
     this.userAgent =
       options.userAgent?.trim() ||
-      'seb/0.0.2 (+https://github.com/arvarik/seb)';
+      SEB_USER_AGENT;
   }
 
   async getPointMetadata(
@@ -89,6 +102,7 @@ export class WeatherClient {
       POINT_STALE_IF_ERROR_MS,
       'nws-point',
       parsePoint,
+      nwsPointMetadataSchema,
     );
     const point = loaded.value;
     this.validateNwsUrl(point.forecastHourlyUrl);
@@ -114,6 +128,7 @@ export class WeatherClient {
       FORECAST_STALE_IF_ERROR_MS,
       'nws-hourly-forecast',
       (document) => parseForecast(document, point.forecastHourlyUrl, point.timeZone),
+      nwsHourlyForecastSchema,
     );
     const forecast = loaded.value;
     this.recordSource(
@@ -141,6 +156,7 @@ export class WeatherClient {
       ALERT_STALE_IF_ERROR_MS,
       'nws-alerts',
       parseAlerts,
+      nwsAlertListSchema,
     );
     const alerts = loaded.value;
     this.recordSource(
@@ -153,7 +169,7 @@ export class WeatherClient {
   }
 
   async clearCache(): Promise<void> {
-    this.database && this.database.deleteCache('weather');
+    if (this.database) this.database.deleteCache('weather');
   }
 
   private async getJson(
@@ -191,7 +207,7 @@ export class WeatherClient {
     }
 
     if (!response.ok) {
-      const detail = (await response.text()).slice(0, 300);
+      const detail = (await readResponseText(response, MAX_ERROR_BYTES)).slice(0, 300);
       throw new WeatherApiError(
         `The National Weather Service returned HTTP ${response.status}.${detail ? ` Response: ${detail}` : ''}`,
         response.status,
@@ -201,11 +217,14 @@ export class WeatherClient {
 
     try {
       return {
-        document: (await response.json()) as JsonObject,
+        document: await readResponseJson(response, MAX_JSON_BYTES) as JsonObject,
         etag: response.headers.get('etag'),
         lastModified: response.headers.get('last-modified'),
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof ResponseBodyLimitError) {
+        throw new WeatherApiError(error.message, response.status, url);
+      }
       throw new WeatherApiError(
         'The National Weather Service returned invalid JSON.',
         response.status,
@@ -221,6 +240,7 @@ export class WeatherClient {
     staleIfErrorMs: number,
     snapshotKind: string,
     parse: (document: JsonObject) => T,
+    schema: z.ZodType<T>,
   ): Promise<ResourceResult<T>> {
     const resource = new CachedResource<T>(
       this.database,
@@ -228,10 +248,12 @@ export class WeatherClient {
       key,
       url,
       {
-        schemaVersion: 'nws-v1',
+        schemaVersion: 'nws-v2',
         snapshotKind,
+        snapshotRetention: snapshotKind === 'nws-point' ? 8 : 16,
         staleIfErrorMs,
         ttlMs,
+        validate: (value) => schema.parse(value),
       },
     );
     return resource.read(async (conditional) => {
@@ -267,6 +289,7 @@ export class WeatherClient {
     this.onSource?.({
       cacheOutcome: loaded.outcome,
       ...(loaded.error ? { error: loaded.error } : {}),
+      ...(loaded.warnings ? { warnings: loaded.warnings } : {}),
       id,
       label,
       retrievedAt: loaded.cache.cachedAt,
@@ -276,20 +299,17 @@ export class WeatherClient {
 }
 
 function parsePoint(document: JsonObject): NwsPointMetadata {
-  const properties = object(document.properties);
-  const relativeLocation = object(object(properties.relativeLocation).properties);
-  const forecastHourlyUrl = text(properties.forecastHourly);
-  if (!forecastHourlyUrl) {
-    throw new Error('The National Weather Service point has no hourly forecast URL.');
-  }
+  const parsed = nwsPointDocumentSchema.parse(document);
+  const properties = parsed.properties;
+  const relativeLocation = properties.relativeLocation?.properties;
   return {
-    gridId: text(properties.gridId) ?? '',
-    gridX: numeric(properties.gridX),
-    gridY: numeric(properties.gridY),
-    forecastHourlyUrl,
-    timeZone: text(properties.timeZone),
-    city: text(relativeLocation.city),
-    state: text(relativeLocation.state),
+    gridId: properties.gridId,
+    gridX: properties.gridX,
+    gridY: properties.gridY,
+    forecastHourlyUrl: properties.forecastHourly,
+    timeZone: properties.timeZone ?? null,
+    city: relativeLocation?.city ?? null,
+    state: relativeLocation?.state ?? null,
   };
 }
 
@@ -298,49 +318,46 @@ function parseForecast(
   sourceUrl: string,
   timeZone: string | null,
 ): NwsHourlyForecast {
-  const properties = object(document.properties);
-  const periods = Array.isArray(properties.periods) ? properties.periods : [];
+  const properties = nwsForecastDocumentSchema.parse(document).properties;
   return {
     sourceUrl,
     timeZone,
-    generatedAt: text(properties.generatedAt),
-    updatedAt: text(properties.updated),
-    periods: periods.map((period) => parsePeriod(object(period))),
+    generatedAt: properties.generatedAt ?? null,
+    updatedAt: properties.updated ?? null,
+    periods: properties.periods.map(parsePeriod),
   };
 }
 
-function parsePeriod(period: JsonObject): NwsForecastPeriod {
+function parsePeriod(period: z.infer<typeof nwsForecastDocumentSchema>['properties']['periods'][number]): NwsForecastPeriod {
   return {
-    startTime: text(period.startTime) ?? '',
-    endTime: text(period.endTime) ?? '',
-    isDaytime: period.isDaytime === true,
-    temperature: numeric(period.temperature),
-    temperatureUnit: text(period.temperatureUnit) ?? 'F',
-    precipitationProbability: nullableNumeric(
-      object(period.probabilityOfPrecipitation).value,
-    ),
-    relativeHumidity: nullableNumeric(object(period.relativeHumidity).value),
-    windSpeed: text(period.windSpeed) ?? '',
-    windDirection: text(period.windDirection) ?? '',
-    shortForecast: text(period.shortForecast) ?? '',
-    detailedForecast: text(period.detailedForecast) ?? '',
+    startTime: period.startTime,
+    endTime: period.endTime,
+    isDaytime: period.isDaytime,
+    temperature: period.temperature,
+    temperatureUnit: period.temperatureUnit,
+    precipitationProbability: period.probabilityOfPrecipitation.value,
+    relativeHumidity: period.relativeHumidity.value,
+    windSpeed: period.windSpeed,
+    windDirection: period.windDirection,
+    shortForecast: period.shortForecast,
+    detailedForecast: period.detailedForecast,
   };
 }
 
 function parseAlerts(document: JsonObject): NwsAlert[] {
-  const features = Array.isArray(document.features) ? document.features : [];
+  const features = nwsAlertsDocumentSchema.parse(document).features;
   return features.map((feature) => {
-    const properties = object(object(feature).properties);
+    const properties = feature.properties;
     return {
-      event: text(properties.event) ?? 'Weather alert',
-      severity: text(properties.severity),
-      urgency: text(properties.urgency),
-      certainty: text(properties.certainty),
-      headline: text(properties.headline),
-      description: text(properties.description),
-      instruction: text(properties.instruction),
-      onset: text(properties.onset),
-      ends: text(properties.ends),
+      event: properties.event,
+      severity: properties.severity ?? null,
+      urgency: properties.urgency ?? null,
+      certainty: properties.certainty ?? null,
+      headline: properties.headline ?? null,
+      description: properties.description ?? null,
+      instruction: properties.instruction ?? null,
+      onset: properties.onset ?? null,
+      ends: properties.ends ?? null,
     };
   });
 }
@@ -356,29 +373,6 @@ function validateCoordinates(latitude: number, longitude: number): void {
 
 function coordinateKey(latitude: number, longitude: number): string {
   return `${latitude.toFixed(4)}_${longitude.toFixed(4)}`.replace(/\./g, '-');
-}
-
-function object(value: unknown): JsonObject {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as JsonObject)
-    : {};
-}
-
-function text(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value : null;
-}
-
-function numeric(value: unknown): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function nullableNumeric(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') {
-    return null;
-  }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function errorMessage(error: unknown): string {

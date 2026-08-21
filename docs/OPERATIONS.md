@@ -170,7 +170,7 @@ Track these operational values.
 ## Safe deployment sequence
 
 1. Run `npm ci` in a clean build environment.
-2. Run `npm run check`.
+2. Run `npm run check` and `npm run test:coverage`.
 3. Start Redis and verify its network policy.
 4. Add Gemini and platform secrets.
 5. Start one Seb instance.

@@ -5,45 +5,45 @@ export interface SleeperNflState {
   leg: number;
   season: string;
   season_type: string;
-  season_start_date?: string;
-  previous_season?: string;
-  league_season?: string;
-  league_create_season?: string;
-  display_week?: number;
+  season_start_date?: string | undefined;
+  previous_season?: string | undefined;
+  league_season?: string | undefined;
+  league_create_season?: string | undefined;
+  display_week?: number | undefined;
 }
 
 export interface SleeperPlayer {
   player_id: string;
-  first_name?: string | null;
-  last_name?: string | null;
-  full_name?: string | null;
-  search_full_name?: string | null;
-  position?: string | null;
-  fantasy_positions?: string[] | null;
-  team?: string | null;
-  active?: boolean;
-  status?: string | null;
-  injury_status?: string | null;
-  injury_body_part?: string | null;
-  injury_notes?: string | null;
-  practice_participation?: string | null;
-  depth_chart_position?: string | number | null;
-  depth_chart_order?: number | null;
-  number?: number | null;
-  age?: number | null;
-  years_exp?: number | null;
-  search_rank?: number | null;
+  first_name?: string | null | undefined;
+  last_name?: string | null | undefined;
+  full_name?: string | null | undefined;
+  search_full_name?: string | null | undefined;
+  position?: string | null | undefined;
+  fantasy_positions?: string[] | null | undefined;
+  team?: string | null | undefined;
+  active?: boolean | undefined;
+  status?: string | null | undefined;
+  injury_status?: string | null | undefined;
+  injury_body_part?: string | null | undefined;
+  injury_notes?: string | null | undefined;
+  practice_participation?: string | null | undefined;
+  depth_chart_position?: string | number | null | undefined;
+  depth_chart_order?: number | null | undefined;
+  number?: number | null | undefined;
+  age?: number | null | undefined;
+  years_exp?: number | null | undefined;
+  search_rank?: number | null | undefined;
 }
 
 export type SleeperPlayerMap = Record<string, SleeperPlayer>;
 
 export interface SleeperUser {
   user_id: string;
-  username?: string;
-  display_name?: string;
-  avatar?: string | null;
-  metadata?: Record<string, string | null> | null;
-  is_owner?: boolean;
+  username?: string | undefined;
+  display_name?: string | undefined;
+  avatar?: string | null | undefined;
+  metadata?: Record<string, string | null> | null | undefined;
+  is_owner?: boolean | undefined;
 }
 
 export interface SleeperLeague {
@@ -57,20 +57,20 @@ export interface SleeperLeague {
   roster_positions: string[];
   scoring_settings: SleeperSettings;
   settings: SleeperSettings;
-  previous_league_id?: string | null;
-  draft_id?: string | null;
-  avatar?: string | null;
+  previous_league_id?: string | null | undefined;
+  draft_id?: string | null | undefined;
+  avatar?: string | null | undefined;
 }
 
 export interface SleeperRoster {
   roster_id: number;
   league_id: string;
-  owner_id?: string | null;
-  co_owners?: string[] | null;
-  players?: string[] | null;
-  starters?: string[] | null;
-  reserve?: string[] | null;
-  taxi?: string[] | null;
+  owner_id?: string | null | undefined;
+  co_owners?: string[] | null | undefined;
+  players?: string[] | null | undefined;
+  starters?: string[] | null | undefined;
+  reserve?: string[] | null | undefined;
+  taxi?: string[] | null | undefined;
   settings: Record<string, number | null>;
 }
 
@@ -78,10 +78,10 @@ export interface SleeperMatchup {
   roster_id: number;
   matchup_id: number | null;
   points: number;
-  custom_points?: number | null;
-  players?: string[] | null;
-  starters?: string[] | null;
-  players_points?: Record<string, number> | null;
+  custom_points?: number | null | undefined;
+  players?: string[] | null | undefined;
+  starters?: string[] | null | undefined;
+  players_points?: Record<string, number> | null | undefined;
 }
 
 export interface SleeperTrendingPlayer {
@@ -95,14 +95,14 @@ export interface SleeperTransaction {
   status: string;
   leg: number;
   roster_ids: number[];
-  created?: number;
-  status_updated?: number;
-  adds?: Record<string, number> | null;
-  drops?: Record<string, number> | null;
-  draft_picks?: unknown[];
-  waiver_budget?: unknown[];
-  metadata?: Record<string, unknown> | null;
-  settings?: Record<string, unknown> | null;
+  created?: number | undefined;
+  status_updated?: number | undefined;
+  adds?: Record<string, number> | null | undefined;
+  drops?: Record<string, number> | null | undefined;
+  draft_picks?: unknown[] | undefined;
+  waiver_budget?: unknown[] | undefined;
+  metadata?: Record<string, unknown> | null | undefined;
+  settings?: Record<string, unknown> | null | undefined;
 }
 
 export interface ResolvedTrendingPlayer extends SleeperTrendingPlayer {

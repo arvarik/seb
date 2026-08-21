@@ -98,6 +98,8 @@ Telegram sends the secret in `X-Telegram-Bot-Api-Secret-Token`.
 
 The Telegram adapter rejects a request with the wrong secret.
 
+Seb rejects startup when explicit webhook mode has no secret.
+
 ## 5. Verify the webhook
 
 Read the current Telegram webhook status.
@@ -132,6 +134,8 @@ Set `SEB_TELEGRAM_MODE=polling`.
 
 Restart Seb.
 
+Seb does not expose the Telegram webhook route in polling mode.
+
 ## Automatic mode
 
 Set `SEB_TELEGRAM_MODE=auto` to let the adapter inspect Telegram.
@@ -139,6 +143,8 @@ Set `SEB_TELEGRAM_MODE=auto` to let the adapter inspect Telegram.
 The adapter uses webhook mode when a webhook URL exists.
 
 The adapter uses polling on a resident local process when no webhook exists.
+
+Seb exposes the webhook route in automatic mode only when a webhook secret exists.
 
 Use an explicit mode in production for clearer operations.
 

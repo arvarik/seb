@@ -120,12 +120,7 @@ export function createWeatherTools(
           .slice(0, limit);
         const results = await mapWithConcurrency(selected, 4, async (game) => {
           try {
-            return await gameWeather.getGameWeather({
-              season,
-              week,
-              team: game.homeTeam,
-              gameType: selectedGameType,
-            });
+            return await gameWeather.getScheduledGameWeather(game);
           } catch (error) {
             return {
               alerts: [],
@@ -207,7 +202,7 @@ export function createWeatherTools(
         const lastWeek =
           throughWeek ?? (selectedAnalysisSeason < season ? 18 : Math.max(1, week - 1));
         const weatherRequest = gameWeather
-          .getGameWeather({ season, week, team, gameType: selectedGameType })
+          .getScheduledGameWeather(game)
           .catch((error) => ({
             alerts: [],
             fantasyImpact: [],
@@ -328,7 +323,7 @@ async function mapWithConcurrency<T, R>(
   concurrency: number,
   action: (value: T) => Promise<R>,
 ): Promise<R[]> {
-  const results = new Array<R>(values.length);
+  const results = Array.from<R>({ length: values.length });
   let nextIndex = 0;
   const worker = async () => {
     while (nextIndex < values.length) {

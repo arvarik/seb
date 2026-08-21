@@ -10,6 +10,7 @@ export interface ConnectorConfig {
   port: number;
   slackMode: 'socket' | 'webhook';
   telegramMode: 'auto' | 'polling' | 'webhook';
+  webhookConnectors: ConnectorName[];
 }
 
 export type Environment = NodeJS.ProcessEnv;
@@ -38,7 +39,15 @@ export function readConnectorConfig(
     'SEB_TELEGRAM_MODE',
   );
 
-  validateCredentials(enabled, slackMode, environment);
+  validateCredentials(enabled, slackMode, telegramMode, environment);
+  const telegramHasSecret = hasValue(environment.TELEGRAM_WEBHOOK_SECRET_TOKEN);
+  const webhookConnectors = enabled.filter((name) => {
+    if (name === 'slack') return slackMode === 'webhook';
+    if (name === 'telegram') {
+      return telegramMode === 'webhook' || (telegramMode === 'auto' && telegramHasSecret);
+    }
+    return true;
+  });
 
   return {
     botName: environment.SEB_BOT_NAME?.trim() || 'seb',
@@ -52,6 +61,7 @@ export function readConnectorConfig(
     port: readPort(environment.PORT),
     slackMode,
     telegramMode,
+    webhookConnectors,
   };
 }
 
@@ -97,6 +107,7 @@ function readEnabledConnectors(environment: Environment): ConnectorName[] {
 function validateCredentials(
   enabled: ConnectorName[],
   slackMode: ConnectorConfig['slackMode'],
+  telegramMode: ConnectorConfig['telegramMode'],
   environment: Environment,
 ): void {
   if (enabled.includes('slack')) {
@@ -117,6 +128,9 @@ function validateCredentials(
   }
   if (enabled.includes('telegram')) {
     requireValues(environment, ['TELEGRAM_BOT_TOKEN']);
+    if (telegramMode === 'webhook') {
+      requireValues(environment, ['TELEGRAM_WEBHOOK_SECRET_TOKEN']);
+    }
   }
 }
 

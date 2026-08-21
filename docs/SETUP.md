@@ -41,7 +41,7 @@ GOOGLE_GENERATIVE_AI_API_KEY=your-key
 Add a contact value to the NWS user agent.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.0.6 (you@example.com)
+NWS_USER_AGENT=seb/0.0.7 (you@example.com)
 ```
 
 The default value identifies the public Seb repository. A direct contact value helps the NWS contact you about request problems.
@@ -262,10 +262,16 @@ Fish loads the new file automatically in a new shell.
 
 ## 9. Run the project checks
 
-Run the type check and all unit tests.
+Run the version check, linter, type check, and all unit tests.
 
 ```bash
 npm run check
+```
+
+Run the coverage gate.
+
+```bash
+npm run test:coverage
 ```
 
 Run the model and tool harness alone.

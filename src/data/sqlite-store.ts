@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import Database from 'better-sqlite3';
 
-const DATABASE_SCHEMA_VERSION = 2;
+const DATABASE_SCHEMA_VERSION = 3;
 const DEFAULT_DATABASE_FILE = resolve(process.cwd(), '.cache/seb.sqlite');
 const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
+const MAX_PROVENANCE_BYTES = 32 * 1024 * 1024;
+const MAX_TOTAL_SNAPSHOT_BYTES = 512 * 1024 * 1024;
 const DEFAULT_SNAPSHOT_LIMIT = 64;
 
 export type CacheFreshness = 'fresh' | 'stale' | 'expired';
@@ -58,8 +60,43 @@ export interface SnapshotRecord<T = unknown> {
   kind: string;
   payload: T;
   provenance: unknown;
+  provenanceChecksum: string;
   schemaVersion: string;
   sourceTimestamp: string | null;
+}
+
+export interface SnapshotMetadata {
+  asOf: string;
+  checksum: string;
+  createdAt: string;
+  entityKey: string;
+  id: string;
+  kind: string;
+  payloadBytes: number;
+  provenanceBytes: number;
+  provenanceChecksum: string;
+  schemaVersion: string;
+  sourceTimestamp: string | null;
+}
+
+export interface DatabaseStatus {
+  cacheEntries: number;
+  cacheValueBytes: number;
+  file: string;
+  fileBytes: number;
+  identities: number;
+  identityLinks: number;
+  schemaVersion: number;
+  snapshotPayloadBytes: number;
+  snapshotProvenanceBytes: number;
+  snapshots: number;
+}
+
+export interface StoragePruneResult {
+  after: DatabaseStatus;
+  before: DatabaseStatus;
+  cacheEntriesRemoved: number;
+  snapshotsRemoved: number;
 }
 
 export interface IdentityWrite<T> {
@@ -84,7 +121,12 @@ export class SebDatabase {
 
   constructor(file = DEFAULT_DATABASE_FILE) {
     this.file = resolve(file);
-    mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+    const directory = dirname(this.file);
+    const directoryExisted = existsSync(directory);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (!directoryExisted || directory === dirname(DEFAULT_DATABASE_FILE)) {
+      chmodSync(directory, 0o700);
+    }
     this.database = new Database(this.file);
     chmodSync(this.file, 0o600);
     this.configure();
@@ -244,18 +286,23 @@ export class SebDatabase {
       throw new RangeError(`The snapshot exceeds ${MAX_SNAPSHOT_BYTES} bytes.`);
     }
     const provenanceJson = stableJson(write.provenance ?? null);
+    if (Buffer.byteLength(provenanceJson) > MAX_PROVENANCE_BYTES) {
+      throw new RangeError(`The snapshot provenance exceeds ${MAX_PROVENANCE_BYTES} bytes.`);
+    }
     const id = randomUUID();
     const asOf = write.asOf ?? new Date().toISOString();
     const createdAt = new Date().toISOString();
     const checksum = sha256(payloadJson);
+    const provenanceChecksum = sha256(provenanceJson);
 
     this.transaction(() => {
       this.database
         .prepare(`
           INSERT INTO snapshots (
             id, kind, entity_key, as_of, source_timestamp, payload_json,
-            provenance_json, schema_version, checksum, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            provenance_json, schema_version, checksum, created_at,
+            provenance_checksum
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         .run(
           id,
@@ -268,6 +315,7 @@ export class SebDatabase {
           write.schemaVersion,
           checksum,
           createdAt,
+          provenanceChecksum,
         );
       this.database
         .prepare(`
@@ -280,6 +328,7 @@ export class SebDatabase {
           )
         `)
         .run(write.kind, write.entityKey, retain);
+      this.enforceSnapshotByteLimit(MAX_TOTAL_SNAPSHOT_BYTES);
     });
 
     return {
@@ -291,6 +340,7 @@ export class SebDatabase {
       kind: write.kind,
       payload: write.payload,
       provenance: write.provenance ?? null,
+      provenanceChecksum,
       schemaVersion: write.schemaVersion,
       sourceTimestamp: write.sourceTimestamp ?? null,
     };
@@ -324,6 +374,35 @@ export class SebDatabase {
       .prepare(`SELECT * FROM snapshots ${where} ORDER BY as_of DESC, created_at DESC LIMIT ?`)
       .all(...values, limit) as DatabaseRow[];
     return rows.map((row) => parseSnapshot<T>(row));
+  }
+
+  listSnapshotMetadata(filter: {
+    entityKey?: string;
+    kind?: string;
+    limit?: number;
+  } = {}): SnapshotMetadata[] {
+    const limit = Math.min(Math.max(filter.limit ?? 50, 1), 1_000);
+    const clauses: string[] = [];
+    const values: Array<string | number> = [];
+    if (filter.kind) {
+      clauses.push('kind = ?');
+      values.push(filter.kind);
+    }
+    if (filter.entityKey) {
+      clauses.push('entity_key = ?');
+      values.push(filter.entityKey);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = this.database.prepare(`
+      SELECT id, kind, entity_key, as_of, source_timestamp, schema_version,
+             checksum, provenance_checksum, created_at,
+             length(CAST(payload_json AS BLOB)) AS payload_bytes,
+             length(CAST(provenance_json AS BLOB)) AS provenance_bytes
+      FROM snapshots ${where}
+      ORDER BY as_of DESC, created_at DESC
+      LIMIT ?
+    `).all(...values, limit) as DatabaseRow[];
+    return rows.map(parseSnapshotMetadata);
   }
 
   deleteSnapshots(kind?: string, entityKey?: string): number {
@@ -448,25 +527,80 @@ export class SebDatabase {
     return row ? this.parseIdentity<T>(row) : null;
   }
 
-  status(): {
-    cacheEntries: number;
-    file: string;
-    identities: number;
-    identityLinks: number;
-    schemaVersion: number;
-    snapshots: number;
-  } {
-    const cache = this.database.prepare('SELECT COUNT(*) AS count FROM cache_entries').get() as DatabaseRow;
-    const snapshots = this.database.prepare('SELECT COUNT(*) AS count FROM snapshots').get() as DatabaseRow;
+  status(): DatabaseStatus {
+    const cache = this.database.prepare(`
+      SELECT COUNT(*) AS count,
+             COALESCE(SUM(length(CAST(value_json AS BLOB))), 0) AS value_bytes
+      FROM cache_entries
+    `).get() as DatabaseRow;
+    const snapshots = this.database.prepare(`
+      SELECT COUNT(*) AS count,
+             COALESCE(SUM(length(CAST(payload_json AS BLOB))), 0) AS payload_bytes,
+             COALESCE(SUM(length(CAST(provenance_json AS BLOB))), 0) AS provenance_bytes
+      FROM snapshots
+    `).get() as DatabaseRow;
     const identities = this.database.prepare('SELECT COUNT(*) AS count FROM identities').get() as DatabaseRow;
     const identityLinks = this.database.prepare('SELECT COUNT(*) AS count FROM identity_links').get() as DatabaseRow;
     return {
       cacheEntries: Number(cache.count),
+      cacheValueBytes: Number(cache.value_bytes),
       file: this.file,
+      fileBytes: databaseFileBytes(this.file),
       identities: Number(identities.count),
       identityLinks: Number(identityLinks.count),
       schemaVersion: DATABASE_SCHEMA_VERSION,
+      snapshotPayloadBytes: Number(snapshots.payload_bytes),
+      snapshotProvenanceBytes: Number(snapshots.provenance_bytes),
       snapshots: Number(snapshots.count),
+    };
+  }
+
+  pruneStorage(options: {
+    maxBytes?: number;
+    now?: Date;
+    snapshotMaxAgeDays?: number;
+    snapshotRetention?: number;
+  } = {}): StoragePruneResult {
+    const before = this.status();
+    const now = options.now ?? new Date();
+    const maxBytes = options.maxBytes ?? MAX_TOTAL_SNAPSHOT_BYTES;
+    const snapshotMaxAgeDays = options.snapshotMaxAgeDays ?? 180;
+    const snapshotRetention = options.snapshotRetention ?? 16;
+    validateByteLimit(maxBytes);
+    validateRetention(snapshotRetention);
+    if (!Number.isFinite(snapshotMaxAgeDays) || snapshotMaxAgeDays < 1) {
+      throw new RangeError('The snapshot maximum age must be at least one day.');
+    }
+    const cacheEntriesRemoved = Number(this.database
+      .prepare('DELETE FROM cache_entries WHERE stale_until < ?')
+      .run(now.toISOString()).changes);
+    const cutoff = new Date(now.getTime() - snapshotMaxAgeDays * 24 * 60 * 60 * 1_000)
+      .toISOString();
+    let snapshotsRemoved = Number(this.database
+      .prepare('DELETE FROM snapshots WHERE as_of < ?')
+      .run(cutoff).changes);
+    snapshotsRemoved += Number(this.database.prepare(`
+      DELETE FROM snapshots
+      WHERE id IN (
+        SELECT id FROM (
+          SELECT id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY kind, entity_key
+                   ORDER BY as_of DESC, created_at DESC
+                 ) AS row_number
+          FROM snapshots
+        )
+        WHERE row_number > ?
+      )
+    `).run(snapshotRetention).changes);
+    snapshotsRemoved += this.enforceSnapshotByteLimit(maxBytes);
+    this.database.pragma('wal_checkpoint(TRUNCATE)');
+    this.database.exec('VACUUM');
+    return {
+      after: this.status(),
+      before,
+      cacheEntriesRemoved,
+      snapshotsRemoved,
     };
   }
 
@@ -548,7 +682,8 @@ export class SebDatabase {
             provenance_json TEXT NOT NULL,
             schema_version TEXT NOT NULL,
             checksum TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            provenance_checksum TEXT NOT NULL
           );
           CREATE INDEX IF NOT EXISTS snapshot_lookup_idx
             ON snapshots(kind, entity_key, as_of DESC);
@@ -583,6 +718,28 @@ export class SebDatabase {
         `);
       });
     }
+    if (version < 3) {
+      this.transaction(() => {
+        const columns = this.database
+          .prepare('PRAGMA table_info(snapshots)')
+          .all() as DatabaseRow[];
+        if (!columns.some((column) => column.name === 'provenance_checksum')) {
+          this.database.exec(
+            "ALTER TABLE snapshots ADD COLUMN provenance_checksum TEXT NOT NULL DEFAULT ''",
+          );
+        }
+        const rows = this.database
+          .prepare('SELECT id, provenance_json FROM snapshots')
+          .all() as DatabaseRow[];
+        const update = this.database.prepare(
+          'UPDATE snapshots SET provenance_checksum = ? WHERE id = ?',
+        );
+        for (const row of rows) {
+          update.run(sha256(requiredText(row.provenance_json)), requiredText(row.id));
+        }
+        this.database.pragma('user_version = 3');
+      });
+    }
   }
 
   private transaction(run: () => void): void {
@@ -594,6 +751,35 @@ export class SebDatabase {
       this.database.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  private enforceSnapshotByteLimit(maxBytes: number): number {
+    validateByteLimit(maxBytes);
+    const size = this.database.prepare(`
+      SELECT COALESCE(
+        SUM(length(CAST(payload_json AS BLOB)) + length(CAST(provenance_json AS BLOB))),
+        0
+      ) AS bytes
+      FROM snapshots
+    `).get() as DatabaseRow;
+    let total = Number(size.bytes);
+    if (total <= maxBytes) return 0;
+    const rows = this.database.prepare(`
+      SELECT id,
+             length(CAST(payload_json AS BLOB)) +
+             length(CAST(provenance_json AS BLOB)) AS bytes
+      FROM snapshots
+      ORDER BY as_of ASC, created_at ASC
+    `).all() as DatabaseRow[];
+    let removed = 0;
+    const remove = this.database.prepare('DELETE FROM snapshots WHERE id = ?');
+    for (const row of rows) {
+      if (total <= maxBytes) break;
+      remove.run(requiredText(row.id));
+      total -= Number(row.bytes);
+      removed += 1;
+    }
+    return removed;
   }
 }
 
@@ -616,9 +802,14 @@ export function defaultDatabaseFile(): string {
 
 function parseSnapshot<T>(row: DatabaseRow): SnapshotRecord<T> {
   const payloadJson = requiredText(row.payload_json);
+  const provenanceJson = requiredText(row.provenance_json);
   const checksum = requiredText(row.checksum);
+  const provenanceChecksum = requiredText(row.provenance_checksum);
   if (sha256(payloadJson) !== checksum) {
     throw new Error(`The snapshot ${requiredText(row.id)} failed its checksum validation.`);
+  }
+  if (sha256(provenanceJson) !== provenanceChecksum) {
+    throw new Error(`The snapshot ${requiredText(row.id)} failed its provenance checksum validation.`);
   }
   return {
     asOf: requiredText(row.as_of),
@@ -628,10 +819,49 @@ function parseSnapshot<T>(row: DatabaseRow): SnapshotRecord<T> {
     id: requiredText(row.id),
     kind: requiredText(row.kind),
     payload: JSON.parse(payloadJson) as T,
-    provenance: JSON.parse(requiredText(row.provenance_json)) as unknown,
+    provenance: JSON.parse(provenanceJson) as unknown,
+    provenanceChecksum,
     schemaVersion: requiredText(row.schema_version),
     sourceTimestamp: optionalText(row.source_timestamp),
   };
+}
+
+function parseSnapshotMetadata(row: DatabaseRow): SnapshotMetadata {
+  return {
+    asOf: requiredText(row.as_of),
+    checksum: requiredText(row.checksum),
+    createdAt: requiredText(row.created_at),
+    entityKey: requiredText(row.entity_key),
+    id: requiredText(row.id),
+    kind: requiredText(row.kind),
+    payloadBytes: Number(row.payload_bytes),
+    provenanceBytes: Number(row.provenance_bytes),
+    provenanceChecksum: requiredText(row.provenance_checksum),
+    schemaVersion: requiredText(row.schema_version),
+    sourceTimestamp: optionalText(row.source_timestamp),
+  };
+}
+
+function databaseFileBytes(file: string): number {
+  return [file, `${file}-wal`, `${file}-shm`].reduce((total, path) => {
+    try {
+      return total + statSync(path).size;
+    } catch {
+      return total;
+    }
+  }, 0);
+}
+
+function validateByteLimit(value: number): void {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new RangeError('The storage byte limit must be a positive safe integer.');
+  }
+}
+
+function validateRetention(value: number): void {
+  if (!Number.isInteger(value) || value < 1 || value > 10_000) {
+    throw new RangeError('The snapshot retention count must be from 1 through 10000.');
+  }
 }
 
 function stableJson(value: unknown): string {

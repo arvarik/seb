@@ -160,7 +160,9 @@ Seb loads the optional Sleeper username and current NFL state before the request
 
 Account-aware prompts can use discovered leagues without copied IDs.
 
-Current-news answers end with a source list when Gemini returns web sources.
+Answers end with direct data and web sources when a request uses them.
+
+Direct sources include cache outcomes and retrieval times.
 
 Use this option when you want no tool activity.
 
@@ -310,7 +312,7 @@ The doctor never prints the Gemini key.
 
 ## Inspect the local cache
 
-Show the database path and record counts.
+Show the database path, byte sizes, and record counts.
 
 ```bash
 seb cache
@@ -330,6 +332,16 @@ seb cache clear --json
 ```
 
 The clear command preserves every historical snapshot.
+
+Delete expired cache rows and old snapshots.
+
+```bash
+seb cache prune
+seb cache prune --max-size-mb 256 --max-age-days 90 --retain 8
+seb cache prune --json
+```
+
+The prune command checkpoints the write-ahead log and compacts the database.
 
 Read the [storage guide](STORAGE.md) for source freshness periods.
 
@@ -363,6 +375,8 @@ seb snapshots --id SNAPSHOT_ID --json
 ```
 
 The JSON inspection omits the source payload.
+
+List commands read only snapshot metadata and byte sizes.
 
 Read the [provenance guide](PROVENANCE.md) for field lineage rules.
 

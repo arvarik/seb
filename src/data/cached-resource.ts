@@ -7,12 +7,13 @@ export type CacheOutcome =
   | 'source-not-modified'
   | 'stale-if-error';
 
-export interface ResourcePolicy {
+export interface ResourcePolicy<T = unknown> {
   schemaVersion: string;
   snapshotKind?: string;
   snapshotRetention?: number;
   staleIfErrorMs: number;
   ttlMs: number;
+  validate?: (value: unknown) => T;
 }
 
 export interface ResourceLoadContext {
@@ -20,7 +21,7 @@ export interface ResourceLoadContext {
   lastModified: string | null;
 }
 
-export type ResourceLoadResult<T> =
+export type ResourceLoadResult<T = unknown> =
   | {
       etag?: string | null;
       lastModified?: string | null;
@@ -34,6 +35,7 @@ export interface ResourceResult<T> {
   error?: string;
   outcome: CacheOutcome;
   value: T;
+  warnings?: string[];
 }
 
 export class CachedResource<T> {
@@ -42,20 +44,22 @@ export class CachedResource<T> {
     private readonly namespace: string,
     private readonly key: string,
     private readonly sourceUrl: string,
-    private readonly policy: ResourcePolicy,
+    private readonly policy: ResourcePolicy<T>,
   ) {}
 
   async read(
-    load: (context: ResourceLoadContext) => Promise<ResourceLoadResult<T>>,
+    load: (context: ResourceLoadContext) => Promise<ResourceLoadResult>,
   ): Promise<ResourceResult<T>> {
-    const cached = this.database
-      ? this.database.getCache<T>(this.namespace, this.key)
+    const rawCached = this.database
+      ? this.database.getCache<unknown>(this.namespace, this.key)
       : null;
+    const cached = this.validateCachedEntry(rawCached);
     if (cached?.freshness === 'fresh' && cached.schemaVersion === this.policy.schemaVersion) {
       return { cache: cached, outcome: 'cache-fresh', value: cached.value };
     }
 
     const conditional = cached?.schemaVersion === this.policy.schemaVersion ? cached : null;
+    const warnings: string[] = [];
     try {
       const loaded = await load({
         etag: conditional?.etag ?? null,
@@ -75,15 +79,18 @@ export class CachedResource<T> {
           if (touched) {
             return { cache: touched, outcome: 'source-not-modified', value: touched.value };
           }
-        } catch {
-          // The source confirmed the value. A local write failure must not hide it.
+        } catch (error) {
+          warnings.push(`Seb could not renew the local cache: ${errorMessage(error)}`);
         }
         return {
           cache: { ...conditional, freshness: 'fresh' },
           outcome: 'source-not-modified',
           value: conditional.value,
+          ...(warnings.length > 0 ? { warnings } : {}),
         };
       }
+
+      const value = this.validate(loaded.value);
 
       let stored = false;
       let cache: CacheEntry<T>;
@@ -98,14 +105,15 @@ export class CachedResource<T> {
             sourceUrl: this.sourceUrl,
             staleIfErrorMs: this.policy.staleIfErrorMs,
             ttlMs: this.policy.ttlMs,
-            value: loaded.value,
+            value,
           });
           stored = true;
-        } catch {
+        } catch (error) {
+          warnings.push(`Seb could not save the local cache: ${errorMessage(error)}`);
           cache = memoryEntry(
             this.namespace,
             this.key,
-            loaded.value,
+            value,
             this.sourceUrl,
             this.policy,
             loaded.etag ?? null,
@@ -116,7 +124,7 @@ export class CachedResource<T> {
         cache = memoryEntry(
           this.namespace,
           this.key,
-          loaded.value,
+          value,
           this.sourceUrl,
           this.policy,
           loaded.etag ?? null,
@@ -126,7 +134,7 @@ export class CachedResource<T> {
       if (this.database && stored && this.policy.snapshotKind) {
         try {
           const sourceId = `${this.namespace}:${this.key}`;
-          const provenance = createDirectProvenanceManifest(loaded.value, {
+          const provenance = createDirectProvenanceManifest(value, {
             envelopeId: `snapshot:${sourceId}:${cache.cachedAt}`,
             now: cache.cachedAt,
             source: {
@@ -148,18 +156,23 @@ export class CachedResource<T> {
             {
               entityKey: this.key,
               kind: this.policy.snapshotKind,
-              payload: loaded.value,
+              payload: value,
               provenance,
               schemaVersion: this.policy.schemaVersion,
               sourceTimestamp: loaded.sourceTimestamp ?? null,
             },
             this.policy.snapshotRetention,
           );
-        } catch {
-          // A snapshot failure must not hide a valid source response.
+        } catch (error) {
+          warnings.push(`Seb could not save the source snapshot: ${errorMessage(error)}`);
         }
       }
-      return { cache, outcome: 'source-updated', value: loaded.value };
+      return {
+        cache,
+        outcome: 'source-updated',
+        value,
+        ...(warnings.length > 0 ? { warnings } : {}),
+      };
     } catch (error) {
       if (conditional?.freshness === 'stale') {
         return {
@@ -176,6 +189,22 @@ export class CachedResource<T> {
   clear(): number {
     return this.database ? this.database.deleteCache(this.namespace, this.key) : 0;
   }
+
+  private validate(value: unknown): T {
+    return this.policy.validate ? this.policy.validate(value) : value as T;
+  }
+
+  private validateCachedEntry(entry: CacheEntry<unknown> | null): CacheEntry<T> | null {
+    if (!entry || entry.schemaVersion !== this.policy.schemaVersion) {
+      return entry as CacheEntry<T> | null;
+    }
+    try {
+      return { ...entry, value: this.validate(entry.value) };
+    } catch {
+      if (this.database) this.database.deleteCache(this.namespace, this.key);
+      return null;
+    }
+  }
 }
 
 function memoryEntry<T>(
@@ -183,7 +212,7 @@ function memoryEntry<T>(
   key: string,
   value: T,
   sourceUrl: string,
-  policy: ResourcePolicy,
+  policy: ResourcePolicy<T>,
   etag: string | null,
   lastModified: string | null,
 ): CacheEntry<T> {

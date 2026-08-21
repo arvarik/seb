@@ -1,5 +1,7 @@
 import { createGoogle } from '@ai-sdk/google';
 import { generateText } from 'ai';
+import { existsSync, statSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 import {
   DEFAULT_GEMINI_FALLBACK_MODEL,
@@ -54,6 +56,7 @@ export interface DoctorOptions {
     periods: number;
     timeZone: string | null;
   }>;
+  verifyPermissions?: () => DoctorCheck;
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
@@ -81,6 +84,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
         },
   );
   checks.push(checkDatabase(options.verifyDatabase ?? verifyDatabase));
+  checks.push(options.verifyPermissions?.() ?? checkLocalPermissions());
 
   if (options.offline) {
     checks.push(
@@ -198,6 +202,9 @@ async function checkSleeper(
 ): Promise<DoctorCheck> {
   try {
     const state = await verify();
+    if (!/^\d{4}$/u.test(state.season) || !Number.isInteger(state.week)) {
+      throw new Error('Sleeper returned an invalid NFL state.');
+    }
     return {
       name: 'Sleeper API',
       status: 'pass',
@@ -240,6 +247,9 @@ async function checkNflverse(
 ): Promise<DoctorCheck> {
   try {
     const result = await verify();
+    if (result.games < 1 || !Number.isInteger(result.latestSeason)) {
+      throw new Error('nflverse returned no valid schedule rows.');
+    }
     return {
       name: 'nflverse data',
       status: 'pass',
@@ -259,6 +269,9 @@ async function checkWeather(
 ): Promise<DoctorCheck> {
   try {
     const result = await verify();
+    if (result.periods < 1) {
+      throw new Error('The National Weather Service returned no hourly periods.');
+    }
     return {
       name: 'National Weather Service API',
       status: 'pass',
@@ -278,7 +291,7 @@ async function verifySleeperApi(): Promise<{
   seasonType: string;
   week: number;
 }> {
-  const state = await new SleeperClient({ timeoutMs: 10_000 }).getNflState();
+  const state = await new SleeperClient({ database: false, timeoutMs: 10_000 }).getNflState();
   return {
     season: state.season,
     seasonType: state.season_type,
@@ -290,7 +303,7 @@ async function verifyNflverseData(): Promise<{
   games: number;
   latestSeason: number;
 }> {
-  const games = await new NflverseClient({ timeoutMs: 20_000 }).getSchedule();
+  const games = await new NflverseClient({ database: false, timeoutMs: 20_000 }).getSchedule();
   return {
     games: games.length,
     latestSeason: Math.max(...games.map((game) => game.season)),
@@ -301,12 +314,40 @@ async function verifyWeatherApi(
   environment: NodeJS.ProcessEnv,
 ): Promise<{ periods: number; timeZone: string | null }> {
   const forecast = await new WeatherClient({
+    database: false,
     timeoutMs: 15_000,
     ...(environment.NWS_USER_AGENT?.trim()
       ? { userAgent: environment.NWS_USER_AGENT.trim() }
       : {}),
   }).getHourlyForecast(47.5952, -122.3316);
   return { periods: forecast.periods.length, timeZone: forecast.timeZone };
+}
+
+function checkLocalPermissions(): DoctorCheck {
+  if (process.platform === 'win32') {
+    return {
+      name: 'Local file permissions',
+      status: 'skip',
+      detail: 'Windows does not expose Unix permission bits.',
+    };
+  }
+  const paths = [resolve('.env'), dirname(getSharedSebDatabase().file)];
+  const unsafe = paths.filter((path) => {
+    if (!existsSync(path)) return false;
+    return (statSync(path).mode & 0o077) !== 0;
+  });
+  if (unsafe.length > 0) {
+    return {
+      name: 'Local file permissions',
+      status: 'fail',
+      detail: `Restrict access to ${unsafe.join(', ')}. Use mode 0600 for .env and 0700 for .cache.`,
+    };
+  }
+  return {
+    name: 'Local file permissions',
+    status: 'pass',
+    detail: 'The local environment and cache paths use private permissions.',
+  };
 }
 
 export async function verifyGeminiApi(

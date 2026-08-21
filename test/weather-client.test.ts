@@ -75,6 +75,16 @@ describe('WeatherClient', () => {
       'unexpected forecast host',
     );
   });
+
+  it('rejects a successful response with missing point fields', async () => {
+    const client = new WeatherClient({
+      baseUrl: 'https://api.weather.test',
+      cacheDirectory: false,
+      fetch: async () => jsonResponse({ properties: { gridId: 'SEW' } }),
+    });
+
+    await expect(client.getPointMetadata(47.5952, -122.3316)).rejects.toThrow();
+  });
 });
 
 function pointDocument() {

@@ -292,7 +292,7 @@ function createRenderer(
     session: createSessionState(new Date('2026-08-20T12:00:00Z')),
     sources: new SourceTracker(),
     uiState,
-    version: '0.0.6',
+    version: '0.0.7',
   });
 }
 

@@ -68,6 +68,26 @@ describe('SleeperClient', () => {
     } satisfies Partial<SleeperApiError>);
   });
 
+  it('rejects a successful response with an invalid endpoint schema', async () => {
+    const client = new SleeperClient({
+      fetch: async () => jsonResponse({ season: '2026', week: 1 }),
+      playerCacheFile: false,
+    });
+
+    await expect(client.getNflState()).rejects.toThrow();
+  });
+
+  it('rejects a response body that exceeds the client limit', async () => {
+    const client = new SleeperClient({
+      fetch: async () => new Response('{}', {
+        headers: { 'content-length': String(33 * 1024 * 1024) },
+      }),
+      playerCacheFile: false,
+    });
+
+    await expect(client.getNflState()).rejects.toThrow('exceeds');
+  });
+
   it('rejects an invalid NFL week before it sends a request', async () => {
     let called = false;
     const fetch: typeof globalThis.fetch = async () => {

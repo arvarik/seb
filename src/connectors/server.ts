@@ -12,10 +12,12 @@ import {
 
 const DISCORD_GATEWAY_SESSION_MS = 10 * 60 * 1000;
 const DISCORD_RETRY_MS = 5_000;
+const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 export interface BackgroundTaskRegistry {
   add(task: Promise<unknown>): void;
   count(): number;
+  drain(timeoutMs?: number): Promise<boolean>;
 }
 
 export class BackgroundTasks implements BackgroundTaskRegistry {
@@ -37,6 +39,17 @@ export class BackgroundTasks implements BackgroundTaskRegistry {
   count(): number {
     return this.tasks.size;
   }
+
+  async drain(timeoutMs = SHUTDOWN_TIMEOUT_MS): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.tasks.size > 0) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
+      const completed = await settlesWithin(Promise.allSettled(this.tasks), remaining);
+      if (!completed) return false;
+    }
+    return true;
+  }
 }
 
 export function createConnectorApp(
@@ -50,6 +63,7 @@ export function createConnectorApp(
       connectors: runtime.config.enabled,
       service: 'seb-connectors',
       webhookPattern: '/webhooks/{connector}',
+      webhookConnectors: runtime.config.webhookConnectors,
     }),
   );
 
@@ -66,7 +80,8 @@ export function createConnectorApp(
     const connector = context.req.param('connector');
     if (
       !isConnectorName(connector) ||
-      !runtime.config.enabled.includes(connector)
+      !runtime.config.enabled.includes(connector) ||
+      !runtime.config.webhookConnectors.includes(connector)
     ) {
       return context.json({ error: 'Connector not enabled.' }, 404);
     }
@@ -130,20 +145,32 @@ async function main(): Promise<void> {
     stopping = true;
     process.stdout.write(`Seb received ${signal}. It will stop cleanly.\n`);
     gatewayAbort.abort();
-    await new Promise<void>((resolve, reject) => {
+    const serverClosed = await new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        if ('closeAllConnections' in server) server.closeAllConnections();
+        resolve(false);
+      }, SHUTDOWN_TIMEOUT_MS);
       server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
+        clearTimeout(timeout);
+        resolve(!error);
       });
     });
-    await runtime.bot.shutdown();
+    const tasksDrained = await background.drain(SHUTDOWN_TIMEOUT_MS);
+    await withTimeout(runtime.bot.shutdown(), SHUTDOWN_TIMEOUT_MS, 'connector bot shutdown');
+    if (!serverClosed || !tasksDrained) {
+      throw new Error('Seb exceeded the connector shutdown deadline.');
+    }
   };
 
-  process.once('SIGINT', () => void stop('SIGINT'));
-  process.once('SIGTERM', () => void stop('SIGTERM'));
+  const stopFromSignal = (signal: string): void => {
+    void stop(signal).catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`Seb connector shutdown failed: ${reason}\n`);
+      process.exitCode = 1;
+    });
+  };
+  process.once('SIGINT', () => stopFromSignal('SIGINT'));
+  process.once('SIGTERM', () => stopFromSignal('SIGTERM'));
 }
 
 async function runDiscordGateway(
@@ -183,16 +210,53 @@ async function runDiscordGateway(
 
 async function waitForRetry(signal: AbortSignal): Promise<void> {
   await new Promise<void>((resolve) => {
-    const timeout = setTimeout(resolve, DISCORD_RETRY_MS);
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timeout);
-        resolve();
-      },
-      { once: true },
-    );
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const finish = (): void => {
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timeout = setTimeout(finish, DISCORD_RETRY_MS);
+    signal.addEventListener('abort', finish, { once: true });
   });
+}
+
+async function settlesWithin(task: Promise<unknown>, milliseconds: number): Promise<boolean> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      task.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function withTimeout<T>(
+  task: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Seb exceeded the ${label} deadline.`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 function loadLocalEnvironment(): void {

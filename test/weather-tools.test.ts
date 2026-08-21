@@ -33,4 +33,49 @@ describe('weather tools', () => {
     expect(result.reason).toContain('not matched to a game, venue, or kickoff');
     expect(result.forecast.periods).toHaveLength(48);
   });
+
+  it('reuses the weekly schedule rows during the weather screen', async () => {
+    const game = {
+      awayRest: 7,
+      awayScore: null,
+      awayTeam: 'BUF',
+      gameDate: '2026-09-10',
+      gameId: '2026_01_BUF_KC',
+      gameTime: '20:20',
+      gameType: 'REG',
+      homeRest: 7,
+      homeScore: null,
+      homeTeam: 'KC',
+      location: 'Home',
+      roof: 'closed',
+      season: 2026,
+      spreadLine: null,
+      stadium: 'Arrowhead Stadium',
+      stadiumId: 'KAN00',
+      surface: 'grass',
+      temperature: null,
+      totalLine: null,
+      week: 1,
+      wind: null,
+    };
+    const getSchedule = vi.fn().mockResolvedValue([game]);
+    const nflverse = { getSchedule } as unknown as NflverseClient;
+    const weather = {
+      getHourlyForecast: vi.fn(),
+      getActiveAlerts: vi.fn(),
+    } as unknown as WeatherClient;
+    const execute = createWeatherTools(weather, nflverse).getWeekWeather.execute as unknown as (
+      input: { includeIndoor: boolean; limit: number; season: number; week: number },
+    ) => Promise<{ games: unknown[] }>;
+
+    const result = await execute({
+      includeIndoor: true,
+      limit: 18,
+      season: 2026,
+      week: 1,
+    });
+
+    expect(result.games).toHaveLength(1);
+    expect(getSchedule).toHaveBeenCalledOnce();
+  });
 });

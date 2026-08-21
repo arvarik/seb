@@ -2,6 +2,8 @@ import type { DataSourceRecord } from '../sources.js';
 import { paint, symbol, type SebTheme } from './theme.js';
 
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/gu;
+const UNTRUSTED_ESCAPE_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)|[PX^_][\s\S]*?\x1b\\|[@-_])|\x1b/gu;
+const UNTRUSTED_CONTROL_PATTERN = /[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f-\x9f]/gu;
 const INLINE_LINK_PATTERN = /(!?)\[([^\]]+)\]\((?:<([^>\s]+)>|(https?:\/\/[^)\s]+))\)|<(https?:\/\/[^>\s]+)>|(https?:\/\/[^\s<>\x1b]+)/gu;
 const TERMINAL_LINK_PATTERN = /\x1b\]8;;([^\x07\x1b]*)(?:\x07|\x1b\\)([\s\S]*?)\x1b\]8;;(?:\x07|\x1b\\)/gu;
 const TERMINAL_CONTROL_PATTERN = /^\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/u;
@@ -80,7 +82,7 @@ export function renderTerminalMarkdown(
   width = 100,
 ): string {
   const maximumWidth = Math.max(20, width);
-  const input = text.split('\n');
+  const input = sanitizeTerminalText(text).split('\n');
   const output: string[] = [];
   for (let index = 0; index < input.length; index += 1) {
     const line = input[index] ?? '';
@@ -610,6 +612,12 @@ export function visibleLength(value: string): number {
 
 export function stripAnsi(value: string): string {
   return value.replace(ANSI_PATTERN, '');
+}
+
+export function sanitizeTerminalText(value: string): string {
+  return value
+    .replace(UNTRUSTED_ESCAPE_PATTERN, '')
+    .replace(UNTRUSTED_CONTROL_PATTERN, '');
 }
 
 export function wrapTerminalLine(value: string, width: number): string[] {

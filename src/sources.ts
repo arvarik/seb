@@ -6,6 +6,7 @@ export interface DataSourceRecord {
   label: string;
   retrievedAt?: string;
   url: string;
+  warnings?: string[];
 }
 
 export type SourceObserver = (

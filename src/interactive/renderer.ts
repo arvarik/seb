@@ -20,6 +20,7 @@ import {
   friendlyToolName,
   osc52,
   renderAnalysisText,
+  sanitizeTerminalText,
   sourceBadge,
   stripAnsi,
   visibleLength,
@@ -155,7 +156,6 @@ export class SebTerminalRenderer {
 
   async renderStream(
     result: SebRendererStreamResult,
-    options?: SebRendererSessionOptions,
   ): Promise<UIMessage | undefined> {
     this.start();
     this.detachInput();
@@ -289,7 +289,7 @@ export class SebTerminalRenderer {
         this.editor.insert(key.value);
         this.resetMenu();
         break;
-      case 'paste': this.editor.insert(key.value.replace(/\r\n?/g, '\n')); break;
+      case 'paste': this.editor.insert(sanitizeTerminalText(key.value.replace(/\r\n?/g, '\n'))); break;
       case 'backspace': this.editor.backspace(); this.resetMenu(); break;
       case 'delete': this.editor.deleteForward(); break;
       case 'left': this.editor.moveLeft(); break;
@@ -673,7 +673,9 @@ export class SebTerminalRenderer {
     const recentSource = this.options.sources.list()[0];
     const source = recentSource ? sourceBadge(recentSource) : 'NO SOURCE YET';
     const phase = session.seasonType?.toUpperCase() ?? 'NFL';
-    const title = ` SEB ${this.options.version}  ${experienceTitle(session.mode).toUpperCase()}  ${session.season} ${phase}${session.week ? ` W${session.week}` : ''}`;
+    const title = sanitizeTerminalText(
+      ` SEB ${this.options.version}  ${experienceTitle(session.mode).toUpperCase()}  ${session.season} ${phase}${session.week ? ` W${session.week}` : ''}`,
+    );
     const context = [
       ...(session.user
         ? [`SLEEPER @${session.user} · ${session.leagues.length} LEAGUE${session.leagues.length === 1 ? '' : 'S'}`]
@@ -689,7 +691,7 @@ export class SebTerminalRenderer {
       ...(session.accountError ? [`ACCOUNT WARNING ${session.accountError}`] : []),
       `SOURCE ${source}`,
     ];
-    const contextRows = packRows(context, width - 1).map((row) =>
+    const contextRows = packRows(context.map(sanitizeTerminalText), width - 1).map((row) =>
       paint(this.theme, 'dim', fit(` ${row}`, width)));
     return [
       paint(this.theme, 'accent', fit(title, width)),
@@ -701,18 +703,18 @@ export class SebTerminalRenderer {
   private renderBody(width: number): string[] {
     if (this.overlay === 'shortcuts') return this.shortcuts(width);
     if (this.overlay === 'history') return this.historyRows(width);
-    if (this.sections.length === 0) return this.home(width);
+    if (this.sections.length === 0) return this.home();
     const lines: string[] = [];
     for (const section of this.sections) {
       const color = section.kind === 'error' ? 'danger' : section.kind === 'tool' ? 'tool' : section.kind === 'assistant' ? 'assistant' : 'accent';
-      lines.push(paint(this.theme, color, `${section.kind === 'assistant' ? symbol(this.theme, 'assistant') : symbol(this.theme, 'bullet')} ${section.title}`));
+      lines.push(paint(this.theme, color, `${section.kind === 'assistant' ? symbol(this.theme, 'assistant') : symbol(this.theme, 'bullet')} ${sanitizeTerminalText(section.title)}`));
       const rendered = section.kind === 'assistant'
         ? renderAnalysisText(
           section.content,
           this.theme,
           Math.max(20, width - 2),
         )
-        : section.content;
+        : sanitizeTerminalText(section.content);
       for (const line of rendered.split('\n')) {
         lines.push(...wrapTerminalLine(line, Math.max(20, width - 2)).map((part) => `  ${part}`));
       }
@@ -736,10 +738,10 @@ export class SebTerminalRenderer {
     return [
       ...menu,
       ...suggestions.map((value, index) =>
-        paint(this.theme, 'source', fit(` ${index + 1}  ${value}`, width))),
+        paint(this.theme, 'source', fit(` ${index + 1}  ${sanitizeTerminalText(value)}`, width))),
       paint(this.theme, 'dim', '─'.repeat(width)),
       ...promptLines.map((line, index) => `${index === 0 ? `${symbol(this.theme, 'prompt')} ` : '  '}${line}`),
-      paint(this.theme, 'dim', fit(` ${status} · Ctrl+K commands · /exit quit · ? shortcuts`, width)),
+      paint(this.theme, 'dim', fit(` ${sanitizeTerminalText(status)} · Ctrl+K commands · /exit quit · ? shortcuts`, width)),
     ];
   }
 
@@ -765,7 +767,7 @@ export class SebTerminalRenderer {
     return lines;
   }
 
-  private home(width: number): string[] {
+  private home(): string[] {
     const session = this.options.session;
     const fantasy = session.user
       ? session.accountError
@@ -780,7 +782,7 @@ export class SebTerminalRenderer {
       '  Player profiles, team information, statistics, schedules, and verified news.',
       '',
       paint(this.theme, 'accent', 'MY FANTASY'),
-      `  ${fantasy}`,
+      `  ${sanitizeTerminalText(fantasy)}`,
       '',
       paint(this.theme, 'accent', 'ANALYZE'),
       '  Compare players, then add matchup, usage, roster, news, and weather context.',
@@ -821,7 +823,7 @@ export class SebTerminalRenderer {
       paint(this.theme, 'accent', 'PRIVATE PROMPT HISTORY'),
       '',
       ...(entries.length > 0
-        ? entries.flatMap((entry, index) => wrapTerminalLine(`  ${index + 1}. ${entry.replace(/\n/g, ' ↵ ')}`, width))
+        ? entries.flatMap((entry, index) => wrapTerminalLine(`  ${index + 1}. ${sanitizeTerminalText(entry).replace(/\n/g, ' ↵ ')}`, width))
         : ['  No saved prompts.']),
       '',
       paint(this.theme, 'dim', 'Run /history clear to delete this file.'),
@@ -830,8 +832,8 @@ export class SebTerminalRenderer {
 }
 
 function renderEditor(editor: PromptEditor, width: number, theme: SebTheme): string[] {
-  const before = editor.text().slice(0, editor.cursor());
-  const after = editor.text().slice(editor.cursor());
+  const before = sanitizeTerminalText(editor.text().slice(0, editor.cursor()));
+  const after = sanitizeTerminalText(editor.text().slice(editor.cursor()));
   const cursorCharacter = [...after][0] ?? ' ';
   const remainder = after.slice(cursorCharacter.length);
   const cursor = theme.color ? `\x1b[7m${cursorCharacter}\x1b[0m` : `|${cursorCharacter}`;

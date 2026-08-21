@@ -1,6 +1,6 @@
 # Terminal interface guide
 
-Seb `0.0.6` includes a local terminal renderer for interactive research.
+Seb `0.0.7` includes a local terminal renderer for interactive research.
 
 The AI SDK still controls the agent message loop and tool transport.
 

@@ -391,7 +391,7 @@ describe('SebInteractiveTransport', () => {
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
       uiState,
-      version: '0.0.6',
+      version: '0.0.7',
       weather: clients.weatherClient,
     });
 
@@ -400,6 +400,55 @@ describe('SebInteractiveTransport', () => {
     expect(uiState.showSuggestions).toBe(true);
     expect(uiState.suggestions).toHaveLength(3);
     expect(output).not.toContain('Try next:');
+  });
+
+  it('starts the next model request after the clear confirmation', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'Fresh answer.' },
+            { type: 'text-end', id: 'text-1' },
+            {
+              type: 'finish',
+              finishReason: { unified: 'stop', raw: undefined },
+              usage: {
+                inputTokens: { total: 2, noCache: 2, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 2, text: 2, reasoning: undefined },
+              },
+            },
+          ],
+        }),
+      }),
+    });
+    const clients = dataClients();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      version: '0.0.7',
+      weather: clients.weatherClient,
+    });
+    await sendCommand(transport, '/clear', 'clear-message');
+
+    await sendConversation(transport, [
+      { id: 'old-user', role: 'user', parts: [{ type: 'text', text: 'Old question.' }] },
+      { id: 'old-answer', role: 'assistant', parts: [{ type: 'text', text: 'Old answer.' }] },
+      { id: 'clear-message', role: 'user', parts: [{ type: 'text', text: '/clear' }] },
+      { id: 'clear-answer', role: 'assistant', parts: [{ type: 'text', text: 'Seb started a new Explore context.' }] },
+      { id: 'new-user', role: 'user', parts: [{ type: 'text', text: 'New question.' }] },
+    ]);
+
+    const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt);
+    expect(prompt).toContain('New question.');
+    expect(prompt).not.toContain('Old question.');
+    expect(prompt).not.toContain('started a new Explore context');
   });
 
   it('connects one username and discovers fantasy context inside the UI', async () => {

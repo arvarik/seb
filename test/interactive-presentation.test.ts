@@ -4,6 +4,7 @@ import {
   formatElapsed,
   osc52,
   renderAnalysisText,
+  sanitizeTerminalText,
   sourceBadge,
   stripAnsi,
   terminalLink,
@@ -12,6 +13,17 @@ import {
 import { createTheme } from '../src/interactive/theme.js';
 
 describe('interactive presentation', () => {
+  it('removes terminal control sequences from untrusted text', () => {
+    const theme = createTheme({ NO_COLOR: '1' });
+    const unsafe = 'safe\x1b]52;c;Zm9v\x07 text\x1b[2J\x1bPsecret\x1b\\ done\x08';
+
+    const output = renderAnalysisText(unsafe, theme);
+
+    expect(output).toBe('safe text done');
+    expect(output).not.toContain('\x1b');
+    expect(output).not.toContain('\x07');
+    expect(sanitizeTerminalText('a\x00b\x9fc')).toBe('abc');
+  });
   it('renders decision bars and trend charts', () => {
     const theme = createTheme({ NO_COLOR: '1', SEB_ICONS: 'ascii' });
     const output = renderAnalysisText([
@@ -149,7 +161,7 @@ describe('interactive presentation', () => {
     expect(output).toContain('│ Current starter');
     expect(output).toContain('STATUS  Ready');
     expect(output).toContain('Falling Rising');
-    expect(output).not.toMatch(/[\*~]{1,3}/u);
+    expect(output).not.toMatch(/[*~]{1,3}/u);
   });
 
   it('formats source freshness and elapsed time', () => {

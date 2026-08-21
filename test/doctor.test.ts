@@ -8,6 +8,7 @@ describe('runDoctor', () => {
       environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'test-key' },
       nodeVersion: '22.12.0',
       offline: true,
+      verifyPermissions: passingPermissions,
       verifyDatabase: () => ({
         cacheEntries: 0,
         file: '/tmp/seb.sqlite',
@@ -20,6 +21,7 @@ describe('runDoctor', () => {
 
     expect(report.ok).toBe(true);
     expect(report.checks.map((check) => check.status)).toEqual([
+      'pass',
       'pass',
       'pass',
       'pass',
@@ -39,6 +41,7 @@ describe('runDoctor', () => {
       },
       nodeVersion: '26.0.0',
       offline: false,
+      verifyPermissions: passingPermissions,
       verifyDatabase: () => ({ cacheEntries: 3, file: '/tmp/seb.sqlite', identities: 4, identityLinks: 7, schemaVersion: 2, snapshots: 2 }),
       verifySleeper: async () => ({
         season: '2026',
@@ -78,6 +81,7 @@ describe('runDoctor', () => {
       environment: {},
       nodeVersion: '20.19.0',
       offline: true,
+      verifyPermissions: passingPermissions,
       verifyDatabase: () => ({ cacheEntries: 0, file: '/tmp/seb.sqlite', identities: 0, identityLinks: 0, schemaVersion: 2, snapshots: 0 }),
     });
 
@@ -92,6 +96,7 @@ describe('runDoctor', () => {
       environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'test-key' },
       nodeVersion: '22.12.0',
       offline: false,
+      verifyPermissions: passingPermissions,
       verifyDatabase: () => ({ cacheEntries: 0, file: '/tmp/seb.sqlite', identities: 0, identityLinks: 0, schemaVersion: 2, snapshots: 0 }),
       verifySleeper: async () => {
         throw new Error('Sleeper is unavailable.');
@@ -115,4 +120,29 @@ describe('runDoctor', () => {
       '✗ Gemini API: The key is invalid.',
     );
   });
+
+  it('fails live checks that return empty source data', async () => {
+    const report = await runDoctor({
+      environment: {},
+      nodeVersion: '22.12.0',
+      offline: false,
+      verifyPermissions: passingPermissions,
+      verifyDatabase: () => ({ cacheEntries: 0, file: '/tmp/seb.sqlite', identities: 0, identityLinks: 0, schemaVersion: 3, snapshots: 0 }),
+      verifySleeper: async () => ({ season: '2026', seasonType: 'regular', week: 1 }),
+      verifyNflverse: async () => ({ games: 0, latestSeason: Number.NEGATIVE_INFINITY }),
+      verifyWeather: async () => ({ periods: 0, timeZone: null }),
+    });
+
+    expect(report.ok).toBe(false);
+    expect(formatDoctorReport(report)).toContain('nflverse returned no valid schedule rows');
+    expect(formatDoctorReport(report)).toContain('returned no hourly periods');
+  });
 });
+
+function passingPermissions() {
+  return {
+    name: 'Local file permissions',
+    status: 'pass' as const,
+    detail: 'Private.',
+  };
+}

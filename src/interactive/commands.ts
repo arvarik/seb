@@ -542,7 +542,7 @@ _seb_completion() {
     chat) COMPREPLY=( $(compgen -W "--model --help" -- "\${current}") ) ;;
     ask) COMPREPLY=( $(compgen -W "--json --model --no-progress --help" -- "\${current}") ) ;;
     doctor) COMPREPLY=( $(compgen -W "--offline --json --help" -- "\${current}") ) ;;
-    cache) COMPREPLY=( $(compgen -W "status clear --json --help" -- "\${current}") ) ;;
+    cache) COMPREPLY=( $(compgen -W "status clear prune --max-size-mb --max-age-days --retain --json --help" -- "\${current}") ) ;;
     snapshots) COMPREPLY=( $(compgen -W "--kind --entity --id --limit --json --help" -- "\${current}") ) ;;
     replay) COMPREPLY=( $(compgen -W "--season --through-week --position --output --json --help" -- "\${current}") ) ;;
     completion) COMPREPLY=( $(compgen -W "bash fish zsh" -- "\${current}") ) ;;
@@ -568,7 +568,10 @@ complete -c seb -n '__fish_seen_subcommand_from chat ask' -l model -r -d 'Select
 complete -c seb -n '__fish_seen_subcommand_from ask doctor' -l json -d 'Print JSON'
 complete -c seb -n '__fish_seen_subcommand_from ask' -l no-progress -d 'Hide tool activity'
 complete -c seb -n '__fish_seen_subcommand_from doctor' -l offline -d 'Skip network checks'
-complete -c seb -n '__fish_seen_subcommand_from cache' -a 'status clear'
+complete -c seb -n '__fish_seen_subcommand_from cache' -a 'status clear prune'
+complete -c seb -n '__fish_seen_subcommand_from cache' -l max-size-mb -r -d 'Set the snapshot size limit'
+complete -c seb -n '__fish_seen_subcommand_from cache' -l max-age-days -r -d 'Delete older snapshots'
+complete -c seb -n '__fish_seen_subcommand_from cache' -l retain -r -d 'Retain snapshots per source key'
 complete -c seb -n '__fish_seen_subcommand_from cache snapshots replay' -l json -d 'Print JSON'
 complete -c seb -n '__fish_seen_subcommand_from snapshots' -l kind -r -d 'Filter snapshot kind'
 complete -c seb -n '__fish_seen_subcommand_from snapshots' -l entity -r -d 'Filter entity key'
@@ -607,7 +610,7 @@ _seb() {
         chat) _arguments '--model[Select a Gemini model]:model:' '--help[Show help]' ;;
         ask) _arguments '--json[Print JSON]' '--model[Select a Gemini model]:model:' '--no-progress[Hide tool activity]' '--help[Show help]' '*:question:' ;;
         doctor) _arguments '--offline[Skip network checks]' '--json[Print JSON]' '--help[Show help]' ;;
-        cache) _arguments '1:action:(status clear)' '--json[Print JSON]' '--help[Show help]' ;;
+        cache) _arguments '1:action:(status clear prune)' '--max-size-mb[Set the snapshot size limit]:megabytes:' '--max-age-days[Delete older snapshots]:days:' '--retain[Retain snapshots per source key]:count:' '--json[Print JSON]' '--help[Show help]' ;;
         snapshots) _arguments '--kind[Filter snapshot kind]:kind:' '--entity[Filter entity key]:key:' '--id[Inspect snapshot provenance]:id:' '--limit[Limit results]:number:' '--json[Print JSON]' '--help[Show help]' ;;
         replay) _arguments '--season[Select the season]:year:' '--through-week[Select the final week]:week:' '--position[Filter positions]:positions:' '--output[Save the report]:file:_files' '--json[Print JSON]' '--help[Show help]' ;;
         completion) _arguments '1:shell:(bash fish zsh)' ;;

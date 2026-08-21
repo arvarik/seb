@@ -61,11 +61,7 @@ import {
   recordSessionToolInput,
   type SessionState,
 } from './session.js';
-import {
-  formatSkillList,
-  getSkill,
-  parseSkillInvocation,
-} from './skills.js';
+import { formatSkillList, parseSkillInvocation } from './skills.js';
 import { sourceBadge } from './presentation.js';
 import { InteractiveUiState } from './ui-state.js';
 
@@ -187,7 +183,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     const markerIndex = marker
       ? messages.findIndex((message) => message.id === marker)
       : -1;
-    const active = markerIndex >= 0 ? messages.slice(markerIndex + 1) : messages;
+    const active = markerIndex >= 0 ? messages.slice(markerIndex) : messages;
     const filtered: UIMessage[] = [];
     let skipNextAssistant = false;
     for (const message of active) {
@@ -459,15 +455,19 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           '',
           `- Database: \`${status.file}\``,
           `- Schema: ${status.schemaVersion}`,
+          `- Database size: ${formatStorageBytes(status.fileBytes)}`,
           `- Cache entries: ${status.cacheEntries}`,
+          `- Cache values: ${formatStorageBytes(status.cacheValueBytes)}`,
           `- Snapshots: ${status.snapshots}`,
+          `- Snapshot payloads: ${formatStorageBytes(status.snapshotPayloadBytes)}`,
+          `- Snapshot provenance: ${formatStorageBytes(status.snapshotProvenanceBytes)}`,
           `- Canonical identities: ${status.identities}`,
           `- Identity source links: ${status.identityLinks}`,
         ].join('\n');
       }
       case 'snapshots': {
         const kind = arguments_[0];
-        const snapshots = getSharedSebDatabase().listSnapshots({
+        const snapshots = getSharedSebDatabase().listSnapshotMetadata({
           limit: 20,
           ...(kind ? { kind } : {}),
         });
@@ -582,9 +582,9 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           '',
           'Copy this script into the completion file for your shell.',
           '',
-          `\`\`\`${shell}`,
+          '```' + shell,
           generateShellCompletion(shell),
-          '\`\`\`',
+          '```',
         ].join('\n');
       }
       case 'exit':
@@ -754,7 +754,7 @@ function decorateResponseStream(
 }
 
 function markdownLabel(value: string): string {
-  return value.replace(/[\[\]]/g, '').replace(/\s+/g, ' ').trim();
+  return value.replaceAll('[', '').replaceAll(']', '').replace(/\s+/g, ' ').trim();
 }
 
 function recordSuggestions(
@@ -801,7 +801,16 @@ function formatSourceRecord(source: DataSourceRecord, index: number): string {
   const warning = source.cacheOutcome === 'stale-if-error'
     ? ` Warning: Seb used stale data because the refresh failed${source.error ? ` (${source.error})` : ''}.`
     : '';
-  return `${index}. [${source.label}](${source.url}) · ${sourceBadge(source)} · ${cache} · retrieved ${retrieved}.${warning}`;
+  const storageWarning = source.warnings?.length
+    ? ` Storage warning: ${source.warnings.join(' ')}`
+    : '';
+  return `${index}. [${source.label}](${source.url}) · ${sourceBadge(source)} · ${cache} · retrieved ${retrieved}.${warning}${storageWarning}`;
+}
+
+function formatStorageBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function formatProvenance(value: unknown, snapshotId: string): string {

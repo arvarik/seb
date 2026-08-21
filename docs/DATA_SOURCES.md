@@ -34,7 +34,7 @@ nflverse remains authoritative for historical schedules and statistics.
 
 The NWS remains authoritative for United States forecasts and alerts.
 
-Seb does not store a persistent news index in version 0.0.6.
+Seb does not store a persistent news index in version 0.0.7.
 
 It records validated web source links for the active answer and session.
 
@@ -157,7 +157,7 @@ The NWS requires a user agent that identifies the application.
 Set `NWS_USER_AGENT` to an application name and contact value.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.0.6 (you@example.com)
+NWS_USER_AGENT=seb/0.0.7 (you@example.com)
 ```
 
 Seb performs three request types.
@@ -228,6 +228,12 @@ Seb labels NWS values as forecasts.
 
 Each client returns an exact source name and HTTP status when possible.
 
+Each client validates source records before it saves or returns them.
+
+Each client stops a response when it exceeds its configured byte limit.
+
+The nflverse client limits compressed and expanded data separately.
+
 Each client makes at most three attempts for a temporary failure.
 
 The retry delay uses exponential backoff with full jitter.
@@ -248,7 +254,7 @@ Seb never replaces a failed data request with model memory.
 
 Seb returns an unavailable result when a kickoff falls outside the forecast window.
 
-The doctor checks the three direct public data source families.
+The doctor checks the three direct public data source families without cache data.
 
 A grounded news request separately checks Gemini Search access.
 

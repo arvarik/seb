@@ -1,6 +1,11 @@
 import { dirname, resolve } from 'node:path';
 
 import { CachedResource, type ResourcePolicy } from '../data/cached-resource.js';
+import {
+  readResponseJson,
+  readResponseText,
+  ResponseBodyLimitError,
+} from '../data/response-body.js';
 import { ResilientFetch, type RequestPolicy } from '../data/resilient-fetch.js';
 import { getSharedSebDatabase, type SebDatabase } from '../data/sqlite-store.js';
 
@@ -17,11 +22,26 @@ import type {
   SleeperUser,
 } from './types.js';
 import type { SourceObserver } from '../sources.js';
+import { z } from 'zod';
+import {
+  sleeperLeagueListSchema,
+  sleeperLeagueSchema,
+  sleeperMatchupListSchema,
+  sleeperNflStateSchema,
+  sleeperPlayerMapSchema,
+  sleeperRosterListSchema,
+  sleeperTransactionListSchema,
+  sleeperTrendingPlayerListSchema,
+  sleeperUserListSchema,
+  sleeperUserSchema,
+} from './schemas.js';
 
 const DEFAULT_BASE_URL = 'https://api.sleeper.app/v1';
 const MINUTE_MS = 60 * 1_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
+const MAX_JSON_BYTES = 32 * 1024 * 1024;
+const MAX_ERROR_BYTES = 4 * 1024;
 
 type Fetch = typeof globalThis.fetch;
 
@@ -83,29 +103,30 @@ export class SleeperClient {
   }
 
   getNflState(): Promise<SleeperNflState> {
-    return this.get('/state/nfl');
+    return this.get('/state/nfl', sleeperNflStateSchema);
   }
 
   getUser(identifier: string): Promise<SleeperUser> {
-    return this.get(`/user/${encodeURIComponent(identifier)}`);
+    return this.get(`/user/${encodeURIComponent(identifier)}`, sleeperUserSchema);
   }
 
   getUserLeagues(userId: string, season: string): Promise<SleeperLeague[]> {
     return this.get(
       `/user/${encodeURIComponent(userId)}/leagues/nfl/${encodeURIComponent(season)}`,
+      sleeperLeagueListSchema,
     );
   }
 
   getLeague(leagueId: string): Promise<SleeperLeague> {
-    return this.get(`/league/${encodeURIComponent(leagueId)}`);
+    return this.get(`/league/${encodeURIComponent(leagueId)}`, sleeperLeagueSchema);
   }
 
   getLeagueUsers(leagueId: string): Promise<SleeperUser[]> {
-    return this.get(`/league/${encodeURIComponent(leagueId)}/users`);
+    return this.get(`/league/${encodeURIComponent(leagueId)}/users`, sleeperUserListSchema);
   }
 
   getLeagueRosters(leagueId: string): Promise<SleeperRoster[]> {
-    return this.get(`/league/${encodeURIComponent(leagueId)}/rosters`);
+    return this.get(`/league/${encodeURIComponent(leagueId)}/rosters`, sleeperRosterListSchema);
   }
 
   getLeagueMatchups(
@@ -114,6 +135,7 @@ export class SleeperClient {
   ): Promise<SleeperMatchup[]> {
     return this.get(
       `/league/${encodeURIComponent(leagueId)}/matchups/${validateWeek(week)}`,
+      sleeperMatchupListSchema,
     );
   }
 
@@ -123,12 +145,13 @@ export class SleeperClient {
   ): Promise<SleeperTransaction[]> {
     return this.get(
       `/league/${encodeURIComponent(leagueId)}/transactions/${validateWeek(week)}`,
+      sleeperTransactionListSchema,
     );
   }
 
   async getPlayers(filters: PlayerFilters = {}): Promise<SleeperPlayerMap> {
     const hasFilters = filters.active !== undefined || filters.position !== undefined;
-    return this.get<SleeperPlayerMap>('/players/nfl', {
+    return this.get('/players/nfl', sleeperPlayerMapSchema, {
       active: filters.active,
       position: filters.position?.toUpperCase(),
     }, hasFilters ? sleeperPolicy('players-filtered') : sleeperPolicy('players'));
@@ -163,7 +186,7 @@ export class SleeperClient {
     lookbackHours = 24,
     limit = 25,
   ): Promise<SleeperTrendingPlayer[]> {
-    return this.get('/players/nfl/trending/' + type, {
+    return this.get('/players/nfl/trending/' + type, sleeperTrendingPlayerListSchema, {
       lookback_hours: Math.min(Math.max(lookbackHours, 1), 168),
       limit: Math.min(Math.max(limit, 1), 50),
     });
@@ -186,13 +209,14 @@ export class SleeperClient {
   }
 
   async clearCache(): Promise<void> {
-    this.database && this.database.deleteCache('sleeper');
+    if (this.database) this.database.deleteCache('sleeper');
   }
 
   private async get<T>(
     path: string,
+    schema: z.ZodType<T>,
     query: Record<string, string | number | boolean | undefined> = {},
-    policy = sleeperPolicy(path),
+    policy: ResourcePolicy<T> = sleeperPolicy(path),
   ): Promise<T> {
     const url = new URL(this.baseUrl + path);
     for (const [name, value] of Object.entries(query)) {
@@ -206,7 +230,7 @@ export class SleeperClient {
       'sleeper',
       url.href,
       url.href,
-      policy,
+      { ...policy, validate: (value) => schema.parse(value) },
     );
     const result = await resource.read(async (conditional) => {
       let response: Response;
@@ -225,7 +249,7 @@ export class SleeperClient {
         return { notModified: true };
       }
       if (!response.ok) {
-        const body = (await response.text()).slice(0, 300);
+        const body = (await readResponseText(response, MAX_ERROR_BYTES)).slice(0, 300);
         throw new SleeperApiError(
           `Sleeper returned HTTP ${response.status}.${body ? ` Response: ${body}` : ''}`,
           response.status,
@@ -236,15 +260,19 @@ export class SleeperClient {
         return {
           etag: response.headers.get('etag'),
           lastModified: response.headers.get('last-modified'),
-          value: (await response.json()) as T,
+          value: await readResponseJson(response, MAX_JSON_BYTES),
         };
-      } catch {
+      } catch (error) {
+        if (error instanceof ResponseBodyLimitError) {
+          throw new SleeperApiError(error.message, response.status, url.href);
+        }
         throw new SleeperApiError('Sleeper returned invalid JSON.', response.status, url.href);
       }
     });
     this.onSource?.({
       cacheOutcome: result.outcome,
       ...(result.error ? { error: result.error } : {}),
+      ...(result.warnings ? { warnings: result.warnings } : {}),
       id: `sleeper-${path.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}`,
       label: 'Sleeper read-only API',
       retrievedAt: result.cache.cachedAt,
@@ -254,10 +282,10 @@ export class SleeperClient {
   }
 }
 
-function sleeperPolicy(resource: string): ResourcePolicy {
+function sleeperPolicy<T>(resource: string): ResourcePolicy<T> {
   if (resource === 'players') {
     return {
-      schemaVersion: 'sleeper-v1',
+      schemaVersion: 'sleeper-v2',
       snapshotKind: 'sleeper-players',
       snapshotRetention: 8,
       staleIfErrorMs: 7 * DAY_MS,
@@ -266,15 +294,16 @@ function sleeperPolicy(resource: string): ResourcePolicy {
   }
   if (resource.includes('trending') || resource === 'players-filtered') {
     return {
-      schemaVersion: 'sleeper-v1',
+      schemaVersion: 'sleeper-v2',
       staleIfErrorMs: 10 * MINUTE_MS,
       ttlMs: MINUTE_MS,
     };
   }
   const isHistorical = resource.includes('/matchups/') || resource.includes('/transactions/');
   return {
-    schemaVersion: 'sleeper-v1',
+    schemaVersion: 'sleeper-v2',
     snapshotKind: isHistorical ? 'sleeper-league-week' : 'sleeper-resource',
+    snapshotRetention: isHistorical ? 16 : 8,
     staleIfErrorMs: isHistorical ? DAY_MS : HOUR_MS,
     ttlMs: isHistorical ? 2 * MINUTE_MS : 5 * MINUTE_MS,
   };

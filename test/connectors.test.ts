@@ -8,12 +8,15 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   registerConnectorHandlers,
+  ModelResponseError,
   withWebSources,
   type ConnectorRuntime,
 } from '../src/connectors/bot.js';
 import { readConnectorConfig } from '../src/connectors/config.js';
+import { SourceTracker } from '../src/sources.js';
 import {
   createConnectorApp,
+  BackgroundTasks,
   type BackgroundTaskRegistry,
 } from '../src/connectors/server.js';
 
@@ -27,8 +30,25 @@ describe('connector configuration', () => {
     });
 
     expect(config.enabled).toEqual(['discord', 'telegram']);
+    expect(config.webhookConnectors).toEqual(['discord']);
     expect(config.discordGateway).toBe(true);
     expect(config.port).toBe(3000);
+  });
+
+  it('requires a secret for explicit Telegram webhook mode', () => {
+    expect(() => readConnectorConfig({
+      SEB_CONNECTORS: 'telegram',
+      SEB_TELEGRAM_MODE: 'webhook',
+      TELEGRAM_BOT_TOKEN: 'telegram-token',
+    })).toThrow('TELEGRAM_WEBHOOK_SECRET_TOKEN');
+
+    const config = readConnectorConfig({
+      SEB_CONNECTORS: 'telegram',
+      SEB_TELEGRAM_MODE: 'webhook',
+      TELEGRAM_BOT_TOKEN: 'telegram-token',
+      TELEGRAM_WEBHOOK_SECRET_TOKEN: 'secret',
+    });
+    expect(config.webhookConnectors).toEqual(['telegram']);
   });
 
   it('reports a missing explicit Slack credential', () => {
@@ -123,6 +143,45 @@ describe('connector web sources', () => {
     );
     expect(output).not.toContain('file:///tmp/unsafe');
   });
+
+  it('appends direct data sources with freshness details', async () => {
+    const direct = new SourceTracker();
+    direct.record({
+      cacheOutcome: 'cache-fresh',
+      id: 'sleeper-state',
+      label: 'Sleeper API',
+      retrievedAt: '2026-08-20T12:00:00.000Z',
+      url: 'https://api.sleeper.app/v1/state/nfl',
+    });
+    const stream = (async function* () {
+      yield { type: 'text-delta', text: 'Current state.' };
+    })();
+    let output = '';
+
+    for await (const part of withWebSources(stream, direct)) {
+      if (typeof part === 'string') output += part;
+    }
+
+    expect(output).toContain('**Data sources**');
+    expect(output).toContain('Sleeper API');
+    expect(output).toContain('cache fresh');
+  });
+
+  it('marks a model error and records whether text already streamed', async () => {
+    const stream = (async function* () {
+      yield { type: 'text-delta', text: 'Partial answer.' };
+      yield { type: 'error', error: { statusCode: 503 } };
+    })();
+
+    await expect(async () => {
+      for await (const _part of withWebSources(stream)) {
+        // Consume the wrapped response.
+      }
+    }).rejects.toMatchObject({
+      emittedOutput: true,
+      name: 'ModelResponseError',
+    } satisfies Partial<ModelResponseError>);
+  });
 });
 
 describe('connector HTTP service', () => {
@@ -143,12 +202,14 @@ describe('connector HTTP service', () => {
         port: 3000,
         slackMode: 'webhook',
         telegramMode: 'auto',
+        webhookConnectors: ['slack'],
       },
       stateKind: 'memory',
     };
     const background: BackgroundTaskRegistry = {
       add: vi.fn(),
       count: () => 0,
+      drain: vi.fn().mockResolvedValue(true),
     };
     const app = createConnectorApp(runtime, background);
 
@@ -163,5 +224,62 @@ describe('connector HTTP service', () => {
     expect(webhook.status).toBe(200);
     expect(adapter.handleWebhook).toHaveBeenCalledOnce();
     await bot.shutdown();
+  });
+
+  it('does not expose the Telegram webhook during polling', async () => {
+    const adapter = createMockAdapter('telegram');
+    const bot = new Chat({
+      adapters: { telegram: adapter },
+      state: createMockState(),
+      userName: 'seb',
+    });
+    const runtime: ConnectorRuntime = {
+      bot,
+      config: {
+        botName: 'seb',
+        discordGateway: false,
+        enabled: ['telegram'],
+        host: '127.0.0.1',
+        port: 3000,
+        slackMode: 'webhook',
+        telegramMode: 'polling',
+        webhookConnectors: [],
+      },
+      stateKind: 'memory',
+    };
+    const app = createConnectorApp(runtime, {
+      add: vi.fn(),
+      count: () => 0,
+      drain: vi.fn().mockResolvedValue(true),
+    });
+
+    const response = await app.request('/webhooks/telegram', { method: 'POST' });
+
+    expect(response.status).toBe(404);
+    expect(adapter.handleWebhook).not.toHaveBeenCalled();
+  });
+});
+
+describe('connector background tasks', () => {
+  it('waits for active tasks during shutdown', async () => {
+    const background = new BackgroundTasks();
+    let finish: (() => void) | undefined;
+    background.add(new Promise<void>((resolve) => {
+      finish = resolve;
+    }));
+
+    const drained = background.drain(1_000);
+    expect(background.count()).toBe(1);
+    finish?.();
+
+    await expect(drained).resolves.toBe(true);
+    expect(background.count()).toBe(0);
+  });
+
+  it('reports a shutdown deadline when a task does not finish', async () => {
+    const background = new BackgroundTasks();
+    background.add(new Promise(() => {}));
+
+    await expect(background.drain(5)).resolves.toBe(false);
   });
 });

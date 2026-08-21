@@ -6,7 +6,40 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-08-20
+
+### Added
+
+- The cache command now reports byte sizes and prunes expired or old records.
+- Text and connector answers now list direct data sources with freshness details.
+- CI now runs linting, type checks, tests, coverage checks, and a production dependency audit.
+- The test suite now enforces global coverage thresholds.
+
+### Changed
+
+- Source clients now validate remote records before they save or return data.
+- Source clients now stop downloads that exceed bounded response sizes.
+- nflverse now decompresses and parses source files without synchronous gzip work.
+- Snapshot listings now query metadata without loading payload or provenance JSON.
+- Snapshot retention now uses source-specific limits and a 512 MiB global limit.
+- Live doctor checks now bypass the local source cache.
+- The connector service now drains background work with a shutdown deadline.
+- Weekly weather analysis now reuses the schedule rows that it already loaded.
+
+### Security
+
+- The terminal now removes untrusted control sequences before it renders text.
+- Telegram webhook mode now requires a secret and polling mode exposes no webhook route.
+- Seb now reapplies private permissions to the local cache directory.
+- Doctor now reports unsafe environment and cache permissions.
+
 ### Fixed
+
+- Connector platform errors no longer start an incorrect Gemini fallback request.
+- The `/new` and `/clear` commands now remove their confirmation from the next model context.
+- Cache and snapshot write failures now appear as source warnings.
+- Snapshot reads now verify both payload and provenance checksums.
+- The user agent now reads the current package version.
 
 - The terminal now renders emphasis, strong emphasis, strikethrough, escapes, nested inline styles, code spans, and image labels without visible Markdown markers.
 - Headings and wrapped long words now keep their inline terminal styles.

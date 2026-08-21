@@ -1,16 +1,24 @@
-import { gunzipSync } from 'node:zlib';
 import { resolve } from 'node:path';
+import { Readable } from 'node:stream';
+import { setImmediate } from 'node:timers/promises';
+import { gunzip } from 'node:zlib';
 
-import { parse } from 'csv-parse/sync';
+import { parse } from 'csv-parse';
 
 import {
   CachedResource,
   type ResourceLoadContext,
   type ResourceResult,
 } from '../data/cached-resource.js';
+import { readResponseBytes, readResponseText } from '../data/response-body.js';
 import { ResilientFetch, type RequestPolicy } from '../data/resilient-fetch.js';
 import { getSharedSebDatabase, type SebDatabase } from '../data/sqlite-store.js';
 import type { SourceObserver } from '../sources.js';
+import { SEB_USER_AGENT } from '../version.js';
+import {
+  nflversePlayerStatsSchema,
+  nflverseScheduleSchema,
+} from './schemas.js';
 import type {
   NflverseGame,
   NflversePlayerStatFilters,
@@ -22,13 +30,51 @@ const DEFAULT_BASE_URL =
   'https://github.com/nflverse/nflverse-data/releases/download';
 const SCHEDULE_URL = `${DEFAULT_BASE_URL}/schedules/games.csv.gz`;
 const MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024;
-const CACHE_SCHEMA_VERSION = 'v1';
+const MAX_EXPANDED_BYTES = 128 * 1024 * 1024;
+const MAX_ERROR_BYTES = 4 * 1024;
+const CACHE_SCHEMA_VERSION = 'v2';
 const SCHEDULE_TTL_MS = 6 * 60 * 60 * 1_000;
 const STATS_TTL_MS = 6 * 60 * 60 * 1_000;
 const STALE_IF_ERROR_MS = 7 * 24 * 60 * 60 * 1_000;
 
 type Fetch = typeof globalThis.fetch;
 type CsvRow = Record<string, string>;
+
+const SCHEDULE_REQUIRED_COLUMNS = [
+  'game_id',
+  'season',
+  'game_type',
+  'week',
+  'gameday',
+  'away_team',
+  'home_team',
+] as const;
+const PLAYER_REQUIRED_COLUMNS = [
+  'player_id',
+  'player_display_name',
+  'position',
+  'season',
+  'week',
+  'season_type',
+  'game_id',
+  'team',
+  'opponent_team',
+  'completions',
+  'attempts',
+  'passing_yards',
+  'passing_tds',
+  'passing_interceptions',
+  'carries',
+  'rushing_yards',
+  'rushing_tds',
+  'receptions',
+  'targets',
+  'receiving_yards',
+  'receiving_tds',
+  'receiving_air_yards',
+  'fantasy_points',
+  'fantasy_points_ppr',
+] as const;
 
 export interface NflverseClientOptions {
   baseUrl?: string;
@@ -152,7 +198,7 @@ export class NflverseClient {
     try {
       const headers = new Headers({
           accept: 'application/gzip, text/csv;q=0.9, */*;q=0.1',
-          'user-agent': 'seb/0.0.2 (+https://github.com/arvarik/seb)',
+          'user-agent': SEB_USER_AGENT,
       });
       if (conditional.etag) headers.set('if-none-match', conditional.etag);
       if (conditional.lastModified) headers.set('if-modified-since', conditional.lastModified);
@@ -173,7 +219,7 @@ export class NflverseClient {
     }
 
     if (!response.ok) {
-      const detail = (await response.text()).slice(0, 300);
+      const detail = (await readResponseText(response, MAX_ERROR_BYTES)).slice(0, 300);
       throw new NflverseApiError(
         `nflverse returned HTTP ${response.status}.${detail ? ` Response: ${detail}` : ''}`,
         response.status,
@@ -181,25 +227,19 @@ export class NflverseClient {
       );
     }
 
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.byteLength > MAX_DOWNLOAD_BYTES) {
-      throw new NflverseApiError(
-        `The nflverse file exceeds ${MAX_DOWNLOAD_BYTES} bytes.`,
-        response.status,
-        url,
-      );
-    }
-
     try {
-      const text = url.endsWith('.gz') ? gunzipSync(bytes).toString('utf8') : bytes.toString('utf8');
+      const bytes = await readResponseBytes(response, MAX_DOWNLOAD_BYTES);
+      const expanded = url.endsWith('.gz')
+        ? await gunzipBytes(bytes, MAX_EXPANDED_BYTES)
+        : bytes;
+      if (expanded.byteLength > MAX_EXPANDED_BYTES) {
+        throw new Error(`The expanded nflverse file exceeds ${MAX_EXPANDED_BYTES} bytes.`);
+      }
+      const rows = await parseCsv(expanded.toString('utf8'));
       return {
         etag: response.headers.get('etag'),
         lastModified: response.headers.get('last-modified'),
-        rows: parse(text, {
-        bom: true,
-        columns: true,
-        skip_empty_lines: true,
-        }) as CsvRow[],
+        rows,
       };
     } catch (error) {
       throw new NflverseApiError(
@@ -223,6 +263,7 @@ export class NflverseClient {
           snapshotRetention: 8,
           staleIfErrorMs: STALE_IF_ERROR_MS,
           ttlMs: SCHEDULE_TTL_MS,
+          validate: (value) => nflverseScheduleSchema.parse(value),
         },
       );
       this.scheduleRequest = resource.read(async (conditional) => {
@@ -232,7 +273,7 @@ export class NflverseClient {
           etag: downloaded.etag,
           lastModified: downloaded.lastModified,
           sourceTimestamp: downloaded.lastModified,
-          value: downloaded.rows.map(parseGame).filter((game) => game.gameId.length > 0),
+          value: parseGames(downloaded.rows),
         };
       }).finally(() => {
         this.scheduleRequest = undefined;
@@ -261,6 +302,7 @@ export class NflverseClient {
         snapshotRetention: 4,
         staleIfErrorMs: STALE_IF_ERROR_MS,
         ttlMs: STATS_TTL_MS,
+        validate: (value) => nflversePlayerStatsSchema.parse(value),
       },
     );
     const request = resource.read(async (conditional) => {
@@ -270,9 +312,7 @@ export class NflverseClient {
         etag: downloaded.etag,
         lastModified: downloaded.lastModified,
         sourceTimestamp: downloaded.lastModified,
-        value: downloaded.rows
-          .map(parsePlayerWeek)
-          .filter((row) => row.playerId.length > 0),
+        value: parsePlayerWeeks(downloaded.rows),
       };
     }).finally(() => {
       this.statsRequests.delete(season);
@@ -290,6 +330,7 @@ export class NflverseClient {
     this.onSource?.({
       cacheOutcome: loaded.outcome,
       ...(loaded.error ? { error: loaded.error } : {}),
+      ...(loaded.warnings ? { warnings: loaded.warnings } : {}),
       id,
       label,
       retrievedAt: loaded.cache.cachedAt,
@@ -307,15 +348,15 @@ function matchesGameType(actual: string, requested: string): boolean {
 
 function parseGame(row: CsvRow): NflverseGame {
   return {
-    gameId: row.game_id ?? '',
-    season: integer(row.season),
-    gameType: row.game_type ?? '',
-    week: integer(row.week),
-    gameDate: row.gameday ?? '',
+    gameId: requiredText(row.game_id, 'game_id'),
+    season: integer(row.season, 'season'),
+    gameType: requiredText(row.game_type, 'game_type'),
+    week: integer(row.week, 'week'),
+    gameDate: requiredText(row.gameday, 'gameday'),
     gameTime: nullableText(row.gametime),
-    awayTeam: row.away_team ?? '',
+    awayTeam: requiredText(row.away_team, 'away_team'),
     awayScore: nullableNumber(row.away_score),
-    homeTeam: row.home_team ?? '',
+    homeTeam: requiredText(row.home_team, 'home_team'),
     homeScore: nullableNumber(row.home_score),
     location: nullableText(row.location),
     awayRest: nullableNumber(row.away_rest),
@@ -333,32 +374,32 @@ function parseGame(row: CsvRow): NflverseGame {
 
 function parsePlayerWeek(row: CsvRow): NflversePlayerWeek {
   return {
-    playerId: row.player_id ?? '',
-    playerDisplayName: row.player_display_name ?? row.player_name ?? '',
-    position: row.position ?? '',
-    season: integer(row.season),
-    week: integer(row.week),
-    seasonType: row.season_type ?? '',
-    gameId: row.game_id ?? '',
-    team: row.team ?? '',
-    opponentTeam: row.opponent_team ?? '',
-    completions: number(row.completions),
-    attempts: number(row.attempts),
-    passingYards: number(row.passing_yards),
-    passingTouchdowns: number(row.passing_tds),
-    interceptions: number(row.passing_interceptions),
-    carries: number(row.carries),
-    rushingYards: number(row.rushing_yards),
-    rushingTouchdowns: number(row.rushing_tds),
-    receptions: number(row.receptions),
-    targets: number(row.targets),
-    receivingYards: number(row.receiving_yards),
-    receivingTouchdowns: number(row.receiving_tds),
-    receivingAirYards: number(row.receiving_air_yards),
+    playerId: requiredText(row.player_id, 'player_id'),
+    playerDisplayName: requiredText(row.player_display_name ?? row.player_name, 'player_display_name'),
+    position: requiredText(row.position, 'position'),
+    season: integer(row.season, 'season'),
+    week: integer(row.week, 'week'),
+    seasonType: requiredText(row.season_type, 'season_type'),
+    gameId: requiredText(row.game_id, 'game_id'),
+    team: requiredText(row.team, 'team'),
+    opponentTeam: requiredText(row.opponent_team, 'opponent_team'),
+    completions: number(row.completions, 'completions'),
+    attempts: number(row.attempts, 'attempts'),
+    passingYards: number(row.passing_yards, 'passing_yards'),
+    passingTouchdowns: number(row.passing_tds, 'passing_tds'),
+    interceptions: number(row.passing_interceptions, 'passing_interceptions'),
+    carries: number(row.carries, 'carries'),
+    rushingYards: number(row.rushing_yards, 'rushing_yards'),
+    rushingTouchdowns: number(row.rushing_tds, 'rushing_tds'),
+    receptions: number(row.receptions, 'receptions'),
+    targets: number(row.targets, 'targets'),
+    receivingYards: number(row.receiving_yards, 'receiving_yards'),
+    receivingTouchdowns: number(row.receiving_tds, 'receiving_tds'),
+    receivingAirYards: number(row.receiving_air_yards, 'receiving_air_yards'),
     targetShare: nullableNumber(row.target_share),
     airYardsShare: nullableNumber(row.air_yards_share),
-    fantasyPoints: number(row.fantasy_points),
-    fantasyPointsPpr: number(row.fantasy_points_ppr),
+    fantasyPoints: number(row.fantasy_points, 'fantasy_points'),
+    fantasyPointsPpr: number(row.fantasy_points_ppr, 'fantasy_points_ppr'),
   };
 }
 
@@ -368,13 +409,85 @@ function validateSeason(season: number): void {
   }
 }
 
-function integer(value: string | undefined): number {
-  return Math.trunc(number(value));
+function integer(value: string | undefined, field: string): number {
+  const parsed = number(value, field, false);
+  if (!Number.isInteger(parsed)) {
+    throw new TypeError(`The nflverse ${field} value must be an integer.`);
+  }
+  return parsed;
 }
 
-function number(value: string | undefined): number {
-  const parsed = Number(value ?? '');
-  return Number.isFinite(parsed) ? parsed : 0;
+function number(value: string | undefined, field: string, allowBlank = true): number {
+  if (value === undefined) {
+    throw new TypeError(`The nflverse file has no ${field} column.`);
+  }
+  if (value.trim() === '' && allowBlank) return 0;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new TypeError(`The nflverse ${field} value is not a finite number.`);
+  }
+  return parsed;
+}
+
+function requiredText(value: string | undefined, field: string): string {
+  const normalized = value?.trim();
+  if (!normalized) {
+    throw new TypeError(`The nflverse ${field} value is required.`);
+  }
+  return normalized;
+}
+
+function parseGames(rows: CsvRow[]): NflverseGame[] {
+  if (rows.length === 0) throw new TypeError('The nflverse schedule has no rows.');
+  requireColumns(rows[0] as CsvRow, SCHEDULE_REQUIRED_COLUMNS);
+  return nflverseScheduleSchema.parse(rows.map(parseGame));
+}
+
+function parsePlayerWeeks(rows: CsvRow[]): NflversePlayerWeek[] {
+  if (rows.length === 0) throw new TypeError('The nflverse player file has no rows.');
+  requireColumns(rows[0] as CsvRow, PLAYER_REQUIRED_COLUMNS);
+  const playerRows = rows.filter((row) => Boolean(row.player_id?.trim()));
+  if (playerRows.length === 0) {
+    throw new TypeError('The nflverse player file has no player rows.');
+  }
+  return nflversePlayerStatsSchema.parse(playerRows.map(parsePlayerWeek));
+}
+
+function requireColumns(row: CsvRow, columns: readonly string[]): void {
+  const missing = columns.filter((column) => !(column in row));
+  if (missing.length > 0) {
+    throw new TypeError(`The nflverse file has no ${missing.join(', ')} column.`);
+  }
+}
+
+async function parseCsv(text: string): Promise<CsvRow[]> {
+  const parser = Readable.from(csvChunks(text)).pipe(parse({
+    bom: true,
+    columns: true,
+    skip_empty_lines: true,
+  }));
+  const rows: CsvRow[] = [];
+  for await (const row of parser) {
+    rows.push(row as CsvRow);
+  }
+  return rows;
+}
+
+async function* csvChunks(text: string): AsyncGenerator<string> {
+  const chunkSize = 64 * 1024;
+  for (let index = 0; index < text.length; index += chunkSize) {
+    yield text.slice(index, index + chunkSize);
+    await setImmediate();
+  }
+}
+
+async function gunzipBytes(bytes: Buffer, maximumBytes: number): Promise<Buffer> {
+  return await new Promise<Buffer>((resolve, reject) => {
+    gunzip(bytes, { maxOutputLength: maximumBytes }, (error, result) => {
+      if (error) reject(error);
+      else resolve(result);
+    });
+  });
 }
 
 function nullableNumber(value: string | undefined): number | null {
@@ -382,7 +495,10 @@ function nullableNumber(value: string | undefined): number | null {
     return null;
   }
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  if (!Number.isFinite(parsed)) {
+    throw new TypeError('The nflverse file contains an invalid optional number.');
+  }
+  return parsed;
 }
 
 function nullableText(value: string | undefined): string | null {

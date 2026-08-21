@@ -12,7 +12,7 @@ Run this command to confirm the active file.
 seb cache status
 ```
 
-The command also shows the schema version and record counts.
+The command also shows the schema version, byte sizes, and record counts.
 
 The counts cover caches, snapshots, canonical identities, and source links.
 
@@ -22,7 +22,7 @@ JSON output uses `identities` and `identityLinks` for those counts.
 
 ## File security
 
-Seb creates the `.cache` directory with mode `0700` on systems that support Unix permissions.
+Seb applies mode `0700` to the `.cache` directory on systems that support Unix permissions.
 
 Seb creates the database with mode `0600`.
 
@@ -44,11 +44,13 @@ Seb uses these SQLite settings.
 
 Seb applies numbered schema migrations when it opens the database.
 
-Version `0.0.6` uses database schema `2`.
+Version `0.0.7` uses database schema `3`.
 
-Schema `2` adds canonical identities and provider source links.
+Schema `3` adds a checksum for each provenance manifest.
 
-Seb upgrades a schema `1` database inside one transaction.
+Schema `2` added canonical identities and provider source links.
+
+Seb upgrades older database schemas with numbered transactions.
 
 Seb stops when the database schema is newer than the application.
 
@@ -161,8 +163,13 @@ Each snapshot stores these values.
 - The field-level provenance manifest.
 - The source schema version.
 - A SHA-256 payload checksum.
+- A SHA-256 provenance checksum.
 
 One snapshot cannot exceed 32 MiB.
+
+One provenance manifest cannot exceed 32 MiB.
+
+Seb keeps total snapshot payload and provenance data under 512 MiB.
 
 Seb retains eight Sleeper player snapshots for the player catalog.
 
@@ -170,7 +177,11 @@ Seb retains eight nflverse schedule snapshots for the schedule key.
 
 Seb retains four nflverse statistics snapshots for each season key.
 
-Other snapshot streams retain up to 64 records for each kind and entity key.
+Other Sleeper streams retain eight or sixteen records for each key.
+
+NWS point streams retain eight records for each key.
+
+NWS forecast and alert streams retain sixteen records for each key.
 
 Snapshot creation errors do not hide a valid source response.
 
@@ -204,6 +215,19 @@ seb cache status
 seb cache status --json
 ```
 
+Prune expired cache rows and old snapshots.
+
+```bash
+seb cache prune
+seb cache prune --max-size-mb 256 --max-age-days 90 --retain 8
+```
+
+The default prune keeps sixteen snapshots per source key for 180 days.
+
+The default snapshot size limit is 512 MiB.
+
+The prune command checkpoints SQLite and runs `VACUUM`.
+
 Clear source caches while you preserve every snapshot.
 
 ```bash
@@ -229,7 +253,7 @@ Version `0.0.1` stored the Sleeper player catalog in `.cache/sleeper/players-nfl
 
 Some development builds stored other source values as JSON files under `.cache/`.
 
-Version `0.0.6` does not import those JSON files.
+Version `0.0.7` does not import those JSON files.
 
 It creates `.cache/seb.sqlite` and downloads each source again when necessary.
 
@@ -261,7 +285,7 @@ Use this migration sequence.
 
 5. Remove only the old Seb JSON files after you inspect the list.
 
-The old JSON files do not affect version `0.0.6` reads.
+The old JSON files do not affect version `0.0.7` reads.
 
 Do not delete `.cache/seb.sqlite` when you need the stored snapshots.
 

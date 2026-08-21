@@ -22,10 +22,21 @@ describe('source client resilience', () => {
       cachedAt: new Date(Date.now() - 10 * 60 * 1_000).toISOString(),
       key: url,
       namespace: 'sleeper',
-      schemaVersion: 'sleeper-v1',
+      schemaVersion: 'sleeper-v2',
       staleIfErrorMs: 60 * 60 * 1_000,
       ttlMs: 5 * 60 * 1_000,
-      value: { league_id: '123', name: 'Reliable League' },
+      value: {
+        league_id: '123',
+        name: 'Reliable League',
+        roster_positions: [],
+        scoring_settings: {},
+        season: '2026',
+        season_type: 'regular',
+        settings: {},
+        sport: 'nfl',
+        status: 'in_season',
+        total_rosters: 12,
+      },
     });
     const sources = new SourceTracker();
     const client = new SleeperClient({

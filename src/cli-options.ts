@@ -3,7 +3,14 @@ export type CliCommand =
   | { name: 'version' }
   | { name: 'setup'; username?: string }
   | { name: 'completion'; shell: 'bash' | 'fish' | 'zsh' }
-  | { name: 'cache'; action: 'clear' | 'status'; json: boolean }
+  | {
+      name: 'cache';
+      action: 'clear' | 'prune' | 'status';
+      json: boolean;
+      maxBytes?: number;
+      snapshotMaxAgeDays?: number;
+      snapshotRetention?: number;
+    }
   | {
       name: 'snapshots';
       entityKey?: string;
@@ -46,7 +53,7 @@ Usage:
   seb doctor [--offline] [--json]
   seb setup [SLEEPER_USERNAME]
   seb completion bash|fish|zsh
-  seb cache [status|clear] [--json]
+  seb cache [status|clear|prune] [--max-size-mb N] [--max-age-days N] [--retain N] [--json]
   seb snapshots [--kind KIND] [--entity KEY] [--id ID] [--limit N] [--json]
   seb replay --season YEAR [--through-week N] [--position POSITIONS] [--output FILE] [--json]
 
@@ -186,20 +193,43 @@ function parseCompletionArguments(arguments_: readonly string[]): CliCommand {
 }
 
 function parseCacheArguments(arguments_: readonly string[]): CliCommand {
-  let action: 'clear' | 'status' = 'status';
+  let action: 'clear' | 'prune' | 'status' = 'status';
   let json = false;
-  for (const argument of arguments_) {
+  let maxBytes: number | undefined;
+  let snapshotMaxAgeDays: number | undefined;
+  let snapshotRetention: number | undefined;
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index];
     if (argument === '--json') {
       json = true;
-    } else if (argument === 'status' || argument === 'clear') {
+    } else if (argument === 'status' || argument === 'clear' || argument === 'prune') {
       action = argument;
+    } else if (['--max-size-mb', '--max-age-days', '--retain'].includes(argument ?? '')) {
+      const value = Number(readOptionValue(arguments_, index, argument ?? ''));
+      index += 1;
+      if (!Number.isSafeInteger(value) || value < 1) {
+        throw new CliUsageError(`${argument} must contain a positive integer.`);
+      }
+      if (argument === '--max-size-mb') maxBytes = value * 1024 * 1024;
+      if (argument === '--max-age-days') snapshotMaxAgeDays = value;
+      if (argument === '--retain') snapshotRetention = value;
     } else if (argument === '--help' || argument === '-h') {
       return { name: 'help' };
     } else {
       throw new CliUsageError(`Unknown cache option: ${argument}`);
     }
   }
-  return { name: 'cache', action, json };
+  if (action !== 'prune' && [maxBytes, snapshotMaxAgeDays, snapshotRetention].some((value) => value !== undefined)) {
+    throw new CliUsageError('Cache pruning options require `seb cache prune`.');
+  }
+  return {
+    name: 'cache',
+    action,
+    json,
+    ...(maxBytes === undefined ? {} : { maxBytes }),
+    ...(snapshotMaxAgeDays === undefined ? {} : { snapshotMaxAgeDays }),
+    ...(snapshotRetention === undefined ? {} : { snapshotRetention }),
+  };
 }
 
 function parseSnapshotArguments(arguments_: readonly string[]): CliCommand {

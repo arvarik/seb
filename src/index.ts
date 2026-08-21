@@ -82,6 +82,9 @@ export {
   type IdentityRecord,
   type IdentityWrite,
   type SnapshotRecord,
+  type SnapshotMetadata,
+  type DatabaseStatus,
+  type StoragePruneResult,
   type SnapshotWrite,
 } from './data/sqlite-store.js';
 export {

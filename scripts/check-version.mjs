@@ -4,6 +4,8 @@ const projectUrl = new URL('../', import.meta.url);
 const packageJson = await readJson(new URL('package.json', projectUrl));
 const packageLock = await readJson(new URL('package-lock.json', projectUrl));
 const changelog = await readFile(new URL('CHANGELOG.md', projectUrl), 'utf8');
+const environmentExample = await readFile(new URL('.env.example', projectUrl), 'utf8');
+const versionGuide = await readFile(new URL('docs/VERSIONING.md', projectUrl), 'utf8');
 const version = packageJson.version;
 const errors = [];
 
@@ -18,6 +20,12 @@ if (packageLock.packages?.['']?.version !== version) {
 }
 if (!changelog.includes(`## [${version}] - `)) {
   errors.push(`CHANGELOG.md must contain a ${version} release heading.`);
+}
+if (!environmentExample.includes(`NWS_USER_AGENT=seb/${version} `)) {
+  errors.push('.env.example must use the package version in NWS_USER_AGENT.');
+}
+if (!versionGuide.includes(`The current version is \`${version}\`.`)) {
+  errors.push('docs/VERSIONING.md must contain the package version.');
 }
 
 if (errors.length > 0) {

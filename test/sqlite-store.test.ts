@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { chmodSync, mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
@@ -17,6 +17,17 @@ afterEach(() => {
 });
 
 describe('SebDatabase', () => {
+  it.runIf(process.platform !== 'win32')('does not change an existing custom directory mode', () => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'seb-custom-directory-'));
+    chmodSync(directory, 0o755);
+
+    const database = new SebDatabase(resolve(directory, 'seb.sqlite'));
+    databases.push(database);
+
+    expect(statSync(directory).mode & 0o777).toBe(0o755);
+    expect(statSync(database.file).mode & 0o777).toBe(0o600);
+  });
+
   it('migrates a version 1 database to the identity schema', () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'seb-sqlite-v1-'));
     const file = resolve(directory, 'seb.sqlite');
@@ -33,7 +44,7 @@ describe('SebDatabase', () => {
     const database = new SebDatabase(file);
     databases.push(database);
 
-    expect(database.status().schemaVersion).toBe(2);
+    expect(database.status().schemaVersion).toBe(3);
     expect(database.putIdentity({
       canonicalId: 'nfl-team:SEA',
       entityType: 'team',
@@ -87,6 +98,64 @@ describe('SebDatabase', () => {
     });
     expect(snapshots.map((item) => item.payload.week)).toEqual([3, 2]);
     expect(snapshots[0]?.provenance).toEqual({ source: 'nflverse' });
+    const metadata = database.listSnapshotMetadata({ kind: 'team-week' });
+    expect(metadata).toHaveLength(2);
+    expect(metadata[0]).toMatchObject({
+      payloadBytes: expect.any(Number),
+      provenanceBytes: expect.any(Number),
+      provenanceChecksum: expect.any(String),
+    });
+    expect(metadata[0]).not.toHaveProperty('payload');
+    expect(metadata[0]).not.toHaveProperty('provenance');
+  });
+
+  it('rejects snapshot provenance that fails its checksum', () => {
+    const database = createDatabase();
+    const snapshot = database.createSnapshot({
+      entityKey: 'BUF',
+      kind: 'team-week',
+      payload: { week: 1 },
+      provenance: { source: 'nflverse' },
+      schemaVersion: 'v1',
+    });
+    const external = new Database(database.file);
+    external.prepare('UPDATE snapshots SET provenance_json = ? WHERE id = ?')
+      .run('{"source":"changed"}', snapshot.id);
+    external.close();
+
+    expect(() => database.getSnapshot(snapshot.id)).toThrow('provenance checksum');
+  });
+
+  it('prunes expired cache records and old snapshot history', () => {
+    const database = createDatabase();
+    database.putCache({
+      cachedAt: '2025-01-01T00:00:00.000Z',
+      key: 'old',
+      namespace: 'test',
+      schemaVersion: 'v1',
+      staleIfErrorMs: 1,
+      ttlMs: 1,
+      value: { old: true },
+    });
+    for (let index = 0; index < 3; index += 1) {
+      database.createSnapshot({
+        asOf: `2026-08-${String(10 + index).padStart(2, '0')}T00:00:00.000Z`,
+        entityKey: 'BUF',
+        kind: 'team-week',
+        payload: { index },
+        schemaVersion: 'v1',
+      });
+    }
+
+    const result = database.pruneStorage({
+      now: new Date('2026-08-20T00:00:00.000Z'),
+      snapshotMaxAgeDays: 30,
+      snapshotRetention: 1,
+    });
+
+    expect(result.cacheEntriesRemoved).toBe(1);
+    expect(result.snapshotsRemoved).toBe(2);
+    expect(database.listSnapshotMetadata()).toHaveLength(1);
   });
 });
 
@@ -195,6 +264,43 @@ describe('CachedResource', () => {
     const result = await resource.read(async () => ({ value: { ok: true } }));
 
     expect(result).toMatchObject({ outcome: 'source-updated', value: { ok: true } });
+    expect(result.warnings).toEqual([
+      'Seb could not save the local cache: disk full',
+    ]);
+  });
+
+  it('deletes an invalid cached value before it requests the source', async () => {
+    const database = createDatabase();
+    database.putCache({
+      key: 'validated',
+      namespace: 'test',
+      schemaVersion: 'v1',
+      staleIfErrorMs: 60_000,
+      ttlMs: 60_000,
+      value: { ok: 'wrong' },
+    });
+    const resource = new CachedResource<{ ok: boolean }>(
+      database,
+      'test',
+      'validated',
+      'https://example.test/data',
+      {
+        schemaVersion: 'v1',
+        staleIfErrorMs: 60_000,
+        ttlMs: 60_000,
+        validate: (value) => {
+          if (!value || typeof value !== 'object' || typeof (value as { ok?: unknown }).ok !== 'boolean') {
+            throw new Error('invalid value');
+          }
+          return value as { ok: boolean };
+        },
+      },
+    );
+
+    const result = await resource.read(async () => ({ value: { ok: true } }));
+
+    expect(result.outcome).toBe('source-updated');
+    expect(result.value).toEqual({ ok: true });
   });
 });
 

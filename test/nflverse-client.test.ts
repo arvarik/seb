@@ -89,6 +89,42 @@ describe('NflverseClient', () => {
       client.getPlayerWeeklyStats({ season: 2026 }),
     ).rejects.toThrow('nflverse returned HTTP 404');
   });
+
+  it('rejects rows with missing required columns', async () => {
+    const client = new NflverseClient({
+      cacheDirectory: false,
+      fetch: async () => csvResponse('game_id,season\nexample,2026\n'),
+    });
+
+    await expect(client.getSchedule()).rejects.toThrow('game_type');
+  });
+
+  it('skips nflverse aggregate rows without player IDs', async () => {
+    const aggregate = statsCsv.replace(
+      '00-1,Josh Allen',
+      ',Team aggregate',
+    );
+    const client = new NflverseClient({
+      cacheDirectory: false,
+      fetch: async () => csvResponse(aggregate),
+    });
+
+    const stats = await client.getPlayerWeeklyStats({ season: 2025 });
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]?.playerId).toBe('00-2');
+  });
+
+  it('rejects compressed downloads before it reads an oversized body', async () => {
+    const client = new NflverseClient({
+      cacheDirectory: false,
+      fetch: async () => new Response('small', {
+        headers: { 'content-length': String(33 * 1024 * 1024) },
+      }),
+    });
+
+    await expect(client.getSchedule()).rejects.toThrow('exceeds');
+  });
 });
 
 function csvResponse(value: string): Response {

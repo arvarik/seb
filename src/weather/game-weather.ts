@@ -55,7 +55,10 @@ export class GameWeatherService {
     if (!game) {
       throw new GameScheduleNotFoundError(input.season, input.week, input.team);
     }
+    return this.getScheduledGameWeather(game);
+  }
 
+  async getScheduledGameWeather(game: NflverseGame): Promise<GameWeatherResult> {
     const kickoff = easternKickoff(game.gameDate, game.gameTime);
     if (isIndoor(game.roof)) {
       return baseResult(game, kickoff, {

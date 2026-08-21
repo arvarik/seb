@@ -99,6 +99,16 @@ describe('parseCliArguments', () => {
       json: true,
     });
     expect(parseCliArguments([
+      'cache', 'prune', '--max-size-mb', '256', '--max-age-days', '90', '--retain', '8',
+    ])).toEqual({
+      name: 'cache',
+      action: 'prune',
+      json: false,
+      maxBytes: 256 * 1024 * 1024,
+      snapshotMaxAgeDays: 90,
+      snapshotRetention: 8,
+    });
+    expect(parseCliArguments([
       'snapshots', '--kind', 'nws-alerts', '--entity', 'SEA', '--limit', '5', '--json',
     ])).toEqual({
       name: 'snapshots',

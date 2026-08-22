@@ -236,12 +236,14 @@ export function findSkill(value: string): SebSkill | null {
 }
 
 export function parseSkillInvocation(value: string): SebSkillInvocation | null {
-  const parts = value.trim().split(/\s+/u).filter(Boolean);
+  const trimmed = value.trim();
+  const parts = [...trimmed.matchAll(/\S+/gu)];
   for (let length = parts.length; length > 0; length -= 1) {
-    const skill = findSkill(parts.slice(0, length).join(' '));
+    const skill = findSkill(parts.slice(0, length).map((part) => part[0]).join(' '));
     if (skill) {
+      const promptStart = parts[length]?.index;
       return {
-        prompt: parts.slice(length).join(' '),
+        prompt: promptStart === undefined ? '' : trimmed.slice(promptStart),
         skill,
       };
     }

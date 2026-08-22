@@ -119,6 +119,9 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
     case 'doctor':
       return parseDoctorArguments(rest);
     case 'setup':
+      if (rest[0] === '--help' || rest[0] === '-h') {
+        return { name: 'help' };
+      }
       if (rest.length > 1) {
         throw new CliUsageError('Use seb setup [SLEEPER_USERNAME].');
       }
@@ -185,6 +188,9 @@ function parseReplayArguments(arguments_: readonly string[]): CliCommand {
 }
 
 function parseCompletionArguments(arguments_: readonly string[]): CliCommand {
+  if (arguments_[0] === '--help' || arguments_[0] === '-h') {
+    return { name: 'help' };
+  }
   const shell = arguments_[0];
   if (arguments_.length !== 1 || !['bash', 'fish', 'zsh'].includes(shell ?? '')) {
     throw new CliUsageError('Use seb completion bash, fish, or zsh.');
@@ -194,6 +200,7 @@ function parseCompletionArguments(arguments_: readonly string[]): CliCommand {
 
 function parseCacheArguments(arguments_: readonly string[]): CliCommand {
   let action: 'clear' | 'prune' | 'status' = 'status';
+  let actionWasSet = false;
   let json = false;
   let maxBytes: number | undefined;
   let snapshotMaxAgeDays: number | undefined;
@@ -203,7 +210,11 @@ function parseCacheArguments(arguments_: readonly string[]): CliCommand {
     if (argument === '--json') {
       json = true;
     } else if (argument === 'status' || argument === 'clear' || argument === 'prune') {
+      if (actionWasSet) {
+        throw new CliUsageError('Use only one cache action: status, clear, or prune.');
+      }
       action = argument;
+      actionWasSet = true;
     } else if (['--max-size-mb', '--max-age-days', '--retain'].includes(argument ?? '')) {
       const value = Number(readOptionValue(arguments_, index, argument ?? ''));
       index += 1;

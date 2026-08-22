@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   formatElapsed,
+  hardWrapTerminalLine,
   osc52,
   renderAnalysisText,
   sanitizeTerminalText,
@@ -9,6 +10,7 @@ import {
   stripAnsi,
   terminalLink,
   visibleLength,
+  wrapTerminalLine,
 } from '../src/interactive/presentation.js';
 import { createTheme } from '../src/interactive/theme.js';
 
@@ -23,6 +25,21 @@ describe('interactive presentation', () => {
     expect(output).not.toContain('\x1b');
     expect(output).not.toContain('\x07');
     expect(sanitizeTerminalText('a\x00b\x9fc')).toBe('abc');
+    expect(sanitizeTerminalText('a\tb')).toBe('a    b');
+  });
+
+  it('measures and wraps complete terminal graphemes', () => {
+    expect(visibleLength('界')).toBe(2);
+    expect(visibleLength('e\u0301')).toBe(1);
+    expect(visibleLength('👨‍👩‍👧‍👦')).toBe(2);
+    expect(wrapTerminalLine('界'.repeat(5), 4)).toEqual(['界界', '界界', '界']);
+  });
+
+  it('keeps whitespace when it hard-wraps editor text', () => {
+    const value = `alpha  beta ${'x'.repeat(20)}`;
+
+    expect(hardWrapTerminalLine(value, 10).join('')).toBe(value);
+    expect(hardWrapTerminalLine(value, 10).every((line) => visibleLength(line) <= 10)).toBe(true);
   });
   it('renders decision bars and trend charts', () => {
     const theme = createTheme({ NO_COLOR: '1', SEB_ICONS: 'ascii' });

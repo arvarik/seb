@@ -25,8 +25,10 @@ import {
   osc52,
   renderAnalysisText,
   sanitizeTerminalText,
+  sliceTerminalColumns,
   sourceBadge,
   stripAnsi,
+  terminalGraphemes,
   visibleLength,
   wrapTerminalLine,
 } from './presentation.js';
@@ -108,6 +110,18 @@ interface Section {
   title: string;
 }
 
+interface BodyRow {
+  sectionId?: string;
+  sectionRowCount?: number;
+  sectionRowIndex?: number;
+  text: string;
+}
+
+interface ViewportAnchor {
+  rowRatio: number;
+  sectionId: string;
+}
+
 interface ScreenPoint {
   column: number;
   row: number;
@@ -136,6 +150,8 @@ interface ContextItem {
 
 const SPINNERS = ['◐', '◓', '◑', '◒'] as const;
 const FRAME_INTERVAL_MS = Math.ceil(1000 / 60);
+const MINIMUM_TERMINAL_HEIGHT = 16;
+const MINIMUM_TERMINAL_WIDTH = 40;
 const MOUSE_WHEEL_LINES = 3;
 const MOUSE_REPORTING_OFF = '\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l';
 const MOUSE_REPORTING_ON = '\x1b[?1000h\x1b[?1002h\x1b[?1006h';
@@ -156,6 +172,7 @@ export class SebTerminalRenderer {
   private keyParser = new TerminalKeyParser();
   private lastFrame = '';
   private lastPaintAt = 0;
+  private lastWidth = 0;
   private maximumScrollOffset = 0;
   private menuOpen = false;
   private menuSelection = 0;
@@ -176,6 +193,7 @@ export class SebTerminalRenderer {
   private ticker: ReturnType<typeof setInterval> | undefined;
   private toolDurations = new Map<string, number>();
   private toolStartedAt = new Map<string, number>();
+  private viewportAnchor: ViewportAnchor | undefined;
   private viewportHeight = 3;
 
   constructor(options: SebRendererOptions) {
@@ -931,7 +949,8 @@ export class SebTerminalRenderer {
     const text = selectedScreenText(this.framePlainLines, this.screenSelection);
     if (!text) return false;
     this.copyText(text);
-    this.status = `Copied selection · ${text.length} character${text.length === 1 ? '' : 's'}`;
+    const characterCount = terminalGraphemes(text).length;
+    this.status = `Copied selection · ${characterCount} character${characterCount === 1 ? '' : 's'}`;
     this.requestPaint();
     return true;
   }
@@ -977,11 +996,14 @@ export class SebTerminalRenderer {
   }
 
   private focusLatestAnswer(): void {
-    const width = Math.max(40, this.options.output.columns ?? 80);
-    const height = Math.max(16, this.options.output.rows ?? 24);
+    const width = Math.max(1, this.options.output.columns ?? 80);
+    const height = Math.max(1, this.options.output.rows ?? 24);
+    if (width < MINIMUM_TERMINAL_WIDTH || height < MINIMUM_TERMINAL_HEIGHT) return;
+    const headerHeight = this.renderHeader(width).length;
+    const maximumFooterHeight = Math.max(2, height - headerHeight - 3);
     const bodyHeight = Math.max(
       3,
-      height - this.renderHeader(width).length - this.renderFooter(width).length,
+      height - headerHeight - this.renderFooter(width, maximumFooterHeight).length,
     );
     const body = this.renderBody(width);
     const assistantMarker = `${symbol(this.theme, 'assistant')} Seb`;
@@ -1035,31 +1057,81 @@ export class SebTerminalRenderer {
   private paint(clear = false): void {
     this.cancelPaint();
     if (!this.active) return;
-    const width = Math.max(40, this.options.output.columns ?? 80);
-    const height = Math.max(16, this.options.output.rows ?? 24);
+    const width = Math.max(1, this.options.output.columns ?? 80);
+    const height = Math.max(1, this.options.output.rows ?? 24);
+    if (width < MINIMUM_TERMINAL_WIDTH || height < MINIMUM_TERMINAL_HEIGHT) {
+      this.paintSmallTerminal(width, height, clear);
+      return;
+    }
     const header = this.renderHeader(width);
-    const footerHeight = this.renderFooter(width).length;
+    const maximumFooterHeight = Math.max(2, height - header.length - 3);
+    const footer = this.renderFooter(width, maximumFooterHeight);
+    const footerHeight = footer.length;
     const bodyHeight = Math.max(3, height - header.length - footerHeight);
-    const body = this.renderBody(width);
+    const bodyRows = this.renderBodyRows(width);
+    const body = bodyRows.map((row) => row.text);
     const maximumOffset = Math.max(0, body.length - bodyHeight);
-    this.maximumScrollOffset = maximumOffset;
-    this.viewportHeight = bodyHeight;
-    this.scrollOffset = Math.min(this.scrollOffset, maximumOffset);
-    const footer = this.renderFooter(width);
-    const end = body.length - this.scrollOffset;
+    const transcriptVisible = this.overlay === 'none' && this.sections.length > 0;
+    if (transcriptVisible) {
+      this.maximumScrollOffset = maximumOffset;
+      const widthChanged = this.lastWidth > 0 && width !== this.lastWidth;
+      const anchoredOffset = widthChanged && this.scrollOffset > 0 && this.viewportAnchor
+        ? offsetForViewportAnchor(bodyRows, bodyHeight, this.viewportAnchor)
+        : undefined;
+      if (anchoredOffset !== undefined) {
+        this.scrollOffset = clamp(anchoredOffset, 0, maximumOffset);
+      } else if (this.scrollOffset > 0 && bodyHeight !== this.viewportHeight) {
+        this.scrollOffset = clamp(
+          this.scrollOffset + this.viewportHeight - bodyHeight,
+          0,
+          maximumOffset,
+        );
+      }
+      this.viewportHeight = bodyHeight;
+      this.scrollOffset = Math.min(this.scrollOffset, maximumOffset);
+      this.lastWidth = width;
+    }
+    const end = this.overlay === 'none' ? body.length - this.scrollOffset : body.length;
     const topAligned = this.overlay !== 'none' || this.sections.length === 0;
+    const visibleStart = topAligned ? 0 : Math.max(0, end - bodyHeight);
     const visible = topAligned
       ? body.slice(0, bodyHeight)
-      : body.slice(Math.max(0, end - bodyHeight), end);
+      : body.slice(visibleStart, end);
     while (visible.length < bodyHeight) {
       if (topAligned) visible.push('');
       else visible.unshift('');
+    }
+    if (transcriptVisible) {
+      this.viewportAnchor = viewportAnchorForRow(bodyRows[visibleStart]);
     }
     const cleanLines = [...header, ...visible, ...footer].slice(0, height);
     this.framePlainLines = cleanLines.map(stripAnsi);
     const lines = this.screenSelection?.moved
       ? highlightScreenSelection(cleanLines, this.screenSelection)
       : cleanLines;
+    const frame = `${width}x${height}\n${lines.join('\n')}`;
+    if (!clear && frame === this.lastFrame) return;
+    const output = [
+      '\x1b[?2026h',
+      clear ? '\x1b[2J\x1b[H' : '\x1b[H',
+      ...lines.map((line, index) => `${line}\x1b[K${index < lines.length - 1 ? '\r\n' : ''}`),
+      '\x1b[?2026l',
+    ].join('');
+    this.options.output.write(output);
+    this.lastFrame = frame;
+    this.lastPaintAt = performance.now();
+  }
+
+  private paintSmallTerminal(width: number, height: number, clear: boolean): void {
+    const lines = [
+      paint(this.theme, 'accent', fit(' SEB', width)),
+      fit(' Terminal too small', width),
+      fit(` Current size: ${width} x ${height}`, width),
+      fit(` Required size: ${MINIMUM_TERMINAL_WIDTH} x ${MINIMUM_TERMINAL_HEIGHT}`, width),
+      fit(' Resize the terminal to continue.', width),
+    ].slice(0, height);
+    while (lines.length < height) lines.push('');
+    this.framePlainLines = lines.map(stripAnsi);
     const frame = `${width}x${height}\n${lines.join('\n')}`;
     if (!clear && frame === this.lastFrame) return;
     const output = [
@@ -1107,14 +1179,26 @@ export class SebTerminalRenderer {
   }
 
   private renderBody(width: number): string[] {
-    if (this.overlay === 'shortcuts') return this.shortcuts(width);
-    if (this.overlay === 'history') return this.historyRows(width);
-    if (this.overlay === 'context') return this.contextRows(width);
-    if (this.sections.length === 0) return this.home(width);
-    const lines: string[] = [];
+    return this.renderBodyRows(width).map((row) => row.text);
+  }
+
+  private renderBodyRows(width: number): BodyRow[] {
+    if (this.overlay === 'shortcuts') {
+      return this.shortcuts(width).map((text) => ({ text }));
+    }
+    if (this.overlay === 'history') {
+      return this.historyRows(width).map((text) => ({ text }));
+    }
+    if (this.overlay === 'context') {
+      return this.contextRows(width).map((text) => ({ text }));
+    }
+    if (this.sections.length === 0) {
+      return this.home(width).map((text) => ({ text }));
+    }
+    const rows: BodyRow[] = [];
     for (const section of this.sections) {
       const color = section.kind === 'error' ? 'danger' : section.kind === 'tool' ? 'tool' : section.kind === 'assistant' ? 'assistant' : 'accent';
-      lines.push(paint(this.theme, color, `${section.kind === 'assistant' ? symbol(this.theme, 'assistant') : symbol(this.theme, 'bullet')} ${sanitizeTerminalText(section.title)}`));
+      const lines = [paint(this.theme, color, `${section.kind === 'assistant' ? symbol(this.theme, 'assistant') : symbol(this.theme, 'bullet')} ${sanitizeTerminalText(section.title)}`)];
       const rendered = section.kind === 'assistant'
         ? renderAnalysisText(
           section.content,
@@ -1126,21 +1210,39 @@ export class SebTerminalRenderer {
         lines.push(...wrapTerminalLine(line, Math.max(20, width - 2)).map((part) => `  ${part}`));
       }
       if (!this.theme.compact) lines.push('');
+      rows.push(...lines.map((text, sectionRowIndex) => ({
+        sectionId: section.id,
+        sectionRowCount: lines.length,
+        sectionRowIndex,
+        text,
+      })));
     }
-    return lines;
+    return rows;
   }
 
-  private renderFooter(width: number): string[] {
-    const menu = this.menuOpen || this.editor.text().startsWith('/')
+  private renderFooter(width: number, maximumHeight = Number.POSITIVE_INFINITY): string[] {
+    let menu = this.menuOpen || this.editor.text().startsWith('/')
       ? this.renderMenu(width)
       : [];
-    const suggestions = this.overlay === 'none' &&
+    let suggestions = this.overlay === 'none' &&
       this.options.uiState.showSuggestions &&
       !this.editor.text() && menu.length === 0
       ? this.suggestions()
       : [];
+    const reservedRows = this.overlay === 'none' ? 3 : 2;
+    const availableExtraRows = Math.max(0, maximumHeight - reservedRows);
+    if (menu.length > 0) {
+      menu = menu.slice(0, availableExtraRows);
+      suggestions = [];
+    } else {
+      suggestions = suggestions.slice(0, availableExtraRows);
+    }
+    const maximumPromptRows = Math.max(
+      1,
+      maximumHeight - menu.length - suggestions.length - 2,
+    );
     const promptLines = this.overlay === 'none'
-      ? renderEditor(this.editor, width - 4, this.theme)
+      ? renderEditor(this.editor, width - 4, this.theme, maximumPromptRows)
       : [];
     const status = this.answerFocus
       ? `Opened at ${this.answerFocus} · ${this.scrollOffset} ${this.scrollOffset === 1 ? 'line' : 'lines'} to latest · PgDn continues`
@@ -1292,20 +1394,74 @@ export class SebTerminalRenderer {
   }
 }
 
-function renderEditor(editor: PromptEditor, width: number, theme: SebTheme): string[] {
+function renderEditor(
+  editor: PromptEditor,
+  width: number,
+  theme: SebTheme,
+  maximumRows = Number.POSITIVE_INFINITY,
+): string[] {
   const before = sanitizeTerminalText(editor.text().slice(0, editor.cursor()));
   const after = sanitizeTerminalText(editor.text().slice(editor.cursor()));
-  const cursorCharacter = [...after][0] ?? ' ';
+  const cursorCharacter = terminalGraphemes(after)[0] ?? ' ';
   const remainder = after.slice(cursorCharacter.length);
-  const cursor = theme.color ? `\x1b[7m${cursorCharacter}\x1b[0m` : `|${cursorCharacter}`;
-  const lines = `${before}${cursor}${remainder}`.split('\n');
-  return lines.flatMap((line) => visibleLength(line) > width ? wrapTerminalLine(line, width) : [line]);
+  const cursorValue = cursorCharacter === '\n' ? ' ' : cursorCharacter;
+  const cursor = theme.color ? `\x1b[7m${cursorValue}\x1b[0m` : `|${cursorValue}`;
+  const tokens = [
+    ...editorTokens(before),
+    { cursor: true, text: cursor, width: visibleLength(cursor) },
+    ...(cursorCharacter === '\n' ? [{ cursor: false, text: '\n', width: 0 }] : []),
+    ...editorTokens(remainder),
+  ];
+  const maximumWidth = Math.max(1, width);
+  const lines = [''];
+  const lineWidths = [0];
+  let cursorRow = 0;
+  for (const token of tokens) {
+    if (token.text === '\n') {
+      lines.push('');
+      lineWidths.push(0);
+      continue;
+    }
+    let row = lines.length - 1;
+    const lineWidth = lineWidths[row] ?? 0;
+    if (lineWidth > 0 && lineWidth + token.width > maximumWidth) {
+      lines.push('');
+      lineWidths.push(0);
+      row += 1;
+    }
+    if (token.cursor) cursorRow = row;
+    lines[row] = `${lines[row] ?? ''}${token.text}`;
+    lineWidths[row] = (lineWidths[row] ?? 0) + token.width;
+  }
+  const rowLimit = Number.isFinite(maximumRows)
+    ? Math.max(1, Math.floor(maximumRows))
+    : lines.length;
+  const start = clamp(
+    cursorRow - Math.floor(rowLimit / 2),
+    0,
+    Math.max(0, lines.length - rowLimit),
+  );
+  return lines.slice(start, start + rowLimit);
+}
+
+function editorTokens(value: string): Array<{
+  cursor: false;
+  text: string;
+  width: number;
+}> {
+  return terminalGraphemes(value).map((text) => ({
+    cursor: false,
+    text,
+    width: text === '\n' ? 0 : visibleLength(text),
+  }));
 }
 
 function fit(value: string, width: number): string {
   if (visibleLength(value) <= width) return value;
   const plain = stripAnsi(value);
-  return width <= 1 ? plain.slice(0, width) : `${plain.slice(0, width - 1)}…`;
+  return width <= 1
+    ? sliceTerminalColumns(plain, 0, width)
+    : `${sliceTerminalColumns(plain, 0, width - 1)}…`;
 }
 
 function cycle(index: number, delta: number, length: number): number {
@@ -1317,11 +1473,41 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
+function offsetForViewportAnchor(
+  rows: readonly BodyRow[],
+  bodyHeight: number,
+  anchor: ViewportAnchor,
+): number | undefined {
+  const sectionRows = rows
+    .map((row, index) => ({ index, row }))
+    .filter(({ row }) => row.sectionId === anchor.sectionId);
+  if (sectionRows.length === 0) return undefined;
+  const rowIndex = Math.round(anchor.rowRatio * Math.max(0, sectionRows.length - 1));
+  const target = sectionRows[rowIndex];
+  return target ? rows.length - target.index - bodyHeight : undefined;
+}
+
+function viewportAnchorForRow(row: BodyRow | undefined): ViewportAnchor | undefined {
+  if (
+    !row?.sectionId ||
+    row.sectionRowIndex === undefined ||
+    row.sectionRowCount === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    rowRatio: row.sectionRowCount <= 1
+      ? 0
+      : row.sectionRowIndex / (row.sectionRowCount - 1),
+    sectionId: row.sectionId,
+  };
+}
+
 function packRows(values: readonly string[], width: number): string[] {
   const rows: string[] = [];
   let row = '';
   for (const value of values) {
-    if (row && row.length + value.length + 2 > width) {
+    if (row && visibleLength(row) + visibleLength(value) + 2 > width) {
       rows.push(row);
       row = value;
     } else {
@@ -1380,7 +1566,7 @@ function clampScreenPoint(point: ScreenPoint, lines: readonly string[]): ScreenP
   const row = clamp(point.row, 1, Math.max(1, lines.length));
   const line = lines[row - 1] ?? '';
   return {
-    column: clamp(point.column, 1, Math.max(1, line.length)),
+    column: clamp(point.column, 1, Math.max(1, visibleLength(line))),
     row,
   };
 }
@@ -1426,8 +1612,8 @@ function selectedScreenText(
   const selected: string[] = [];
   for (let row = start.row; row <= end.row; row += 1) {
     const line = lines[row - 1] ?? '';
-    const columns = selectedColumnsForRow(selection, row, line.length);
-    selected.push(columns ? line.slice(columns.start, columns.end) : '');
+    const columns = selectedColumnsForRow(selection, row, visibleLength(line));
+    selected.push(columns ? sliceTerminalColumns(line, columns.start, columns.end) : '');
   }
   return selected.join('\n');
 }
@@ -1457,17 +1643,17 @@ function highlightTerminalColumns(value: string, start: number, end: number): st
       index += control.length;
       continue;
     }
-    const codePoint = value.codePointAt(index);
-    const characterLength = codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
-    const nextVisibleIndex = visibleIndex + characterLength;
+    const grapheme = terminalGraphemes(value.slice(index))[0] ?? '';
+    const graphemeWidth = visibleLength(grapheme);
+    const nextVisibleIndex = visibleIndex + graphemeWidth;
     const selected = nextVisibleIndex > start && visibleIndex < end;
     if (selected && !highlighted) {
       output += '\x1b[7m';
       highlighted = true;
     }
-    output += value.slice(index, index + characterLength);
+    output += grapheme;
     visibleIndex = nextVisibleIndex;
-    index += characterLength;
+    index += grapheme.length;
     if (highlighted && visibleIndex >= end) {
       output += '\x1b[27m';
       highlighted = false;

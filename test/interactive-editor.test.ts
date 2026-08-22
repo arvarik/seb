@@ -23,6 +23,16 @@ describe('PromptEditor', () => {
 
     expect(editor.text()).toBe('hello ');
   });
+
+  it('moves across and deletes complete grapheme characters', () => {
+    const editor = new PromptEditor('A👨‍👩‍👧‍👦e\u0301');
+
+    editor.moveLeft();
+    expect(editor.cursor()).toBe('A👨‍👩‍👧‍👦'.length);
+    editor.backspace();
+
+    expect(editor.text()).toBe('Ae\u0301');
+  });
 });
 
 describe('TerminalKeyParser', () => {

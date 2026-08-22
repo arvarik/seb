@@ -61,6 +61,8 @@ describe('parseCliArguments', () => {
   it('shows help after a subcommand', () => {
     expect(parseCliArguments(['ask', '--help'])).toEqual({ name: 'help' });
     expect(parseCliArguments(['doctor', '-h'])).toEqual({ name: 'help' });
+    expect(parseCliArguments(['setup', '--help'])).toEqual({ name: 'help' });
+    expect(parseCliArguments(['completion', '-h'])).toEqual({ name: 'help' });
   });
 
   it('accepts an inline model value', () => {
@@ -98,6 +100,9 @@ describe('parseCliArguments', () => {
       action: 'clear',
       json: true,
     });
+    expect(() => parseCliArguments(['cache', 'status', 'clear'])).toThrow(
+      'Use only one cache action: status, clear, or prune.',
+    );
     expect(parseCliArguments([
       'cache', 'prune', '--max-size-mb', '256', '--max-age-days', '90', '--retain', '8',
     ])).toEqual({

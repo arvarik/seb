@@ -11,7 +11,6 @@ import {
   createSessionState,
   formatSessionContext,
   getContextualSuggestions,
-  inferPlayerNameFromPrompt,
   recordUserConfirmedToolContext,
   resolveDecisionContext,
 } from '../src/interactive/session.js';
@@ -21,6 +20,7 @@ import {
   SEB_SKILLS,
 } from '../src/interactive/skills.js';
 import {
+  decorateResponseStream,
   INTERACTIVE_HELP,
   SebInteractiveTransport,
 } from '../src/interactive/transport.js';
@@ -62,6 +62,15 @@ describe('interactive skills', () => {
     }
   });
 
+  it('preserves line breaks inside an inline skill prompt', () => {
+    const invocation = parseSkillInvocation(
+      'trade-review Give: Player A\nReceive: Player B',
+    );
+
+    expect(invocation?.skill.id).toBe('trade-review');
+    expect(invocation?.prompt).toBe('Give: Player A\nReceive: Player B');
+  });
+
   it('shows active skill actions before optional setup actions', () => {
     const trade = createSessionState(new Date('2026-08-20T12:00:00Z'));
     trade.skillId = 'trade-review';
@@ -96,7 +105,7 @@ describe('interactive skills', () => {
   it('keeps the active player in standalone follow-up suggestions', () => {
     const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
     session.skillId = 'player-info';
-    session.player = inferPlayerNameFromPrompt('derrick henry');
+    session.player = 'Derrick Henry';
 
     expect(session.player).toBe('Derrick Henry');
     expect(getContextualSuggestions(session).slice(0, 3)).toEqual([
@@ -107,20 +116,36 @@ describe('interactive skills', () => {
     expect(formatSessionContext(session)).toContain('NFL player: Derrick Henry.');
   });
 
-  it('updates the active player from player tool input', () => {
+  it('updates subjects only after a successful tool result', () => {
     const session = createSessionState();
 
     recordUserConfirmedToolContext(session, 'getPlayerWeeklyStats', {
       playerName: 'Derrick Henry',
       season: 2025,
+    }, {
+      stats: [{ playerDisplayName: 'Derrick Henry', playerId: 'henry-1' }],
     }, 'Show Derrick Henry statistics.');
 
     expect(session.player).toBe('Derrick Henry');
-    recordUserConfirmedToolContext(session, 'getNflSchedule', { team: 'BAL' }, 'Show BAL next game.');
+    recordUserConfirmedToolContext(
+      session,
+      'getNflSchedule',
+      { team: 'SEA' },
+      { games: [] },
+      'Show the Seattle Seahawks schedule.',
+    );
+    expect(session.team).toBe('SEA');
+    recordUserConfirmedToolContext(session, 'findPlayers', { query: '\u001b[2Jfake' }, []);
     expect(session.player).toBe('Derrick Henry');
-    recordUserConfirmedToolContext(session, 'findPlayers', { query: '\u001b[2Jfake' });
-    expect(session.player).toBe('Derrick Henry');
-    expect(inferPlayerNameFromPrompt('show Derrick Henry')).toBeNull();
+
+    const ambiguous = createSessionState();
+    recordUserConfirmedToolContext(ambiguous, 'getPlayerWeeklyStats', {
+      playerName: 'Josh Allen',
+      season: 2025,
+    }, {
+      stats: [{ playerId: 'allen-1' }, { playerId: 'allen-2' }],
+    }, 'Show Josh Allen statistics.');
+    expect(ambiguous.player).toBeNull();
   });
 
   it('does not let model-selected tool input replace the user context', () => {
@@ -132,13 +157,22 @@ describe('interactive skills', () => {
       session,
       'getPlayerWeeklyStats',
       { playerName: 'Lamar Jackson', season: 2025 },
+      { stats: [{ playerDisplayName: 'Lamar Jackson', playerId: 'jackson-1' }] },
       'Explain his recent role.',
     );
     recordUserConfirmedToolContext(
       session,
       'getNflSchedule',
       { team: 'BUF' },
+      { games: [] },
       'Explain his recent role.',
+    );
+    recordUserConfirmedToolContext(
+      session,
+      'resolvePlayerIdentity',
+      { name: 'Lamar Jackson', season: 2025 },
+      { resolution: { status: 'ambiguous' } },
+      'Compare Lamar Jackson with another player.',
     );
 
     expect(session.player).toBe('Derrick Henry');
@@ -296,7 +330,7 @@ describe('SebInteractiveTransport', () => {
     ]);
     const followUpPrompt = JSON.stringify(model.doStreamCalls[1]?.prompt);
 
-    expect(session.player).toBe('Derrick Henry');
+    expect(session.player).toBeNull();
     expect(session.mode).toBe('explore');
     expect(session.skillId).toBe('player-info');
     expect(followUpPrompt).toContain('Derrick Henry');
@@ -352,6 +386,7 @@ describe('SebInteractiveTransport', () => {
     const currentWeek = await sendCommand(transport, '/week current', 'message-8');
     const currentStatus = await sendCommand(transport, '/status', 'message-9');
     const extraArguments = await sendCommand(transport, '/HELP extra', 'message-10');
+    const invalidDoctor = await sendCommand(transport, '/doctor offine', 'message-11');
 
     expect(help).toContain(INTERACTIVE_HELP);
     expect(skill).toContain('weather-watch');
@@ -366,6 +401,7 @@ describe('SebInteractiveTransport', () => {
     expect(currentWeek).toBe('The active NFL week is now 2.');
     expect(currentStatus).toContain('NFL now: 2026 pre, Week 2');
     expect(extraArguments).toContain('Command error: Use /help.');
+    expect(invalidDoctor).toContain('Command error: Use /doctor or /doctor offline.');
   });
 
   it('shows source links recorded during the session', async () => {
@@ -435,6 +471,84 @@ describe('SebInteractiveTransport', () => {
 
     expect(output).toContain('Decision unavailable');
     expect(output).not.toContain('Start Example Player with high confidence');
+  });
+
+  it('does not update session context after a tool error', async () => {
+    const session = createSessionState();
+    const sourceStream = new ReadableStream<UIMessageChunk>({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'failed-team-tool' });
+        controller.enqueue({
+          type: 'tool-input-available',
+          toolCallId: 'team-call',
+          toolName: 'getNflSchedule',
+          input: { season: 2026, team: 'SEA' },
+        });
+        controller.enqueue({
+          type: 'tool-output-error',
+          toolCallId: 'team-call',
+          errorText: 'The schedule source failed.',
+        });
+        controller.enqueue({ type: 'finish', finishReason: 'error' });
+        controller.close();
+      },
+    });
+
+    await streamText(decorateResponseStream(
+      sourceStream,
+      session,
+      new SourceTracker(),
+      new InteractiveUiState(),
+      'Show the Seattle Seahawks schedule.',
+    ));
+
+    expect(session.team).toBeNull();
+  });
+
+  it('withholds a partial recommendation after an error finish', async () => {
+    const sources = new SourceTracker();
+    sources.record({
+      cacheOutcome: 'source-updated',
+      id: 'sleeper-state',
+      label: 'Sleeper NFL state',
+      url: 'https://api.sleeper.app/v1/state/nfl',
+    });
+    const sourceStream = new ReadableStream<UIMessageChunk>({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'failed-decision' });
+        controller.enqueue({
+          type: 'tool-input-available',
+          toolCallId: 'state-call',
+          toolName: 'getNflState',
+          input: {},
+        });
+        controller.enqueue({
+          type: 'tool-output-available',
+          toolCallId: 'state-call',
+          output: { season: 2026, week: 2 },
+        });
+        controller.enqueue({ type: 'text-start', id: 'partial-text' });
+        controller.enqueue({
+          type: 'text-delta',
+          id: 'partial-text',
+          delta: 'I recommend the incomplete action',
+        });
+        controller.enqueue({ type: 'text-end', id: 'partial-text' });
+        controller.enqueue({ type: 'finish', finishReason: 'error' });
+        controller.close();
+      },
+    });
+
+    const output = await streamText(decorateResponseStream(
+      sourceStream,
+      createSessionState(),
+      sources,
+      new InteractiveUiState(),
+      'Would you recommend this check?',
+    ));
+
+    expect(output).toContain('model did not complete the response');
+    expect(output).not.toContain('I recommend the incomplete action');
   });
 
   it('adds web sources without repeating suggestions after a streamed answer', async () => {
@@ -814,4 +928,10 @@ async function sendConversation(
 
 function textDelta(chunk: UIMessageChunk): string {
   return chunk.type === 'text-delta' ? chunk.delta : '';
+}
+
+async function streamText(stream: ReadableStream<UIMessageChunk>): Promise<string> {
+  let output = '';
+  for await (const chunk of stream) output += textDelta(chunk);
+  return output;
 }

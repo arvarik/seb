@@ -192,7 +192,7 @@ describe('CachedResource', () => {
   it('uses a stale value after a temporary source failure', async () => {
     const database = createDatabase();
     database.putCache({
-      cachedAt: '2026-08-20T12:00:00.000Z',
+      cachedAt: new Date(Date.now() - 60_000).toISOString(),
       key: 'alerts',
       namespace: 'weather',
       schemaVersion: 'v1',

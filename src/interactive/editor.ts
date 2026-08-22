@@ -1,3 +1,5 @@
+import { terminalGraphemes } from './presentation.js';
+
 export class PromptEditor {
   private cursorIndex = 0;
   private value = '';
@@ -12,7 +14,7 @@ export class PromptEditor {
 
   deleteForward(): void {
     if (this.cursorIndex >= this.value.length) return;
-    const length = codePointLengthAt(this.value, this.cursorIndex);
+    const length = graphemeLengthAt(this.value, this.cursorIndex);
     this.value = `${this.value.slice(0, this.cursorIndex)}${this.value.slice(this.cursorIndex + length)}`;
   }
 
@@ -30,7 +32,7 @@ export class PromptEditor {
 
   backspace(): void {
     if (this.cursorIndex === 0) return;
-    const start = previousCodePointIndex(this.value, this.cursorIndex);
+    const start = previousGraphemeIndex(this.value, this.cursorIndex);
     this.value = `${this.value.slice(0, start)}${this.value.slice(this.cursorIndex)}`;
     this.cursorIndex = start;
   }
@@ -49,12 +51,12 @@ export class PromptEditor {
   }
 
   moveLeft(): void {
-    this.cursorIndex = previousCodePointIndex(this.value, this.cursorIndex);
+    this.cursorIndex = previousGraphemeIndex(this.value, this.cursorIndex);
   }
 
   moveRight(): void {
     if (this.cursorIndex >= this.value.length) return;
-    this.cursorIndex += codePointLengthAt(this.value, this.cursorIndex);
+    this.cursorIndex += graphemeLengthAt(this.value, this.cursorIndex);
   }
 
   moveWordLeft(): void {
@@ -211,26 +213,23 @@ function mouseSelectionKey(
   };
 }
 
-function previousCodePointIndex(value: string, index: number): number {
+function previousGraphemeIndex(value: string, index: number): number {
   if (index <= 0) return 0;
-  const point = value.codePointAt(index - 1);
-  return point !== undefined && point >= 0xdc00 && point <= 0xdfff
-    ? Math.max(0, index - 2)
-    : index - 1;
+  const grapheme = terminalGraphemes(value.slice(0, index)).at(-1) ?? '';
+  return Math.max(0, index - grapheme.length);
 }
 
-function codePointLengthAt(value: string, index: number): number {
-  const point = value.codePointAt(index);
-  return point !== undefined && point > 0xffff ? 2 : 1;
+function graphemeLengthAt(value: string, index: number): number {
+  return terminalGraphemes(value.slice(index))[0]?.length ?? 0;
 }
 
 function previousWordBoundary(value: string, index: number): number {
   let cursor = index;
-  while (cursor > 0 && /\s/u.test(value[previousCodePointIndex(value, cursor)] ?? '')) {
-    cursor = previousCodePointIndex(value, cursor);
+  while (cursor > 0 && /\s/u.test(value[previousGraphemeIndex(value, cursor)] ?? '')) {
+    cursor = previousGraphemeIndex(value, cursor);
   }
-  while (cursor > 0 && !/\s/u.test(value[previousCodePointIndex(value, cursor)] ?? '')) {
-    cursor = previousCodePointIndex(value, cursor);
+  while (cursor > 0 && !/\s/u.test(value[previousGraphemeIndex(value, cursor)] ?? '')) {
+    cursor = previousGraphemeIndex(value, cursor);
   }
   return cursor;
 }
@@ -238,10 +237,10 @@ function previousWordBoundary(value: string, index: number): number {
 function nextWordBoundary(value: string, index: number): number {
   let cursor = index;
   while (cursor < value.length && !/\s/u.test(value[cursor] ?? '')) {
-    cursor += codePointLengthAt(value, cursor);
+    cursor += graphemeLengthAt(value, cursor);
   }
   while (cursor < value.length && /\s/u.test(value[cursor] ?? '')) {
-    cursor += codePointLengthAt(value, cursor);
+    cursor += graphemeLengthAt(value, cursor);
   }
   return cursor;
 }

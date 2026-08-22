@@ -2,6 +2,7 @@ import {
   sourceEvidenceBadge,
   type DataSourceRecord,
 } from '../sources.js';
+import stringWidth from 'string-width';
 import { paint, symbol, type SebTheme } from './theme.js';
 
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/gu;
@@ -10,6 +11,7 @@ const UNTRUSTED_CONTROL_PATTERN = /[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f-\x9f]/gu;
 const INLINE_LINK_PATTERN = /(!?)\[([^\]]+)\]\((?:<([^>\s]+)>|(https?:\/\/[^)\s]+))\)|<(https?:\/\/[^>\s]+)>|(https?:\/\/[^\s<>\x1b]+)/gu;
 const TERMINAL_LINK_PATTERN = /\x1b\]8;;([^\x07\x1b]*)(?:\x07|\x1b\\)([\s\S]*?)\x1b\]8;;(?:\x07|\x1b\\)/gu;
 const TERMINAL_CONTROL_PATTERN = /^\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/u;
+const GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
 type TableAlignment = 'center' | 'left' | 'right';
 
@@ -562,12 +564,26 @@ function packVisible(values: readonly string[], width: number): string[] {
 
 function hardWrap(value: string, width: number): string[] {
   if (!value) return [''];
-  const characters = [...value];
   const chunks: string[] = [];
-  for (let index = 0; index < characters.length; index += width) {
-    chunks.push(characters.slice(index, index + width).join(''));
+  let chunk = '';
+  let length = 0;
+  for (const grapheme of terminalGraphemes(value)) {
+    const graphemeWidth = visibleLength(grapheme);
+    if (chunk && length + graphemeWidth > width) {
+      chunks.push(chunk);
+      chunk = '';
+      length = 0;
+    }
+    chunk += grapheme;
+    length += graphemeWidth;
+    if (length >= width) {
+      chunks.push(chunk);
+      chunk = '';
+      length = 0;
+    }
   }
-  return chunks;
+  if (chunk) chunks.push(chunk);
+  return chunks.length > 0 ? chunks : [''];
 }
 
 export function terminalLink(label: string, url: string, enabled = true): string {
@@ -581,7 +597,27 @@ export function osc52(text: string): string {
 }
 
 export function visibleLength(value: string): number {
-  return stripAnsi(value).length;
+  return stringWidth(stripAnsi(value));
+}
+
+export function terminalGraphemes(value: string): string[] {
+  return [...GRAPHEME_SEGMENTER.segment(value)].map(({ segment }) => segment);
+}
+
+export function sliceTerminalColumns(
+  value: string,
+  start: number,
+  end: number,
+): string {
+  let column = 0;
+  let output = '';
+  for (const grapheme of terminalGraphemes(value)) {
+    const nextColumn = column + visibleLength(grapheme);
+    if (nextColumn > start && column < end) output += grapheme;
+    column = nextColumn;
+    if (column >= end) break;
+  }
+  return output;
 }
 
 export function stripAnsi(value: string): string {
@@ -591,7 +627,8 @@ export function stripAnsi(value: string): string {
 export function sanitizeTerminalText(value: string): string {
   return value
     .replace(UNTRUSTED_ESCAPE_PATTERN, '')
-    .replace(UNTRUSTED_CONTROL_PATTERN, '');
+    .replace(UNTRUSTED_CONTROL_PATTERN, '')
+    .replace(/\t/gu, '    ');
 }
 
 export function wrapTerminalLine(value: string, width: number): string[] {
@@ -622,6 +659,14 @@ export function wrapTerminalLine(value: string, width: number): string[] {
   }
   if (line) lines.push(line);
   return stabilizeTerminalStyles(lines.length > 0 ? lines : ['']);
+}
+
+export function hardWrapTerminalLine(value: string, width: number): string[] {
+  if (width <= 1 || visibleLength(value) <= width) return [value];
+  const lines = value.includes('\x1b')
+    ? hardWrapTerminalText(value, width)
+    : hardWrap(value, width);
+  return stabilizeTerminalStyles(lines);
 }
 
 function inlineMarkup(
@@ -830,11 +875,17 @@ function hardWrapTerminalText(value: string, width: number): string[] {
       index += control.length;
       continue;
     }
-    const character = String.fromCodePoint(value.codePointAt(index) ?? 0);
-    chunk += character;
-    length += 1;
-    index += character.length;
-    if (length === width) {
+    const grapheme = terminalGraphemes(value.slice(index))[0] ?? '';
+    const graphemeWidth = visibleLength(grapheme);
+    if (chunk && length + graphemeWidth > width) {
+      chunks.push(chunk);
+      chunk = '';
+      length = 0;
+    }
+    chunk += grapheme;
+    length += graphemeWidth;
+    index += grapheme.length;
+    if (length >= width) {
       chunks.push(chunk);
       chunk = '';
       length = 0;

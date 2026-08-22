@@ -84,6 +84,134 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(terminal.output.text()).toContain('\x1b[?1000h\x1b[?1002h\x1b[?1006h');
   });
 
+  it('keeps the visible answer anchored while the next prompt wraps', async () => {
+    const terminal = createTerminal();
+    terminal.output.columns = 40;
+    terminal.output.rows = 18;
+    const renderer = createRenderer(terminal);
+    const lines = Array.from({ length: 30 }, (_, index) => `Transcript line ${index + 1}`);
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'start', messageId: 'anchored-answer' });
+          controller.enqueue({ type: 'text-start', id: 'answer-text' });
+          controller.enqueue({
+            type: 'text-delta',
+            id: 'answer-text',
+            delta: lines.join('\n'),
+          });
+          controller.enqueue({ type: 'text-end', id: 'answer-text' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
+          controller.close();
+        },
+      }),
+    });
+    const prompt = renderer.readPrompt();
+    expect(terminal.output.text().split('\x1b[H').at(-1)).toContain('Transcript line 1');
+
+    terminal.input.type('word '.repeat(50));
+
+    const frame = terminal.output.text().split('\x1b[H').at(-1);
+    expect(frame).toContain('◆ Seb');
+    expect(frame).toContain('Transcript line 1');
+    expect(frame).toContain('Opened at answer');
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
+  it('keeps the cursor and status visible when the prompt exceeds the screen', async () => {
+    const terminal = createTerminal();
+    terminal.output.columns = 40;
+    terminal.output.rows = 18;
+    const renderer = createRenderer(terminal);
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type(`${'word '.repeat(80)}END`);
+
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame).toContain('END| ');
+    expect(frame).toContain('Ctrl+G context');
+    expect(frame.split('\r\n')).toHaveLength(18);
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
+  it('preserves repeated spaces when a prompt wraps', async () => {
+    const terminal = createTerminal();
+    terminal.output.columns = 40;
+    const renderer = createRenderer(terminal);
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type(`alpha  beta ${'x'.repeat(40)}`);
+
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame).toContain('alpha  beta');
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
+  it('keeps the visible answer anchored after a width change', async () => {
+    const terminal = createTerminal();
+    terminal.output.columns = 80;
+    terminal.output.rows = 18;
+    const renderer = createRenderer(terminal);
+    const lines = Array.from(
+      { length: 30 },
+      (_, index) => `Transcript line ${index + 1} ${'detail '.repeat(10)}`,
+    );
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'start', messageId: 'resized-answer' });
+          controller.enqueue({ type: 'text-start', id: 'answer-text' });
+          controller.enqueue({ type: 'text-delta', id: 'answer-text', delta: lines.join('\n') });
+          controller.enqueue({ type: 'text-end', id: 'answer-text' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
+          controller.close();
+        },
+      }),
+    });
+    const prompt = renderer.readPrompt();
+    expect(terminal.output.text().split('\x1b[H').at(-1)).toContain('Transcript line 1');
+
+    terminal.output.columns = 40;
+    terminal.output.emit('resize');
+
+    const frame = terminal.output.text().split('\x1b[H').at(-1);
+    expect(frame).toContain('◆ Seb');
+    expect(frame).toContain('Transcript line 1');
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
+  it('restores the transcript position after an overlay closes', async () => {
+    const terminal = createTerminal();
+    terminal.output.rows = 16;
+    const renderer = createRenderer(terminal);
+    const lines = Array.from({ length: 30 }, (_, index) => `Transcript line ${index + 1}`);
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'start', messageId: 'overlay-answer' });
+          controller.enqueue({ type: 'text-start', id: 'answer-text' });
+          controller.enqueue({ type: 'text-delta', id: 'answer-text', delta: lines.join('\n') });
+          controller.enqueue({ type: 'text-end', id: 'answer-text' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
+          controller.close();
+        },
+      }),
+    });
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type('?\x1b');
+
+    const frame = terminal.output.text().split('\x1b[H').at(-1);
+    expect(frame).toContain('◆ Seb');
+    expect(frame).toContain('Transcript line 1');
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
   it('coalesces fast scrolling and skips redraws at both boundaries', async () => {
     const terminal = createTerminal();
     terminal.output.rows = 16;
@@ -248,6 +376,49 @@ describe('SebTerminalRenderer prompt input', () => {
     await expect(prompt).resolves.toBe('new request');
   });
 
+  it('selects one complete grapheme by terminal columns', async () => {
+    const copied: string[] = [];
+    const terminal = createTerminal();
+    const renderer = createRenderer(
+      terminal,
+      new MemoryPromptHistory(),
+      new InteractiveUiState(),
+      (text) => copied.push(text),
+    );
+    const family = '👨‍👩‍👧‍👦';
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'start', messageId: 'unicode-selection' });
+          controller.enqueue({ type: 'text-start', id: 'answer-text' });
+          controller.enqueue({ type: 'text-delta', id: 'answer-text', delta: `Family ${family} selected.` });
+          controller.enqueue({ type: 'text-end', id: 'answer-text' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
+          controller.close();
+        },
+      }),
+    });
+    const prompt = renderer.readPrompt();
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    const rows = frame.split('\r\n');
+    const rowIndex = rows.findIndex((row) => row.includes(family));
+    const columnIndex = rows[rowIndex]?.indexOf(family) ?? -1;
+    expect(rowIndex).toBeGreaterThanOrEqual(0);
+    expect(columnIndex).toBeGreaterThanOrEqual(0);
+    const row = rowIndex + 1;
+    const startColumn = columnIndex + 1;
+    const endColumn = startColumn + 1;
+
+    terminal.input.type(`\x1b[<0;${startColumn};${row}M`);
+    terminal.input.type(`\x1b[<32;${endColumn};${row}M`);
+    terminal.input.type(`\x1b[<0;${endColumn};${row}m`);
+
+    expect(copied).toEqual([family]);
+    expect(terminal.output.text().split('\x1b[H').at(-1)).toContain('1 character');
+    terminal.input.type('\x1b');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
   it('runs terminal commands without case-sensitive matching', async () => {
     const uiState = new InteractiveUiState();
     uiState.latestAnswer = 'Latest answer';
@@ -332,6 +503,22 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(output).toContain('SOURCE NO SOURCE YET');
     expect(output).not.toContain('LEAGUE —');
     expect(output).not.toContain('ROSTER —');
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
+  it('renders a bounded resize notice in a terminal below the minimum size', async () => {
+    const terminal = createTerminal();
+    terminal.output.columns = 30;
+    terminal.output.rows = 10;
+    const renderer = createRenderer(terminal);
+    const prompt = renderer.readPrompt();
+
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    const lines = frame.replace('\x1b[?2026l', '').split('\r\n');
+    expect(frame).toContain('Terminal too small');
+    expect(lines).toHaveLength(10);
+    expect(lines.every((line) => line.length <= 30)).toBe(true);
     terminal.input.type('\u0003');
     await expect(prompt).rejects.toThrow('Interrupted');
   });

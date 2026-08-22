@@ -6,6 +6,27 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.11] - 2026-08-21
+
+### Changed
+
+- The project now uses AI SDK `7.0.76`.
+
+### Fixed
+
+- Wrapped and multiline prompts now keep the previous answer anchored in the visible transcript.
+- Long prompts now keep the editor cursor and status row visible.
+- Terminal resizing and temporary overlays now preserve the transcript position.
+- Unicode text now wraps, aligns, edits, truncates, and selects by terminal display width.
+- Wrapped prompts now preserve spaces, and pasted tabs now render as stable spaces.
+- Terminals below the supported size now show a bounded resize notice.
+- Cache commands now reject several actions instead of executing the last action.
+- Setup and completion commands now accept their help flags.
+- Interactive diagnostics now reject invalid options before they run network checks.
+- Inline skill prompts now preserve line breaks and avoid guessing a player from the full question.
+- Successful tool results now update player and team context, including full NFL team names.
+- Incomplete model streams now withhold partial recommendations.
+
 ## [0.0.10] - 2026-08-21
 
 ### Added

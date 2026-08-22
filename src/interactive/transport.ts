@@ -63,7 +63,6 @@ import {
   formatFantasyDashboard,
   formatSessionStatus,
   getContextualSuggestions,
-  inferPlayerNameFromPrompt,
   normalizeSessionSeasonType,
   recordUserConfirmedToolContext,
   type SessionState,
@@ -121,10 +120,6 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       if (invocation?.prompt) {
         this.options.sources.clear();
         this.options.session.skillId = invocation.skill.id;
-        if (invocation.skill.id === 'player-info') {
-          const player = inferPlayerNameFromPrompt(invocation.prompt);
-          if (player) this.options.session.player = player;
-        }
         this.uiState.latestPrompt = invocation.prompt;
         this.uiState.recordCommand('skill');
         this.skillPromptByMessageId.set(lastMessage.id, invocation.prompt);
@@ -592,9 +587,13 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         return `Seb saved the transcript to \`${saved}\`.`;
       }
       case 'doctor': {
+        const option = arguments_[0]?.toLowerCase();
+        if (option && !['offline', '--offline'].includes(option)) {
+          throw new Error('Use /doctor or /doctor offline.');
+        }
         const report = await runDoctor({
           environment: this.options.environment,
-          offline: ['offline', '--offline'].includes(arguments_[0]?.toLowerCase() ?? ''),
+          offline: option !== undefined,
         });
         return `\`\`\`text\n${formatDoctorReport(report)}\n\`\`\``;
       }
@@ -745,7 +744,7 @@ function localTextStream(text: string): ReadableStream<UIMessageChunk> {
   });
 }
 
-function decorateResponseStream(
+export function decorateResponseStream(
   stream: ReadableStream<UIMessageChunk>,
   state: SessionState,
   sources: SourceTracker,
@@ -754,7 +753,7 @@ function decorateResponseStream(
   recommendationQuestion = userPrompt,
 ): ReadableStream<UIMessageChunk> {
   const decisionRequested = questionRequestsRecommendation(recommendationQuestion);
-  const toolNames = new Map<string, string>();
+  const toolCalls = new Map<string, { input: unknown; toolName: string }>();
   const toolResults: RecommendationToolResult[] = [];
   let bufferedText = '';
   let answerId = `answer-${crypto.randomUUID()}`;
@@ -763,12 +762,27 @@ function decorateResponseStream(
       transform(chunk, controller) {
         if (chunk.type === 'start' && chunk.messageId) answerId = chunk.messageId;
         if (chunk.type === 'tool-input-available') {
-          toolNames.set(chunk.toolCallId, chunk.toolName);
-          recordUserConfirmedToolContext(state, chunk.toolName, chunk.input, userPrompt);
+          toolCalls.set(chunk.toolCallId, {
+            input: chunk.input,
+            toolName: chunk.toolName,
+          });
         }
         if (chunk.type === 'tool-output-available') {
-          const toolName = toolNames.get(chunk.toolCallId);
-          if (toolName) toolResults.push({ output: chunk.output, toolName });
+          const toolCall = toolCalls.get(chunk.toolCallId);
+          if (toolCall) {
+            toolResults.push({ output: chunk.output, toolName: toolCall.toolName });
+            recordUserConfirmedToolContext(
+              state,
+              toolCall.toolName,
+              toolCall.input,
+              chunk.output,
+              userPrompt,
+            );
+            toolCalls.delete(chunk.toolCallId);
+          }
+        }
+        if (chunk.type === 'tool-output-error') {
+          toolCalls.delete(chunk.toolCallId);
         }
         if (chunk.type === 'source-url') {
           const url = normalizeWebUrl(chunk.url);
@@ -783,21 +797,23 @@ function decorateResponseStream(
           const evidence = sources.snapshot(answerId);
           uiState.recordAnswerEvidence(evidence);
           if (decisionRequested) {
-            const guarded = enforceFreeformRecommendation(
-              bufferedText,
-              buildFreeformRecommendationEvidence({
-                question: recommendationQuestion,
-                sources: evidence.sources,
-                toolResults,
-              }),
-            );
+            const answer = chunk.finishReason === 'stop'
+              ? enforceFreeformRecommendation(
+                bufferedText,
+                buildFreeformRecommendationEvidence({
+                  question: recommendationQuestion,
+                  sources: evidence.sources,
+                  toolResults,
+                }),
+              ).answer
+              : incompleteRecommendationMessage();
             const decisionId = `decision-${crypto.randomUUID()}`;
             controller.enqueue({ type: 'start-step' });
             controller.enqueue({ type: 'text-start', id: decisionId });
             controller.enqueue({
               type: 'text-delta',
               id: decisionId,
-              delta: guarded.answer,
+              delta: answer,
             });
             controller.enqueue({ type: 'text-end', id: decisionId });
             controller.enqueue({ type: 'finish-step' });
@@ -831,6 +847,16 @@ function decorateResponseStream(
       },
     }),
   );
+}
+
+function incompleteRecommendationMessage(): string {
+  return [
+    '## Decision unavailable',
+    '',
+    'Seb withheld the recommendation because the model did not complete the response.',
+    '',
+    'Run the request again.',
+  ].join('\n');
 }
 
 function previousUserPrompt(messages: readonly UIMessage[]): string | undefined {

@@ -1,9 +1,12 @@
-import { getSkill } from './skills.js';
+import { TeamIdentityRegistry } from '../identity/teams.js';
 import {
   compareFantasyLeagueActions,
   type FantasyLeagueAction,
   type FantasyLeagueActionCenter,
 } from '../sleeper/action-center.js';
+import { getSkill } from './skills.js';
+
+const TEAM_IDENTITIES = new TeamIdentityRegistry();
 
 export type SessionSeasonType = 'post' | 'pre' | 'regular' | null;
 export type SebExperienceMode = 'analyze' | 'explore' | 'fantasy';
@@ -322,19 +325,11 @@ export function experienceTitle(mode: SebExperienceMode): string {
   return 'Explore';
 }
 
-export function inferPlayerNameFromPrompt(value: string): string | null {
-  const player = normalizePlayerName(value, 2);
-  if (!player) return null;
-  const words = player.split(' ');
-  const first = words[0]?.toLowerCase();
-  if (!first || PLAYER_PROMPT_VERBS.has(first)) return null;
-  return player;
-}
-
 export function recordUserConfirmedToolContext(
   state: SessionState,
   toolName: string,
   input: unknown,
+  output: unknown,
   userPrompt?: string,
 ): void {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return;
@@ -348,18 +343,15 @@ export function recordUserConfirmedToolContext(
         : toolName === 'comparePlayerTrends' && Array.isArray(values.playerNames) && values.playerNames.length === 1
           ? stringValue(values.playerNames[0])
           : null;
-  if (player && promptContainsSubject(userPrompt, player)) state.player = player;
-  const team = [
-    'getGameEnvironment',
-    'getGameWeather',
-    'getNflSchedule',
-    'getStadiumForecast',
-    'getTeamPerformance',
-    'getTeamPlayers',
-  ].includes(toolName)
-    ? teamValue(values.team)
-    : null;
-  if (team && promptContainsSubject(userPrompt, team)) state.team = team;
+  if (
+    player &&
+    playerResultResolvesSubject(toolName, output) &&
+    promptContainsSubject(userPrompt, player)
+  ) {
+    state.player = player;
+  }
+  const team = resolvedTeamCode(toolName, values, output);
+  if (team && promptContainsTeam(userPrompt, team)) state.team = team;
 }
 
 export function normalizeSessionSeasonType(
@@ -441,21 +433,6 @@ function uniqueValues<T>(values: T[]): T[] {
   return [...new Set(values)];
 }
 
-const PLAYER_PROMPT_VERBS = new Set([
-  'analyze',
-  'compare',
-  'explain',
-  'find',
-  'get',
-  'give',
-  'look',
-  'show',
-  'summarize',
-  'tell',
-  'what',
-  'who',
-]);
-
 function formatNameWord(value: string): string {
   if (/[A-Z]/u.test(value)) return value;
   return value.replace(/(^|[-'\u2019])\p{L}/gu, (match) => match.toUpperCase());
@@ -469,6 +446,86 @@ function teamValue(value: unknown): string | null {
   return typeof value === 'string' && /^[A-Za-z]{2,3}$/u.test(value.trim())
     ? value.trim().toUpperCase()
     : null;
+}
+
+function playerResultResolvesSubject(toolName: string, output: unknown): boolean {
+  if (toolName === 'findPlayers') {
+    return Array.isArray(output) &&
+      output.length === 1 &&
+      uniqueStringFields(output, 'playerId').length === 1;
+  }
+  if (toolName === 'resolvePlayerIdentity') {
+    return findIdentityStatus(output) === 'resolved';
+  }
+  if (toolName === 'getPlayerWeeklyStats') {
+    return uniqueStringFields(arrayField(output, 'stats'), 'playerId').length === 1;
+  }
+  if (toolName === 'comparePlayerTrends') {
+    return uniqueStringFields(arrayField(output, 'players'), 'playerId').length === 1;
+  }
+  return false;
+}
+
+function resolvedTeamCode(
+  toolName: string,
+  input: Record<string, unknown>,
+  output: unknown,
+): string | null {
+  if (toolName === 'resolveTeamIdentity') {
+    if (findIdentityStatus(output) !== 'resolved') return null;
+    return teamValue(objectField(objectField(output, 'identity'), 'code'));
+  }
+  return [
+    'getGameEnvironment',
+    'getGameWeather',
+    'getNflSchedule',
+    'getStadiumForecast',
+    'getTeamPerformance',
+    'getTeamPlayers',
+  ].includes(toolName)
+    ? teamValue(input.team)
+    : null;
+}
+
+function promptContainsTeam(prompt: string | undefined, team: string): boolean {
+  const resolution = TEAM_IDENTITIES.resolve(team);
+  return resolution.status === 'resolved' && resolution.identity.aliases.some(
+    (alias) => promptContainsSubject(prompt, alias),
+  );
+}
+
+function findIdentityStatus(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const status = findIdentityStatus(item);
+      if (status) return status;
+    }
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.status === 'string') return record.status;
+  return findIdentityStatus(record.resolution);
+}
+
+function arrayField(value: unknown, field: string): unknown[] {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+  return Array.isArray(record?.[field]) ? record[field] : [];
+}
+
+function uniqueStringFields(values: unknown[], field: string): string[] {
+  return [...new Set(values.flatMap((value) => {
+    const fieldValue = objectField(value, field);
+    return typeof fieldValue === 'string' && fieldValue.trim() ? [fieldValue] : [];
+  }))];
+}
+
+function objectField(value: unknown, field: string): unknown {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)[field]
+    : undefined;
 }
 
 function normalizePlayerName(value: string, minimumWords: number): string | null {

@@ -16,7 +16,10 @@ export interface ResilientFetchOptions {
   now?: () => number;
   policy?: Partial<RequestPolicy>;
   random?: () => number;
-  sleep?: (delayMs: number) => Promise<void>;
+  sleep?: (
+    delayMs: number,
+    signal?: AbortSignal | null,
+  ) => Promise<void>;
 }
 
 export interface RequestAttemptObserver {
@@ -56,7 +59,10 @@ export class ResilientFetch {
   private openUntil = 0;
   private readonly policy: RequestPolicy;
   private readonly random: () => number;
-  private readonly sleep: (delayMs: number) => Promise<void>;
+  private readonly sleep: (
+    delayMs: number,
+    signal?: AbortSignal | null,
+  ) => Promise<void>;
 
   constructor(options: ResilientFetchOptions = {}) {
     this.fetchImplementation = options.fetch ?? globalThis.fetch;
@@ -73,6 +79,7 @@ export class ResilientFetch {
     onAttempt?: RequestAttemptObserver,
   ): Promise<Response> {
     const url = String(input);
+    init.signal?.throwIfAborted();
     this.assertCircuit(url);
     let finalError: unknown;
 
@@ -82,6 +89,10 @@ export class ResilientFetch {
           ...init,
           signal: combineSignals(init.signal, AbortSignal.timeout(this.policy.timeoutMs)),
         });
+        if (init.signal?.aborted) {
+          void response.body?.cancel().catch(() => undefined);
+          throw abortReason(init.signal);
+        }
         if (!RETRYABLE_STATUS_CODES.has(response.status)) {
           this.recordSuccess();
           onAttempt?.({ attempt, delayMs: null, status: response.status, url });
@@ -103,11 +114,14 @@ export class ResilientFetch {
           this.now(),
         );
         onAttempt?.({ attempt, delayMs, status: response.status, url });
-        await response.body?.cancel().catch(() => undefined);
-        await this.sleep(delayMs);
+        void response.body?.cancel().catch(() => undefined);
+        await waitForRetry(this.sleep(delayMs, init.signal), init.signal);
       } catch (error) {
         finalError = error;
-        if (init.signal?.aborted || attempt === this.policy.maxAttempts) {
+        if (init.signal?.aborted) {
+          throw abortReason(init.signal);
+        }
+        if (attempt === this.policy.maxAttempts) {
           this.recordFailure();
           throw error;
         }
@@ -119,7 +133,7 @@ export class ResilientFetch {
           this.now(),
         );
         onAttempt?.({ attempt, delayMs, status: null, url });
-        await this.sleep(delayMs);
+        await waitForRetry(this.sleep(delayMs, init.signal), init.signal);
       }
     }
 
@@ -194,8 +208,50 @@ function combineSignals(
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-function wait(delayMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
+function wait(
+  delayMs: number,
+  signal?: AbortSignal | null,
+): Promise<void> {
+  if (!signal) {
+    return new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(abortReason(signal));
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function waitForRetry(
+  pending: Promise<void>,
+  signal: AbortSignal | null | undefined,
+): Promise<void> {
+  if (!signal) return pending;
+  if (signal.aborted) {
+    void pending.catch(() => undefined);
+    return Promise.reject(abortReason(signal));
+  }
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => reject(abortReason(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    pending.then(resolve, reject).finally(() => {
+      signal.removeEventListener('abort', onAbort);
+    }).catch(() => undefined);
+  });
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
 }
 
 function validatePolicy(policy: RequestPolicy): void {

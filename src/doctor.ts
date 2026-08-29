@@ -7,6 +7,10 @@ import {
   DEFAULT_GEMINI_FALLBACK_MODEL,
   DEFAULT_GEMINI_MODEL,
 } from './agent.js';
+import {
+  currentRequestSignal,
+  throwIfRequestAborted,
+} from './ai/request-signal.js';
 import { isModelCapacityError } from './model-capacity-error.js';
 import { getSharedSebDatabase } from './data/sqlite-store.js';
 import { NflverseClient } from './nflverse/client.js';
@@ -34,6 +38,7 @@ export interface DoctorOptions {
     apiKey: string,
     primaryModel: string,
     fallbackModel: string,
+    signal: AbortSignal,
   ) => Promise<{ fallbackUsed: boolean; model: string }>;
   verifyDatabase?: () => {
     cacheEntries: number;
@@ -60,6 +65,7 @@ export interface DoctorOptions {
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
+  throwIfRequestAborted();
   const environment = options.environment ?? process.env;
   const nodeVersion = options.nodeVersion ?? process.versions.node;
   const apiKey = environment.GOOGLE_GENERATIVE_AI_API_KEY?.trim();
@@ -114,12 +120,14 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     const verifyNflverse = options.verifyNflverse ?? verifyNflverseData;
     const verifyWeather =
       options.verifyWeather ?? (() => verifyWeatherApi(environment));
+    const geminiSignal = requestSignalWithTimeout(currentRequestSignal(), 30_000);
     const geminiCheck = apiKey
       ? checkGemini(
           apiKey,
           primaryModel,
           fallbackModel,
           options.verifyGemini ?? verifyGeminiApi,
+          geminiSignal,
         )
       : Promise.resolve<DoctorCheck>({
         name: 'Gemini API',
@@ -136,6 +144,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     );
   }
 
+  throwIfRequestAborted();
   return {
     checks,
     ok: checks.every((check) => check.status !== 'fail'),
@@ -224,9 +233,10 @@ async function checkGemini(
   primaryModel: string,
   fallbackModel: string,
   verify: NonNullable<DoctorOptions['verifyGemini']>,
+  signal: AbortSignal,
 ): Promise<DoctorCheck> {
   try {
-    const result = await verify(apiKey, primaryModel, fallbackModel);
+    const result = await verify(apiKey, primaryModel, fallbackModel, signal);
     const suffix = result.fallbackUsed ? ' The primary model had no capacity.' : '';
     return {
       name: 'Gemini API',
@@ -354,27 +364,40 @@ export async function verifyGeminiApi(
   apiKey: string,
   primaryModel: string,
   fallbackModel: string,
+  signal = AbortSignal.timeout(30_000),
 ): Promise<{ fallbackUsed: boolean; model: string }> {
   try {
-    await sendGeminiTest(apiKey, primaryModel);
+    await sendGeminiTest(apiKey, primaryModel, signal);
     return { fallbackUsed: false, model: primaryModel };
   } catch (error) {
     if (!isModelCapacityError(error) || fallbackModel === primaryModel) {
       throw error;
     }
-    await sendGeminiTest(apiKey, fallbackModel);
+    await sendGeminiTest(apiKey, fallbackModel, signal);
     return { fallbackUsed: true, model: fallbackModel };
   }
 }
 
-async function sendGeminiTest(apiKey: string, model: string): Promise<void> {
+async function sendGeminiTest(
+  apiKey: string,
+  model: string,
+  signal: AbortSignal,
+): Promise<void> {
   const google = createGoogle({ apiKey });
   await generateText({
     model: google(model),
     prompt: 'Reply with only OK.',
     maxOutputTokens: 32,
-    abortSignal: AbortSignal.timeout(30_000),
+    abortSignal: signal,
   });
+}
+
+function requestSignalWithTimeout(
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
 function errorMessage(error: unknown): string {

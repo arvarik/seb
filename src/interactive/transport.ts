@@ -11,6 +11,10 @@ import {
 
 import type { createFantasyFootballAgent } from '../agent.js';
 import {
+  runWithRequestSignal,
+  throwIfRequestAborted,
+} from '../ai/request-signal.js';
+import {
   buildFreeformRecommendationEvidence,
   enforceFreeformRecommendation,
   questionRequestsRecommendation,
@@ -87,6 +91,16 @@ export interface SebInteractiveTransportOptions {
   version: string;
   weather: WeatherClient;
   uiState?: InteractiveUiState;
+}
+
+function cloneSessionState(state: SessionState): SessionState {
+  return {
+    ...state,
+    leagues: [...state.leagues],
+    leagueOptions: [...state.leagueOptions],
+    rosterOptions: [...state.rosterOptions],
+    usage: { ...state.usage },
+  };
 }
 
 export class SebInteractiveTransport implements ChatTransport<UIMessage> {
@@ -168,7 +182,10 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       this.commandMessageIds.add(lastMessage.id);
       let response: string;
       try {
-        response = await this.runCommand(text, options.messages, lastMessage.id);
+        response = await runWithRequestSignal(
+          options.abortSignal,
+          () => this.runCommand(text, options.messages, lastMessage.id),
+        );
       } catch (error) {
         response = `Command error: ${errorMessage(error)}`;
       }
@@ -254,14 +271,17 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'connect': {
         const username = arguments_[0];
         if (!username) throw new Error('Use /connect <Sleeper username>.');
-        await refreshAutomaticSession(this.options.sleeper, state, username);
-        const profile = createSetupProfile(state.user);
+        const staged = cloneSessionState(state);
+        await refreshAutomaticSession(this.options.sleeper, staged, username);
+        throwIfRequestAborted();
+        const profile = createSetupProfile(staged.user);
         await this.profileStore.save(profile);
+        Object.assign(state, staged);
         return `${formatFantasyDashboard(state)}\n\nSeb saved this username for future sessions.`;
       }
       case 'disconnect': {
-        disconnectSleeperSession(state);
         await this.profileStore.save(createSetupProfile());
+        disconnectSleeperSession(state);
         return 'Seb disconnected the Sleeper account. Explore and Analyze remain available.';
       }
       case 'account':
@@ -349,20 +369,22 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         if (!username) {
           throw new Error('Use /connect <Sleeper username>.');
         }
+        const staged = cloneSessionState(state);
         if (arguments_[1]) {
-          state.leagueSeason = validInteger(
+          staged.leagueSeason = validInteger(
             arguments_[1],
             1999,
             2100,
             'league season',
           );
         }
-        await connectSleeperSession(this.options.sleeper, state, username);
-        await this.profileStore.save(createSetupProfile(state.user));
+        await connectSleeperSession(this.options.sleeper, staged, username);
+        throwIfRequestAborted();
+        await this.profileStore.save(createSetupProfile(staged.user));
+        Object.assign(state, staged);
         return formatFantasyDashboard(state);
       }
       case 'rosters': {
-        state.mode = 'fantasy';
         const leagueId = optionalIdentifier(
           arguments_[0] ?? state.leagueId ?? undefined,
           /^\d+$/,
@@ -371,9 +393,19 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         if (!leagueId) {
           throw new Error('Use /rosters <Sleeper league ID> or set /league first.');
         }
-        state.leagueId = leagueId;
+        const staged = cloneSessionState(state);
         const rosters = await this.options.sleeper.getLeagueRosters(leagueId);
-        state.rosterOptions = rosters.map((roster) => roster.roster_id);
+        throwIfRequestAborted();
+        staged.mode = 'fantasy';
+        staged.leagueId = leagueId;
+        staged.rosterOptions = rosters.map((roster) => roster.roster_id);
+        if (
+          staged.rosterId !== null &&
+          !staged.rosterOptions.includes(staged.rosterId)
+        ) {
+          staged.rosterId = null;
+        }
+        Object.assign(state, staged);
         if (rosters.length === 0) {
           return `Sleeper found no rosters in league ${leagueId}.`;
         }
@@ -428,13 +460,18 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'user': {
         const username = arguments_[0];
         if (username?.toLowerCase() === 'clear') {
-          disconnectSleeperSession(state);
+          const staged = cloneSessionState(state);
+          disconnectSleeperSession(staged);
           await this.profileStore.save(createSetupProfile());
+          Object.assign(state, staged);
           return 'Seb disconnected the Sleeper account.';
         }
         if (!username) throw new Error('Use /connect <Sleeper username>.');
-        await refreshAutomaticSession(this.options.sleeper, state, username);
-        await this.profileStore.save(createSetupProfile(state.user));
+        const staged = cloneSessionState(state);
+        await refreshAutomaticSession(this.options.sleeper, staged, username);
+        throwIfRequestAborted();
+        await this.profileStore.save(createSetupProfile(staged.user));
+        Object.assign(state, staged);
         return formatFantasyDashboard(state);
       }
       case 'team':
@@ -650,15 +687,18 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     if (!key.present) {
       throw new Error(key.message);
     }
+    const staged = cloneSessionState(this.options.session);
     if (arguments_[0]) {
       await refreshAutomaticSession(
         this.options.sleeper,
-        this.options.session,
+        staged,
         arguments_[0],
       );
+      throwIfRequestAborted();
     }
-    const profile = createSetupProfile(this.options.session.user);
+    const profile = createSetupProfile(staged.user);
     await this.profileStore.save(profile);
+    Object.assign(this.options.session, staged);
     return [
       'Seb saved the account preference.',
       '',
@@ -682,14 +722,17 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       return 'Seb found no local preferences file. Run `/setup` to create one.';
     }
     if (normalizedAction === 'load') {
-      applySetupProfile(profile, this.options.session);
+      const staged = cloneSessionState(this.options.session);
+      applySetupProfile(profile, staged);
       if (profile.sleeper) {
         await refreshAutomaticSession(
           this.options.sleeper,
-          this.options.session,
+          staged,
           profile.sleeper.username,
         );
       }
+      throwIfRequestAborted();
+      Object.assign(this.options.session, staged);
       return `Seb loaded the profile.\n\n${formatSetupProfile(profile, this.profileStore.path)}`;
     }
     return formatSetupProfile(profile, this.profileStore.path);

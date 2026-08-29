@@ -91,6 +91,14 @@ Seb deletes a cache record when its checksum or JSON value is invalid.
 
 Seb ignores a cached value when its source schema version changes.
 
+Seb also ignores a cached value when its source URL does not match the request.
+
+Seb calculates freshness from the retrieval time and the current client policy.
+
+This rule lets a policy update take effect without a database migration.
+
+Seb writes the recalculated deadlines before a storage prune can delete the record.
+
 ## Freshness periods
 
 The fresh period controls normal cache reads.
@@ -119,6 +127,8 @@ Seb uses an eligible stale record only after the refresh fails.
 
 Seb never uses an expired record.
 
+Seb never uses a stale record after the caller cancels the request.
+
 The `/sources` command marks a stale fallback and shows the refresh error.
 
 ## Request resilience
@@ -137,6 +147,12 @@ Seb honors a numeric or dated `Retry-After` value.
 
 The maximum retry delay is five seconds.
 
+A caller cancellation stops the active download and the retry delay.
+
+The cancellation does not count as a source failure.
+
+For nflverse, cancellation also stops file expansion and CSV parsing.
+
 Five consecutive final failures open the client circuit for 30 seconds.
 
 The circuit rejects new requests until that period ends.
@@ -146,6 +162,18 @@ Sleeper and NWS requests use a 15-second timeout.
 nflverse requests use a 20-second timeout.
 
 The doctor can use shorter source-specific limits.
+
+Concurrent reads in one Seb process join one source refresh per database file.
+
+Each caller waits with its own cancellation signal.
+
+The shared refresh continues while another caller still waits for it.
+
+Seb cancels the shared refresh when no callers remain.
+
+One shared refresh writes one cache record and one source snapshot.
+
+Each caller keeps its own eligible stale fallback when the shared refresh fails.
 
 ## Snapshots
 
@@ -246,6 +274,10 @@ Interactive refresh commands clear one source namespace.
 ```
 
 The next source request downloads fresh data.
+
+When a shared database closes, Seb removes it from the shared registry.
+
+A later open creates a working database connection for the same file.
 
 ## Migration from version 0.0.1
 

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { runWithRequestSignal } from '../src/ai/request-signal.js';
 import { formatDoctorReport, runDoctor } from '../src/doctor.js';
 
 describe('runDoctor', () => {
@@ -89,6 +90,124 @@ describe('runDoctor', () => {
     expect(report.checks.filter((check) => check.status === 'fail')).toHaveLength(
       2,
     );
+  });
+
+  it('preserves caller cancellation after the live checks finish', async () => {
+    const controller = new AbortController();
+    const reason = new DOMException('The user stopped the doctor.', 'AbortError');
+    let geminiSignal: AbortSignal | undefined;
+    let markGeminiStarted!: () => void;
+    const geminiStarted = new Promise<void>((resolve) => {
+      markGeminiStarted = resolve;
+    });
+    const pending = runWithRequestSignal(controller.signal, () => runDoctor({
+      environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'test-key' },
+      nodeVersion: '22.12.0',
+      offline: false,
+      verifyPermissions: passingPermissions,
+      verifyDatabase: () => ({
+        cacheEntries: 0,
+        file: '/tmp/seb.sqlite',
+        identities: 0,
+        identityLinks: 0,
+        schemaVersion: 2,
+        snapshots: 0,
+      }),
+      verifySleeper: async () => ({
+        season: '2026',
+        seasonType: 'regular',
+        week: 3,
+      }),
+      verifyGemini: async (_apiKey, primaryModel, _fallbackModel, signal) => {
+        geminiSignal = signal;
+        markGeminiStarted();
+        await new Promise<void>((resolve) => {
+          controller.signal.addEventListener('abort', () => resolve(), {
+            once: true,
+          });
+        });
+        return { fallbackUsed: false, model: primaryModel };
+      },
+      verifyNflverse: async () => ({ games: 100, latestSeason: 2026 }),
+      verifyWeather: async () => ({
+        periods: 156,
+        timeZone: 'America/Los_Angeles',
+      }),
+    }));
+    await geminiStarted;
+
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(geminiSignal).not.toBe(controller.signal);
+    expect(geminiSignal?.aborted).toBe(true);
+    expect(geminiSignal?.reason).toBe(reason);
+  });
+
+  it('limits the Gemini check to 30 seconds', async () => {
+    const timeoutController = new AbortController();
+    const timeoutReason = new DOMException(
+      'The Gemini check timed out.',
+      'TimeoutError',
+    );
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, 'timeout')
+      .mockReturnValue(timeoutController.signal);
+    let geminiSignal: AbortSignal | undefined;
+    let markGeminiStarted!: () => void;
+    const geminiStarted = new Promise<void>((resolve) => {
+      markGeminiStarted = resolve;
+    });
+
+    try {
+      const pending = runDoctor({
+        environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'test-key' },
+        nodeVersion: '22.12.0',
+        offline: false,
+        verifyPermissions: passingPermissions,
+        verifyDatabase: () => ({
+          cacheEntries: 0,
+          file: '/tmp/seb.sqlite',
+          identities: 0,
+          identityLinks: 0,
+          schemaVersion: 2,
+          snapshots: 0,
+        }),
+        verifySleeper: async () => ({
+          season: '2026',
+          seasonType: 'regular',
+          week: 3,
+        }),
+        verifyGemini: async (_apiKey, _primary, _fallback, signal) => {
+          geminiSignal = signal;
+          markGeminiStarted();
+          await new Promise<void>((resolve) => {
+            signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+          throw signal.reason;
+        },
+        verifyNflverse: async () => ({ games: 100, latestSeason: 2026 }),
+        verifyWeather: async () => ({
+          periods: 156,
+          timeZone: 'America/Los_Angeles',
+        }),
+      });
+      await geminiStarted;
+
+      timeoutController.abort(timeoutReason);
+
+      const report = await pending;
+      const check = report.checks.find(({ name }) => name === 'Gemini API');
+      expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+      expect(geminiSignal).toBe(timeoutController.signal);
+      expect(check).toEqual({
+        name: 'Gemini API',
+        status: 'fail',
+        detail: 'The Gemini check timed out.',
+      });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it('reports external service failures without throwing', async () => {

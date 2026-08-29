@@ -23,6 +23,7 @@ describe('source client resilience', () => {
       key: url,
       namespace: 'sleeper',
       schemaVersion: 'sleeper-v2',
+      sourceUrl: url,
       staleIfErrorMs: 60 * 60 * 1_000,
       ttlMs: 5 * 60 * 1_000,
       value: {

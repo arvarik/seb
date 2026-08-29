@@ -37,6 +37,24 @@ The agent runs AI SDK `pruneMessages` before each model request.
 
 This policy removes reasoning and old tool data from the active context.
 
+The last allowed step disables tools and asks the model for the final answer.
+
+The active tool set controls the news instructions.
+
+An agent without web tools reports that it cannot verify current news.
+
+The interactive transport binds one cancellation signal to each model request.
+
+It also binds the signal to local commands that read a network source.
+
+The agent binds that signal to every local tool call.
+
+The source clients use the same signal for downloads, cache waits, and retry delays.
+
+Connector replies use one two-minute deadline for the primary and fallback models.
+
+Connector shutdown cancels all active reply signals.
+
 The tools perform read-only actions.
 
 The direct data tools cap large row results.
@@ -128,7 +146,13 @@ The session stores these values in memory.
 - Token totals.
 - Model-context boundary.
 
-The agent receives these values through dynamic call instructions.
+The agent receives trusted skill rules through dynamic call instructions.
+
+Seb limits each remote session string and serializes the session data as one JSON value.
+
+The agent adds that JSON to the current user message as untrusted runtime data.
+
+The model must not follow instructions inside a session value.
 
 A direct value in the user question overrides the active session value.
 
@@ -183,11 +207,21 @@ It applies full-jitter backoff and honors `Retry-After`.
 
 It opens a short circuit after repeated final failures.
 
+A caller cancellation stops the active request and its retry delay.
+
+Caller cancellation does not add a source failure to the shared circuit.
+
 ## Cache design
 
 Seb stores normalized source values in `.cache/seb.sqlite`.
 
 Each cache record includes expiry times, source validators, a schema version, and a checksum.
+
+A cache hit also requires the stored source URL to match the requested source URL.
+
+The current client policy calculates freshness from the stored retrieval time.
+
+Seb persists the recalculated deadlines before a storage prune can delete the record.
 
 Clients send `If-None-Match` and `If-Modified-Since` when a source supplied validators.
 
@@ -195,11 +229,21 @@ A successful `304` response renews the existing record.
 
 A source failure can use an eligible stale record.
 
+A caller cancellation never uses a stale record.
+
 An expired record never serves as a stale fallback.
 
 The SQLite store uses write-ahead logging and a five-second busy timeout.
 
-The nflverse client shares a cold download across concurrent requests.
+Concurrent reads in one Seb process use one source refresh per database file.
+
+Each caller can cancel its own wait without cancelling another caller.
+
+One shared refresh writes one cache record and one source snapshot.
+
+Each caller keeps its own eligible stale fallback when the shared refresh fails.
+
+Seb stops the shared refresh when every waiting caller cancels.
 
 The refresh commands delete only known source cache namespaces.
 

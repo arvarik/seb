@@ -5,6 +5,7 @@ import type {
   SleeperRoster,
   SleeperUser,
 } from '../sleeper/types.js';
+import { throwIfRequestAborted } from '../ai/request-signal.js';
 import { buildFantasyLeagueActionCenter } from '../sleeper/action-center.js';
 import type { SessionState } from '../interactive/session.js';
 import { normalizeSessionSeasonType } from '../interactive/session.js';
@@ -173,29 +174,35 @@ export async function connectSleeperSession(
     );
     const playersPromise = sleeper.getPlayers().then(
       (players) => ({ error: null, players }),
-      (error: unknown) => ({ error: errorMessage(error), players: {} }),
+      (error: unknown) => {
+        throwIfRequestAborted();
+        return { error: errorMessage(error), players: {} };
+      },
     );
-    const discoveredLeagues = await Promise.all(account.leagues.map(async (league) => {
-      try {
-        const rosters = await discoverOwnedRosters(
-          sleeper,
-          league.league_id,
-          account.user.user_id,
-        );
-        return {
-          league,
-          rosters,
-          warning: null,
-        };
-      } catch (error) {
-        return {
-          league,
-          rosters: [],
-          warning: errorMessage(error),
-        };
-      }
-    }));
-    const playerResult = await playersPromise;
+    const [playerResult, discoveredLeagues] = await Promise.all([
+      playersPromise,
+      Promise.all(account.leagues.map(async (league) => {
+        try {
+          const rosters = await discoverOwnedRosters(
+            sleeper,
+            league.league_id,
+            account.user.user_id,
+          );
+          return {
+            league,
+            rosters,
+            warning: null,
+          };
+        } catch (error) {
+          throwIfRequestAborted();
+          return {
+            league,
+            rosters: [],
+            warning: errorMessage(error),
+          };
+        }
+      })),
+    ]);
     const leagues = discoveredLeagues.map(({ league, rosters, warning }) => ({
       actionCenter: buildFantasyLeagueActionCenter({
         league,
@@ -217,6 +224,7 @@ export async function connectSleeperSession(
         : null,
       playerResult.error ? `Player status refresh failed: ${playerResult.error}` : null,
     ].filter((warning): warning is string => warning !== null);
+    throwIfRequestAborted();
     session.accountError = warnings.join(' ') || null;
     session.accountStatus = 'ready';
     session.leagues = leagues;
@@ -226,6 +234,7 @@ export async function connectSleeperSession(
     session.userId = account.user.user_id;
     selectAutomaticLeague(session);
   } catch (error) {
+    throwIfRequestAborted();
     session.accountError = errorMessage(error);
     session.accountStatus = 'error';
     session.leagues = [];

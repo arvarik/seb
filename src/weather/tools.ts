@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 
+import { throwIfRequestAborted } from '../ai/request-signal.js';
 import {
   summarizeTeamPerformance,
 } from '../nflverse/analytics.js';
@@ -122,6 +123,7 @@ export function createWeatherTools(
           try {
             return await gameWeather.getScheduledGameWeather(game);
           } catch (error) {
+            throwIfRequestAborted();
             return {
               alerts: [],
               fantasyImpact: [],
@@ -203,17 +205,20 @@ export function createWeatherTools(
           throughWeek ?? (selectedAnalysisSeason < season ? 18 : Math.max(1, week - 1));
         const weatherRequest = gameWeather
           .getScheduledGameWeather(game)
-          .catch((error) => ({
-            alerts: [],
-            fantasyImpact: [],
-            forecast: null,
-            game,
-            kickoffAt: null,
-            reason: error instanceof Error ? error.message : String(error),
-            risk: null,
-            stadium: null,
-            status: 'unavailable' as const,
-          }));
+          .catch((error) => {
+            throwIfRequestAborted();
+            return {
+              alerts: [],
+              fantasyImpact: [],
+              forecast: null,
+              game,
+              kickoffAt: null,
+              reason: error instanceof Error ? error.message : String(error),
+              risk: null,
+              stadium: null,
+              status: 'unavailable' as const,
+            };
+          });
         const [weatherResult, homeGames, awayGames, homeStats, awayStats] =
           await Promise.all([
             weatherRequest,

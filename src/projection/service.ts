@@ -1,3 +1,4 @@
+import { throwIfRequestAborted } from '../ai/request-signal.js';
 import { NflverseClient } from '../nflverse/client.js';
 import type { NflversePlayerWeek } from '../nflverse/types.js';
 import { SleeperClient } from '../sleeper/client.js';
@@ -89,7 +90,10 @@ export class PlayerProjectionService {
       ? game.homeTeam === currentTeam ? game.awayTeam : game.homeTeam
       : null;
     const weather = game
-      ? await this.gameWeather.getScheduledGameWeather(game).catch(() => null)
+      ? await this.gameWeather.getScheduledGameWeather(game).catch(() => {
+          throwIfRequestAborted();
+          return null;
+        })
       : null;
 
     return projectPlayer({

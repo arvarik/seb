@@ -2,7 +2,7 @@ import { gzipSync } from 'node:zlib';
 
 import { describe, expect, it } from 'vitest';
 
-import { NflverseClient } from '../src/nflverse/client.js';
+import { NflverseApiError, NflverseClient } from '../src/nflverse/client.js';
 
 const scheduleCsv = `game_id,season,game_type,week,gameday,weekday,gametime,away_team,away_score,home_team,home_score,away_rest,home_rest,spread_line,total_line,roof,surface,temp,wind,stadium_id,stadium
 2026_01_BUF_KC,2026,REG,1,2026-09-10,Thursday,20:20,BUF,,KC,,7,7,-2.5,48.5,outdoors,grass,,,KAN00,Arrowhead Stadium
@@ -79,15 +79,23 @@ describe('NflverseClient', () => {
     expect(games[0]).toMatchObject({ gameType: 'WC', week: 19 });
   });
 
-  it('rejects an unavailable nflverse file with a useful error', async () => {
+  it('keeps provider context when an unavailable response body exceeds the limit', async () => {
     const client = new NflverseClient({
       cacheDirectory: false,
-      fetch: async () => new Response('missing', { status: 404 }),
+      fetch: async () => new Response('missing', {
+        status: 404,
+        headers: { 'content-length': '5000' },
+      }),
     });
 
     await expect(
       client.getPlayerWeeklyStats({ season: 2026 }),
-    ).rejects.toThrow('nflverse returned HTTP 404');
+    ).rejects.toMatchObject({
+      name: 'NflverseApiError',
+      status: 404,
+      url: expect.stringContaining('stats_player_week_2026.csv.gz'),
+      message: expect.stringContaining('exceeds 4096 bytes'),
+    } satisfies Partial<NflverseApiError>);
   });
 
   it('rejects rows with missing required columns', async () => {

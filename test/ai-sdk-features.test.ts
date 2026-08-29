@@ -211,6 +211,15 @@ describe('AI SDK feature integration', () => {
       id: 'source-2',
       url: 'file:///private/report',
     })).toBe(false);
+    expect(tracker.recordUrlSource({
+      id: 'source-3',
+      url: 'https://reader:secret@example.com/report',
+    })).toBe(false);
+    tracker.record({
+      id: 'direct-source',
+      label: 'Direct source',
+      url: 'https://reader:secret@example.com/data',
+    });
     expect(tracker.list()).toHaveLength(1);
     expect(tracker.list()[0]?.label).toBe('NFL report');
   });

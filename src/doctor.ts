@@ -16,6 +16,7 @@ import { getSharedSebDatabase } from './data/sqlite-store.js';
 import { NflverseClient } from './nflverse/client.js';
 import { SleeperClient } from './sleeper/client.js';
 import { WeatherClient } from './weather/client.js';
+import { normalizeWebUrl } from './sources.js';
 
 export type DoctorStatus = 'pass' | 'fail' | 'skip';
 
@@ -241,7 +242,7 @@ async function checkGemini(
     return {
       name: 'Gemini API',
       status: 'pass',
-      detail: `${result.model} answered the test request.${suffix}`,
+      detail: `${result.model} returned a grounded Google Search source.${suffix}`,
     };
   } catch (error) {
     return {
@@ -384,12 +385,28 @@ async function sendGeminiTest(
   signal: AbortSignal,
 ): Promise<void> {
   const google = createGoogle({ apiKey });
-  await generateText({
+  const result = await generateText({
     model: google(model),
-    prompt: 'Reply with only OK.',
-    maxOutputTokens: 32,
+    tools: {
+      searchCurrentNews: google.tools.googleSearch({
+        searchTypes: { webSearch: {} },
+      }),
+    },
+    prompt: [
+      'You must use the searchCurrentNews tool to find one current NFL news report.',
+      'Do not answer from model memory.',
+      'Give the publisher, publication date, headline, and source link.',
+    ].join(' '),
+    maxOutputTokens: 256,
     abortSignal: signal,
   });
+  const hasValidWebSource = result.sources.some(
+    (source) =>
+      source.sourceType === 'url' && normalizeWebUrl(source.url) !== null,
+  );
+  if (!hasValidWebSource) {
+    throw new Error('Gemini Google Search returned no valid web source.');
+  }
 }
 
 function requestSignalWithTimeout(

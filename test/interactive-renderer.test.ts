@@ -41,8 +41,20 @@ describe('SebTerminalRenderer prompt input', () => {
     const renderer = createRenderer(terminal, new MemoryPromptHistory(), uiState);
     const selected = renderer.readPrompt();
 
-    terminal.input.type('1');
+    terminal.input.type('1\r');
     await expect(selected).resolves.toBe('Compare these players');
+  });
+
+  it('submits a year-first question instead of a numbered suggestion', async () => {
+    const uiState = new InteractiveUiState();
+    uiState.suggestions = ['Compare these players', 'Show current news'];
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), uiState);
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type('2026 season news\r');
+
+    await expect(prompt).resolves.toBe('2026 season news');
   });
 
   it('opens a long answer at its start and scrolls without recalling history', async () => {
@@ -205,9 +217,30 @@ describe('SebTerminalRenderer prompt input', () => {
 
     terminal.input.type('?\x1b');
 
+    await expect.poll(() => terminal.output.text().split('\x1b[H').at(-1)).toContain('◆ Seb');
     const frame = terminal.output.text().split('\x1b[H').at(-1);
     expect(frame).toContain('◆ Seb');
     expect(frame).toContain('Transcript line 1');
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
+  it('scrolls a shortcut panel that is taller than the terminal', async () => {
+    const terminal = createTerminal();
+    terminal.output.rows = 16;
+    const renderer = createRenderer(terminal);
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type('?');
+    const firstFrame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(firstFrame).toContain('KEYBOARD SHORTCUTS');
+    expect(firstFrame).not.toContain('/exit');
+
+    terminal.input.type('\x1b[6~\x1b[6~');
+
+    await expect.poll(() => stripAnsi(
+      terminal.output.text().split('\x1b[H').at(-1) ?? '',
+    )).toContain('/exit');
     terminal.input.type('\u0003');
     await expect(prompt).rejects.toThrow('Interrupted');
   });
@@ -312,6 +345,65 @@ describe('SebTerminalRenderer prompt input', () => {
     await expect(prompt).rejects.toThrow('Interrupted');
   });
 
+  it('closes a partial command menu with Escape', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type('/co');
+    expect(terminal.output.text().split('\x1b[H').at(-1)).toContain('Effect:');
+
+    terminal.input.type('\x1b');
+
+    await expect.poll(() => terminal.output.text().split('\x1b[H').at(-1)).not.toContain(
+      'Effect:',
+    );
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
+  it('fills the selected command with Right Arrow', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type('\u000b');
+    expect(terminal.output.text().split('\x1b[H').at(-1)).toContain('Effect:');
+    terminal.input.type('\x1b[C');
+
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame).toContain('/explore');
+    expect(frame).not.toContain('Effect:');
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
+  it('shows a bounded and safe tool-approval input summary', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    const approval = renderer.readToolApproval({
+      input: {
+        apiToken: 'do-not-display-this-token',
+        url: `https://example.com/news\x1b[2J${'x'.repeat(1_000)}`,
+      },
+      toolName: 'readNewsUrl',
+    });
+
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame).toContain('Approval · Read the supplied web page');
+    expect(frame).toContain('Input:');
+    expect(frame).toContain('[redacted]');
+    expect(frame).toContain('…');
+    expect(terminal.output.text()).not.toContain('\x1b[2J');
+    expect(terminal.output.text()).not.toContain('do-not-display-this-token');
+
+    terminal.input.type('n');
+    await expect(approval).resolves.toEqual({
+      approved: false,
+      reason: 'The user denied the tool call.',
+    });
+  });
+
   it('releases mouse reporting for native text selection', async () => {
     const terminal = createTerminal();
     const renderer = createRenderer(terminal);
@@ -323,7 +415,7 @@ describe('SebTerminalRenderer prompt input', () => {
 
     terminal.input.type('ignored while selecting');
     terminal.input.type('\x1b');
-    expect(terminal.output.text()).toContain('\x1b[?1000h\x1b[?1002h\x1b[?1006h');
+    await expect.poll(() => terminal.output.text()).toContain('\x1b[?1000h\x1b[?1002h\x1b[?1006h');
 
     terminal.input.type('new request\r');
     await expect(prompt).resolves.toBe('new request');
@@ -491,6 +583,25 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(uiState.notification).toContain('history is read-only');
   });
 
+  it('detaches prompt input before a history save completes', async () => {
+    let finishSave: (() => void) | undefined;
+    const history: PromptHistory = {
+      add: () => new Promise<void>((resolve) => { finishSave = resolve; }),
+      clear: () => Promise.resolve(),
+      list: () => [],
+    };
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal, history);
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type('Save this prompt\r');
+
+    expect(terminal.input.listenerCount('data')).toBe(0);
+    expect(terminal.input.pauseCount).toBeGreaterThan(0);
+    finishSave?.();
+    await expect(prompt).resolves.toBe('Save this prompt');
+  });
+
   it('shows useful automatic context without empty setup badges', async () => {
     const terminal = createTerminal();
     terminal.output.columns = 40;
@@ -569,12 +680,44 @@ describe('SebTerminalRenderer prompt input', () => {
     await expect(prompt).resolves.toBe('/league 100');
   });
 
+  it('restores the prompt draft after a context command', async () => {
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    session.leagues = [{
+      deadlines: [],
+      leagueId: '100',
+      name: 'Home League',
+      rosterIds: [4],
+      status: 'in_season',
+      warning: null,
+    }];
+    session.leagueOptions = ['100'];
+    const terminal = createTerminal();
+    const renderer = createRenderer(
+      terminal,
+      new MemoryPromptHistory(),
+      new InteractiveUiState(),
+      () => undefined,
+      session,
+    );
+    const contextCommand = renderer.readPrompt();
+
+    terminal.input.type('Compare my flex options\u0007\x1b[C\r');
+    await expect(contextCommand).resolves.toBe('/league 100');
+
+    const restoredPrompt = renderer.readPrompt();
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame).toContain('Compare my flex options');
+    terminal.input.type('\u0003');
+    await expect(restoredPrompt).rejects.toThrow('Interrupted');
+  });
+
   it('opens a completed answer at its Decision section', async () => {
     const terminal = createTerminal();
     terminal.output.columns = 80;
     terminal.output.rows = 18;
     const renderer = createRenderer(terminal);
     const preamble = Array.from({ length: 20 }, (_, index) => `Research note ${index + 1}`);
+    const bridge = Array.from({ length: 20 }, (_, index) => `Additional evidence ${index + 1}`);
     const details = Array.from({ length: 20 }, (_, index) => `Decision detail ${index + 1}`);
 
     await renderer.renderStream({
@@ -585,7 +728,13 @@ describe('SebTerminalRenderer prompt input', () => {
           controller.enqueue({
             type: 'text-delta',
             id: 'decision-text',
-            delta: [...preamble, '## Decision', ...details].join('\n'),
+            delta: [
+              ...preamble,
+              'The decision depends on the final injury report.',
+              ...bridge,
+              '## Decision',
+              ...details,
+            ].join('\n'),
           });
           controller.enqueue({ type: 'text-end', id: 'decision-text' });
           controller.enqueue({ type: 'finish', finishReason: 'stop' });
@@ -599,6 +748,7 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(frame).toContain('DECISION');
     expect(frame).toContain('Decision detail 1');
     expect(frame).not.toContain('Research note 20');
+    expect(frame).not.toContain('The decision depends');
     expect(frame).toContain('Opened at Decision');
     terminal.input.type('\u0003');
     await expect(prompt).rejects.toThrow('Interrupted');
@@ -804,6 +954,65 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(frame).toContain('LIVE');
   });
 
+  it('keeps errors from separate streams in the transcript', async () => {
+    const terminal = createTerminal();
+    terminal.output.rows = 40;
+    const renderer = createRenderer(terminal);
+
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.error(new Error('First stream failed'));
+        },
+      }),
+    });
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.error(new Error('Second stream failed'));
+        },
+      }),
+    });
+
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame).toContain('First stream failed');
+    expect(frame).toContain('Second stream failed');
+  });
+
+  it('keeps the last completed answer when Escape stops a stream', async () => {
+    const uiState = new InteractiveUiState();
+    uiState.latestAnswer = 'Last complete answer';
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), uiState);
+    let controller: ReadableStreamDefaultController<UIMessageChunk> | undefined;
+    let closed = false;
+    const rendered = renderer.renderStream({
+      abort: () => {
+        if (closed) return;
+        closed = true;
+        controller?.close();
+      },
+      uiMessageStream: new ReadableStream({
+        start(streamController) {
+          controller = streamController;
+          streamController.enqueue({ type: 'start', messageId: 'partial-answer' });
+          streamController.enqueue({ type: 'text-start', id: 'partial-text' });
+          streamController.enqueue({
+            type: 'text-delta',
+            id: 'partial-text',
+            delta: 'Partial current answer',
+          });
+        },
+      }),
+    });
+
+    await expect.poll(() => terminal.output.text()).toContain('Partial current answer');
+    terminal.input.type('\x1b');
+    await rendered;
+
+    expect(uiState.latestAnswer).toBe('Last complete answer');
+  });
+
   it('shows an intermediate tool error as a retry and removes it after success', async () => {
     const terminal = createTerminal();
     const renderer = createRenderer(terminal);
@@ -915,8 +1124,9 @@ function createRenderer(
 function createTerminal() {
   class Input extends EventEmitter {
     isTTY = true;
+    pauseCount = 0;
     rawModes: boolean[] = [];
-    pause(): this { return this; }
+    pause(): this { this.pauseCount += 1; return this; }
     resume(): this { return this; }
     setRawMode(mode: boolean): this { this.rawModes.push(mode); return this; }
     type(value: string): void { this.emit('data', Buffer.from(value)); }

@@ -28,6 +28,7 @@ interface PendingToolApproval extends SebRendererToolApprovalRequest {
 }
 
 export interface SebConversationRenderer {
+  close?(): void;
   readPrompt(options?: SebRendererSessionOptions): Promise<string | undefined>;
   readToolApproval(
     request: SebRendererToolApprovalRequest,
@@ -63,6 +64,14 @@ export class SebConversationRunner {
   }
 
   async run(): Promise<void> {
+    try {
+      await this.runConversation();
+    } finally {
+      this.renderer.close?.();
+    }
+  }
+
+  private async runConversation(): Promise<void> {
     const messages: UIMessage[] = [];
     let nextMessageIndex = 0;
     let prompt: string | undefined;

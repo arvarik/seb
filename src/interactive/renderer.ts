@@ -150,9 +150,12 @@ interface ContextItem {
 
 const SPINNERS = ['◐', '◓', '◑', '◒'] as const;
 const FRAME_INTERVAL_MS = Math.ceil(1000 / 60);
+const ESCAPE_SEQUENCE_WAIT_MS = 25;
 const MINIMUM_TERMINAL_HEIGHT = 16;
 const MINIMUM_TERMINAL_WIDTH = 40;
 const MOUSE_WHEEL_LINES = 3;
+const TOOL_APPROVAL_INPUT_LIMIT = 500;
+const TOOL_APPROVAL_SENSITIVE_KEY = /(?:api[_-]?key|authorization|cookie|password|secret|token)/iu;
 const MOUSE_REPORTING_OFF = '\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l';
 const MOUSE_REPORTING_ON = '\x1b[?1000h\x1b[?1002h\x1b[?1006h';
 const TERMINAL_CONTROL_AT_START = /^\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/u;
@@ -161,10 +164,13 @@ export class SebTerminalRenderer {
   private active = false;
   private activeStartedAt = 0;
   private activeToolIds = new Set<string>();
+  private approvalSequence = 0;
   private answerFocus: 'Decision' | 'answer' | null = null;
   private contextChoices = new Map<ContextField, number>();
+  private contextDraft = '';
   private contextSelection = 0;
   private editor = new PromptEditor();
+  private escapeTimer: ReturnType<typeof setTimeout> | undefined;
   private exitRequested = false;
   private framePlainLines: string[] = [];
   private historyIndex = -1;
@@ -174,19 +180,25 @@ export class SebTerminalRenderer {
   private lastPaintAt = 0;
   private lastWidth = 0;
   private maximumScrollOffset = 0;
+  private maximumOverlayScrollOffset = 0;
+  private menuDismissed = false;
   private menuOpen = false;
   private menuSelection = 0;
   private onData: ((chunk: Buffer) => void) | undefined;
   private onResize: (() => void) | undefined;
   private overlay: 'none' | 'shortcuts' | 'history' | 'context' = 'none';
   private readonly options: SebRendererOptions;
+  private overlayScrollOffset = 0;
   private paintTimer: ReturnType<typeof setTimeout> | undefined;
+  private paintedBodyHeight = 3;
+  private pendingPromptDraft: string | undefined;
   private scrollOffset = 0;
   private screenSelection: ScreenSelection | undefined;
   private selectionMode = false;
   private sections: Section[] = [];
   private status = 'Ready';
   private streamMessage: UIMessage | undefined;
+  private streamSequence = 0;
   private streamStartedAt = 0;
   private streamStop: (() => void) | undefined;
   private theme: SebTheme;
@@ -207,16 +219,18 @@ export class SebTerminalRenderer {
     this.start();
     this.status = this.options.uiState.notification || 'Ready';
     this.options.uiState.notification = '';
-    this.editor.set('');
+    this.editor.set(this.pendingPromptDraft ?? '');
+    this.pendingPromptDraft = undefined;
+    this.menuDismissed = false;
     this.historyIndex = -1;
     this.interrupted = false;
     this.exitRequested = false;
     this.paint();
     return await new Promise<string | undefined>((resolve, reject) => {
       this.onData = (chunk) => {
-        for (const key of this.keyParser.parse(chunk)) {
+        this.dispatchInput(chunk, (key) => {
           void this.handlePromptKey(key, resolve, reject);
-        }
+        });
       };
       this.attachInput();
       if (options?.title) this.paint();
@@ -235,10 +249,11 @@ export class SebTerminalRenderer {
     this.streamStop = result.abort;
     this.startTicker();
     this.onData = (chunk) => {
-      for (const key of this.keyParser.parse(chunk)) this.handleStreamKey(key);
+      this.dispatchInput(chunk, (key) => this.handleStreamKey(key));
     };
     this.attachInput();
     let response = result.message;
+    const streamErrorId = `stream-error-${++this.streamSequence}`;
     const stream = toReadableStream(result.uiMessageStream);
     try {
       const messages = readUIMessageStream({
@@ -246,7 +261,7 @@ export class SebTerminalRenderer {
         stream,
         onError: (error) => this.upsert({
           content: errorMessage(error),
-          id: 'stream-error',
+          id: streamErrorId,
           kind: 'error',
           title: 'Error',
         }),
@@ -259,7 +274,7 @@ export class SebTerminalRenderer {
       }
     } catch (error) {
       if (!this.interrupted) {
-        this.upsert({ content: errorMessage(error), id: 'stream-error', kind: 'error', title: 'Error' });
+        this.upsert({ content: errorMessage(error), id: streamErrorId, kind: 'error', title: 'Error' });
       }
     } finally {
       if (this.interrupted) result.abort?.();
@@ -270,9 +285,11 @@ export class SebTerminalRenderer {
       this.status = this.interrupted
         ? 'Request stopped'
         : `Ready · ${formatElapsed(Date.now() - this.streamStartedAt)}`;
-      this.captureAnswer(response);
       this.options.uiState.sources = this.options.sources.list();
-      this.focusLatestAnswer();
+      if (!this.interrupted) {
+        this.captureAnswer(response);
+        this.focusLatestAnswer();
+      }
       this.paint();
       this.streamStop = undefined;
     }
@@ -284,11 +301,22 @@ export class SebTerminalRenderer {
     request: SebRendererToolApprovalRequest,
   ): Promise<{ approved: boolean; reason?: string }> {
     this.start();
-    this.status = `Approve ${request.title ?? friendlyToolName(request.toolName)}? y/n`;
+    this.answerFocus = null;
+    this.scrollOffset = 0;
+    const title = request.title ?? friendlyToolName(request.toolName);
+    const sectionId = `tool-approval-${++this.approvalSequence}`;
+    const input = toolApprovalInputSummary(request.input);
+    this.upsert({
+      content: `Input: ${input}\nPress Y to approve. Press N to deny.`,
+      id: sectionId,
+      kind: 'tool',
+      title: `Approval · ${title}`,
+    });
+    this.status = `Approve ${title}? y/n`;
     this.paint();
     return await new Promise((resolve, reject) => {
       this.onData = (chunk) => {
-        for (const key of this.keyParser.parse(chunk)) {
+        this.dispatchInput(chunk, (key) => {
           if (key.type === 'character' && key.value.toLowerCase() === 'y') {
             this.detachInput();
             resolve({ approved: true });
@@ -299,10 +327,14 @@ export class SebTerminalRenderer {
             this.stop();
             reject(new Error('Interrupted'));
           }
-        }
+        });
       };
       this.attachInput();
     });
+  }
+
+  close(): void {
+    this.stop();
   }
 
   private async handlePromptKey(
@@ -335,53 +367,62 @@ export class SebTerminalRenderer {
         reject(new Error('Interrupted'));
         return;
       }
+      if (key.type === 'page-up' || key.type === 'up' || key.type === 'scroll-up') {
+        this.scrollOverlay(key.type === 'page-up' ? -this.pageScrollLines() : -MOUSE_WHEEL_LINES);
+        return;
+      }
+      if (key.type === 'page-down' || key.type === 'down' || key.type === 'scroll-down') {
+        this.scrollOverlay(key.type === 'page-down' ? this.pageScrollLines() : MOUSE_WHEEL_LINES);
+        return;
+      }
       if (key.type === 'escape' || key.type === 'enter' || key.type === 'character') {
         this.overlay = 'none';
+        this.overlayScrollOffset = 0;
+        this.maximumOverlayScrollOffset = 0;
         this.paint();
       }
       return;
     }
     const menu = this.menuCompletions();
-    if (this.menuOpen || (this.editor.text().startsWith('/') && menu.length > 0)) {
+    if (this.menuIsVisible(menu)) {
       if (key.type === 'up' || key.type === 'down') {
         this.menuOpen = true;
         this.menuSelection = cycle(this.menuSelection, key.type === 'up' ? -1 : 1, menu.length);
         this.paint();
         return;
       }
-      if (key.type === 'tab') {
+      if (key.type === 'tab' || key.type === 'right') {
         this.acceptMenu();
         return;
       }
       if (key.type === 'escape') {
         this.menuOpen = false;
-        if (this.editor.text() === '/') this.editor.set('');
+        this.menuDismissed = true;
+        if (this.editor.text() === '/') {
+          this.editor.set('');
+          this.menuDismissed = false;
+        }
         this.paint();
         return;
       }
     }
     switch (key.type) {
       case 'character':
-        if (this.editor.text() === '' && /^[123]$/u.test(key.value)) {
-          const suggestion = this.suggestions()[Number(key.value) - 1];
-          if (suggestion) {
-            this.editor.set(suggestion);
-            if (!suggestion.includes('<')) await this.submitPrompt(resolve);
-            else this.paint();
-            return;
-          }
-        }
         if (this.editor.text() === '' && key.value === '?') {
           this.overlay = 'shortcuts';
+          this.overlayScrollOffset = 0;
           this.paint();
           return;
         }
         this.editor.insert(key.value);
         this.resetMenu();
+        if (this.numberedSuggestion()) {
+          this.status = `Press Enter to use action ${key.value}, or continue typing`;
+        }
         break;
       case 'paste': this.editor.insert(sanitizeTerminalText(key.value.replace(/\r\n?/g, '\n'))); break;
       case 'backspace': this.editor.backspace(); this.resetMenu(); break;
-      case 'delete': this.editor.deleteForward(); break;
+      case 'delete': this.editor.deleteForward(); this.resetMenu(); break;
       case 'left': this.editor.moveLeft(); break;
       case 'right': this.editor.moveRight(); break;
       case 'word-left': this.editor.moveWordLeft(); break;
@@ -401,7 +442,11 @@ export class SebTerminalRenderer {
       case 'scroll-down': this.scroll(-MOUSE_WHEEL_LINES); return;
       case 'ctrl-r': this.reverseSearch(); break;
       case 'ctrl-g': this.openContextSelector(); break;
-      case 'ctrl-k': this.menuOpen = true; if (!this.editor.text()) this.editor.set('/'); break;
+      case 'ctrl-k':
+        this.menuDismissed = false;
+        this.menuOpen = true;
+        if (!this.editor.text()) this.editor.set('/');
+        break;
       case 'ctrl-l': this.paint(true); return;
       case 'escape': this.stop(); reject(new Error('Interrupted')); return;
       case 'ctrl-c': this.stop(); reject(new Error('Interrupted')); return;
@@ -409,6 +454,13 @@ export class SebTerminalRenderer {
         if (this.menuOpen && this.editor.text() === '/') {
           this.acceptMenu();
           return;
+        }
+        if (this.acceptNumberedSuggestion()) {
+          if (this.editor.text().includes('<')) {
+            this.status = 'Replace the placeholder, then press Enter';
+            this.paint();
+            return;
+          }
         }
         await this.submitPrompt(resolve);
         return;
@@ -440,6 +492,7 @@ export class SebTerminalRenderer {
     }
     if (localCommand?.name === 'shortcuts') {
       this.overlay = 'shortcuts';
+      this.overlayScrollOffset = 0;
       this.editor.set('');
       this.paint();
       return;
@@ -489,6 +542,7 @@ export class SebTerminalRenderer {
         }
       } else {
         this.overlay = 'history';
+        this.overlayScrollOffset = 0;
       }
       this.editor.set('');
       this.paint();
@@ -533,6 +587,7 @@ export class SebTerminalRenderer {
     }
     if (key.type === 'escape' || key.type === 'ctrl-g') {
       this.overlay = 'none';
+      this.contextDraft = '';
       this.status = 'Ready';
       this.paint();
       return;
@@ -558,7 +613,9 @@ export class SebTerminalRenderer {
     if (key.type !== 'enter' || !item) return;
     if (item.field === 'player') {
       this.overlay = 'none';
-      this.editor.set('/skill player-info ');
+      const draft = this.contextDraft.trim();
+      this.contextDraft = '';
+      this.editor.set(`/skill player-info ${draft ? `<Player> ${draft}` : ''}`);
       this.status = 'Type a player name and question';
       this.paint();
       return;
@@ -567,12 +624,16 @@ export class SebTerminalRenderer {
     const choice = item.choices[choiceIndex];
     if (!choice) return;
     this.overlay = 'none';
+    this.pendingPromptDraft = this.contextDraft;
+    this.contextDraft = '';
     this.editor.set(choice.command);
     await this.submitPrompt(resolve);
   }
 
   private openContextSelector(): void {
+    this.contextDraft = this.editor.text();
     this.overlay = 'context';
+    this.overlayScrollOffset = 0;
     this.menuOpen = false;
     this.contextSelection = 0;
     this.contextChoices.clear();
@@ -662,11 +723,6 @@ export class SebTerminalRenderer {
     this.answerFocus = null;
     this.scrollOffset = 0;
     this.options.uiState.showSuggestions = false;
-    try {
-      await this.options.history.add(prompt);
-    } catch (error) {
-      this.options.uiState.notification = errorMessage(error);
-    }
     if (!prompt.startsWith('/')) {
       this.options.uiState.latestPrompt = prompt;
     }
@@ -675,6 +731,11 @@ export class SebTerminalRenderer {
     this.detachInput();
     this.status = 'Thinking';
     this.paint();
+    try {
+      await this.options.history.add(prompt);
+    } catch (error) {
+      this.options.uiState.notification = errorMessage(error);
+    }
     resolve(prompt);
   }
 
@@ -806,18 +867,42 @@ export class SebTerminalRenderer {
     }, 8);
   }
 
+  private menuIsVisible(completions = this.menuCompletions()): boolean {
+    return this.menuOpen || (
+      !this.menuDismissed &&
+      this.editor.text().startsWith('/') &&
+      completions.length > 0
+    );
+  }
+
   private acceptMenu(): void {
     const completion = this.menuCompletions()[this.menuSelection];
     if (!completion) return;
     this.editor.set(completion.value);
     this.menuOpen = false;
+    this.menuDismissed = true;
     this.menuSelection = 0;
     this.paint();
   }
 
   private resetMenu(): void {
+    this.menuDismissed = false;
     this.menuOpen = false;
     this.menuSelection = 0;
+  }
+
+  private numberedSuggestion(): string | undefined {
+    if (!this.options.uiState.showSuggestions) return undefined;
+    const match = this.editor.text().match(/^[123]$/u);
+    return match ? this.suggestions()[Number(match[0]) - 1] : undefined;
+  }
+
+  private acceptNumberedSuggestion(): boolean {
+    const suggestion = this.numberedSuggestion();
+    if (!suggestion) return false;
+    this.editor.set(suggestion);
+    this.resetMenu();
+    return true;
   }
 
   private recallHistory(direction: 1 | -1): void {
@@ -884,12 +969,36 @@ export class SebTerminalRenderer {
   }
 
   private attachInput(): void {
-    if (this.onData) this.options.input.on('data', this.onData);
+    if (!this.onData) return;
+    this.options.input.on('data', this.onData);
+    if (this.options.input.isTTY) this.options.input.resume();
   }
 
   private detachInput(): void {
+    this.cancelEscapeTimer();
     if (this.onData) this.options.input.off('data', this.onData);
     this.onData = undefined;
+    this.keyParser.reset();
+    if (this.active && this.options.input.isTTY) this.options.input.pause();
+  }
+
+  private dispatchInput(
+    chunk: Buffer,
+    accept: (key: TerminalKey) => void,
+  ): void {
+    this.cancelEscapeTimer();
+    for (const key of this.keyParser.parse(chunk)) accept(key);
+    if (!this.keyParser.hasPendingEscape()) return;
+    this.escapeTimer = setTimeout(() => {
+      this.escapeTimer = undefined;
+      for (const key of this.keyParser.flushPendingEscape()) accept(key);
+    }, ESCAPE_SEQUENCE_WAIT_MS);
+    this.escapeTimer.unref?.();
+  }
+
+  private cancelEscapeTimer(): void {
+    if (this.escapeTimer) clearTimeout(this.escapeTimer);
+    this.escapeTimer = undefined;
   }
 
   private startTicker(): void {
@@ -995,6 +1104,17 @@ export class SebTerminalRenderer {
     this.requestPaint();
   }
 
+  private scrollOverlay(delta: number): void {
+    const nextOffset = clamp(
+      this.overlayScrollOffset + delta,
+      0,
+      this.maximumOverlayScrollOffset,
+    );
+    if (nextOffset === this.overlayScrollOffset) return;
+    this.overlayScrollOffset = nextOffset;
+    this.requestPaint();
+  }
+
   private focusLatestAnswer(): void {
     const width = Math.max(1, this.options.output.columns ?? 80);
     const height = Math.max(1, this.options.output.rows ?? 24);
@@ -1016,7 +1136,7 @@ export class SebTerminalRenderer {
     }
     if (assistantStart < 0) return;
     const decision = body.findIndex((line, index) =>
-      index > assistantStart && /\bDECISION\b/u.test(stripAnsi(line).toUpperCase()),
+      index > assistantStart && isDecisionHeading(line),
     );
     const anchor = decision >= 0 ? decision : assistantStart;
     const maximumOffset = Math.max(0, body.length - bodyHeight);
@@ -1034,7 +1154,7 @@ export class SebTerminalRenderer {
   }
 
   private pageScrollLines(): number {
-    return Math.max(1, this.viewportHeight - 1);
+    return Math.max(1, this.paintedBodyHeight - 1);
   }
 
   private requestPaint(): void {
@@ -1068,10 +1188,18 @@ export class SebTerminalRenderer {
     const footer = this.renderFooter(width, maximumFooterHeight);
     const footerHeight = footer.length;
     const bodyHeight = Math.max(3, height - header.length - footerHeight);
+    this.paintedBodyHeight = bodyHeight;
     const bodyRows = this.renderBodyRows(width);
     const body = bodyRows.map((row) => row.text);
     const maximumOffset = Math.max(0, body.length - bodyHeight);
     const transcriptVisible = this.overlay === 'none' && this.sections.length > 0;
+    if (this.overlay !== 'none') {
+      this.maximumOverlayScrollOffset = maximumOffset;
+      this.overlayScrollOffset = Math.min(this.overlayScrollOffset, maximumOffset);
+    } else {
+      this.maximumOverlayScrollOffset = 0;
+      this.overlayScrollOffset = 0;
+    }
     if (transcriptVisible) {
       this.maximumScrollOffset = maximumOffset;
       const widthChanged = this.lastWidth > 0 && width !== this.lastWidth;
@@ -1091,12 +1219,16 @@ export class SebTerminalRenderer {
       this.scrollOffset = Math.min(this.scrollOffset, maximumOffset);
       this.lastWidth = width;
     }
-    const end = this.overlay === 'none' ? body.length - this.scrollOffset : body.length;
     const topAligned = this.overlay !== 'none' || this.sections.length === 0;
-    const visibleStart = topAligned ? 0 : Math.max(0, end - bodyHeight);
-    const visible = topAligned
-      ? body.slice(0, bodyHeight)
-      : body.slice(visibleStart, end);
+    const end = this.overlay !== 'none'
+      ? Math.min(body.length, this.overlayScrollOffset + bodyHeight)
+      : this.sections.length === 0
+        ? Math.min(body.length, bodyHeight)
+        : body.length - this.scrollOffset;
+    const visibleStart = this.overlay !== 'none'
+      ? this.overlayScrollOffset
+      : topAligned ? 0 : Math.max(0, end - bodyHeight);
+    const visible = body.slice(visibleStart, end);
     while (visible.length < bodyHeight) {
       if (topAligned) visible.push('');
       else visible.unshift('');
@@ -1221,7 +1353,7 @@ export class SebTerminalRenderer {
   }
 
   private renderFooter(width: number, maximumHeight = Number.POSITIVE_INFINITY): string[] {
-    let menu = this.menuOpen || this.editor.text().startsWith('/')
+    let menu = this.menuIsVisible()
       ? this.renderMenu(width)
       : [];
     let suggestions = this.overlay === 'none' &&
@@ -1244,7 +1376,9 @@ export class SebTerminalRenderer {
     const promptLines = this.overlay === 'none'
       ? renderEditor(this.editor, width - 4, this.theme, maximumPromptRows)
       : [];
-    const status = this.answerFocus
+    const status = this.overlay !== 'none'
+      ? 'Panel open · PgUp/PgDn or the mouse wheel scrolls · Escape closes'
+      : this.answerFocus
       ? `Opened at ${this.answerFocus} · ${this.scrollOffset} ${this.scrollOffset === 1 ? 'line' : 'lines'} to latest · PgDn continues`
       : this.scrollOffset > 0
         ? `Viewing earlier transcript · ${this.scrollOffset} ${this.scrollOffset === 1 ? 'line' : 'lines'} above latest · PgDn returns`
@@ -1337,8 +1471,8 @@ export class SebTerminalRenderer {
       '  Ctrl+K       Open the command palette',
       '  Ctrl+G       Select the active context',
       '  ?            Open this guide from an empty prompt',
-      '  Tab          Fill the selected command',
-      '  1 / 2 / 3    Select a contextual suggestion',
+      '  Tab / →      Fill the selected command',
+      '  1 / 2 / 3    Type a number, then press Enter',
       '  ← / →        Move the cursor',
       '  Option+←/→   Move by one word',
       '  Ctrl+A / E   Move to the start or end',
@@ -1347,8 +1481,8 @@ export class SebTerminalRenderer {
       '  Alt+Enter    Insert a new line',
       '  ↑ / ↓        Read prompt history',
       '  Ctrl+R       Search prompt history',
-      '  PgUp/PgDn    Scroll the transcript',
-      '  Mouse wheel   Scroll the transcript',
+      '  PgUp/PgDn    Scroll the transcript or panel',
+      '  Mouse wheel  Scroll the transcript or panel',
       '  Mouse drag    Select and copy visible text',
       '  /select       Use native selection as a fallback',
       '  Escape       Close a panel or stop a request',
@@ -1689,6 +1823,26 @@ function hasLaterToolAttempt(
 ): boolean {
   return parts.slice(index + 1).some((part) =>
     isToolUIPart(part) && getToolName(part) === toolName);
+}
+
+function isDecisionHeading(line: string): boolean {
+  return /^(?:━━|◆|›|==|#|>)\s+DECISION(?:\s|$)/u.test(
+    stripAnsi(line).trim().toUpperCase(),
+  );
+}
+
+function toolApprovalInputSummary(input: unknown): string {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(input, (key, value: unknown) =>
+      TOOL_APPROVAL_SENSITIVE_KEY.test(key) ? '[redacted]' : value) ?? String(input);
+  } catch {
+    serialized = '[Input could not be serialized]';
+  }
+  const safe = sanitizeTerminalText(serialized).replace(/\s+/gu, ' ').trim() || 'none';
+  const graphemes = terminalGraphemes(safe);
+  if (graphemes.length <= TOOL_APPROVAL_INPUT_LIMIT) return safe;
+  return `${graphemes.slice(0, TOOL_APPROVAL_INPUT_LIMIT - 1).join('')}…`;
 }
 
 function errorMessage(error: unknown): string {

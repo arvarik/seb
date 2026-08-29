@@ -151,6 +151,29 @@ describe('interactive skills', () => {
     expect(ambiguous.player).toBeNull();
   });
 
+  it('updates subjects after successful projection and defense tools', () => {
+    const session = createSessionState();
+
+    recordUserConfirmedToolContext(session, 'projectPlayer', {
+      leagueId: '100',
+      playerName: 'Derrick Henry',
+      season: 2026,
+      week: 2,
+    }, {
+      player: { name: 'Derrick Henry', playerId: 'henry-1' },
+    }, 'Project Derrick Henry for Week 2.');
+    recordUserConfirmedToolContext(session, 'getDefenseVsPosition', {
+      defense: 'SEA',
+      position: 'TE',
+      season: 2025,
+    }, {
+      summary: { games: 17 },
+    }, 'How did the Seattle Seahawks defend tight ends?');
+
+    expect(session.player).toBe('Derrick Henry');
+    expect(session.team).toBe('SEA');
+  });
+
   it('does not let model-selected tool input replace the user context', () => {
     const session = createSessionState();
     session.player = 'Derrick Henry';
@@ -540,6 +563,136 @@ describe('SebInteractiveTransport', () => {
     ));
 
     expect(session.team).toBeNull();
+  });
+
+  it('updates the player after one successful streamed tool result', async () => {
+    const session = createSessionState();
+    const sourceStream = new ReadableStream<UIMessageChunk>({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'player-answer' });
+        controller.enqueue({
+          type: 'tool-input-available',
+          toolCallId: 'henry-call',
+          toolName: 'getPlayerWeeklyStats',
+          input: { playerName: 'Derrick Henry', season: 2025 },
+        });
+        controller.enqueue({
+          type: 'tool-output-available',
+          toolCallId: 'henry-call',
+          output: { stats: [{ playerId: 'henry-1' }] },
+        });
+        controller.enqueue({ type: 'finish', finishReason: 'stop' });
+        controller.close();
+      },
+    });
+
+    await streamText(decorateResponseStream(
+      sourceStream,
+      session,
+      new SourceTracker(),
+      new InteractiveUiState(),
+      'Show Derrick Henry statistics.',
+    ));
+
+    expect(session.player).toBe('Derrick Henry');
+  });
+
+  it.each([
+    ['henry-call', 'barkley-call'],
+    ['barkley-call', 'henry-call'],
+  ])(
+    'does not choose one comparison subject when %s finishes before %s',
+    async (firstResult, secondResult) => {
+      const session = createSessionState();
+      session.player = 'Christian McCaffrey';
+      const calls = {
+        'barkley-call': {
+          input: { playerName: 'Saquon Barkley', season: 2025 },
+          output: { stats: [{ playerId: 'barkley-1' }] },
+        },
+        'henry-call': {
+          input: { playerName: 'Derrick Henry', season: 2025 },
+          output: { stats: [{ playerId: 'henry-1' }] },
+        },
+      } as const;
+      const sourceStream = new ReadableStream<UIMessageChunk>({
+        start(controller) {
+          controller.enqueue({ type: 'start', messageId: 'comparison-answer' });
+          for (const [toolCallId, call] of Object.entries(calls)) {
+            controller.enqueue({
+              type: 'tool-input-available',
+              toolCallId,
+              toolName: 'getPlayerWeeklyStats',
+              input: call.input,
+            });
+          }
+          for (const toolCallId of [firstResult, secondResult]) {
+            const call = calls[toolCallId as keyof typeof calls];
+            controller.enqueue({
+              type: 'tool-output-available',
+              toolCallId,
+              output: call.output,
+            });
+          }
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
+          controller.close();
+        },
+      });
+
+      await streamText(decorateResponseStream(
+        sourceStream,
+        session,
+        new SourceTracker(),
+        new InteractiveUiState(),
+        'Compare Derrick Henry and Saquon Barkley.',
+      ));
+
+      expect(session.player).toBe('Christian McCaffrey');
+    },
+  );
+
+  it('keeps the explicit player when one comparison tool errors', async () => {
+    const session = createSessionState();
+    session.player = 'Christian McCaffrey';
+    const sourceStream = new ReadableStream<UIMessageChunk>({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'partial-comparison-answer' });
+        controller.enqueue({
+          type: 'tool-input-available',
+          toolCallId: 'henry-call',
+          toolName: 'getPlayerWeeklyStats',
+          input: { playerName: 'Derrick Henry', season: 2025 },
+        });
+        controller.enqueue({
+          type: 'tool-input-available',
+          toolCallId: 'barkley-call',
+          toolName: 'getPlayerWeeklyStats',
+          input: { playerName: 'Saquon Barkley', season: 2025 },
+        });
+        controller.enqueue({
+          type: 'tool-output-available',
+          toolCallId: 'henry-call',
+          output: { stats: [{ playerId: 'henry-1' }] },
+        });
+        controller.enqueue({
+          type: 'tool-output-error',
+          toolCallId: 'barkley-call',
+          errorText: 'The player statistics source failed.',
+        });
+        controller.enqueue({ type: 'finish', finishReason: 'stop' });
+        controller.close();
+      },
+    });
+
+    await streamText(decorateResponseStream(
+      sourceStream,
+      session,
+      new SourceTracker(),
+      new InteractiveUiState(),
+      'Compare Derrick Henry and Saquon Barkley.',
+    ));
+
+    expect(session.player).toBe('Christian McCaffrey');
   });
 
   it('withholds a partial recommendation after an error finish', async () => {

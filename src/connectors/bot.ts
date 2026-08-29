@@ -317,7 +317,7 @@ export function withWebSources(
             emittedOutput,
           );
         }
-        if (isModelOutputPart(part)) emittedOutput = true;
+        if (isUserVisibleOutputPart(part)) emittedOutput = true;
         if (isUrlSourcePart(part)) {
           const url = normalizeWebUrl(part.url);
           if (url) {
@@ -455,16 +455,12 @@ function isTextDeltaPart(value: unknown): value is { text: string; type: 'text-d
   );
 }
 
-function isModelOutputPart(value: unknown): boolean {
+function isUserVisibleOutputPart(value: unknown): boolean {
+  if (typeof value === 'string') return value.length > 0;
   if (isTextDeltaPart(value)) return value.text.length > 0;
   if (!value || typeof value !== 'object') return false;
-  const record = value as { text?: unknown; type?: unknown };
-  return typeof record.type === 'string' && [
-    'reasoning-delta',
-    'tool-call',
-    'tool-error',
-    'tool-result',
-  ].includes(record.type);
+  const type = (value as { type?: unknown }).type;
+  return type === 'markdown_text' || type === 'task_update' || type === 'plan_update';
 }
 
 function isErrorPart(value: unknown): value is { error: unknown; type: 'error' } {

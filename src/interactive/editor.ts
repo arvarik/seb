@@ -1,3 +1,5 @@
+import { StringDecoder } from 'node:string_decoder';
+
 import { terminalGraphemes } from './presentation.js';
 
 export class PromptEditor {
@@ -90,10 +92,11 @@ export type TerminalKey =
   | { type: 'escape' | 'tab' | 'ignore' };
 
 export class TerminalKeyParser {
+  private decoder = new StringDecoder('utf8');
   private pending = '';
 
   parse(chunk: Buffer | string): TerminalKey[] {
-    this.pending += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
+    this.pending += Buffer.isBuffer(chunk) ? this.decoder.write(chunk) : chunk;
     const keys: TerminalKey[] = [];
     while (this.pending.length > 0) {
       if (this.pending.startsWith('\x1b[200~')) {
@@ -110,9 +113,25 @@ export class TerminalKeyParser {
     }
     return keys;
   }
+
+  hasPendingEscape(): boolean {
+    return this.pending === '\x1b';
+  }
+
+  flushPendingEscape(): TerminalKey[] {
+    if (!this.hasPendingEscape()) return [];
+    this.pending = '';
+    return [{ type: 'escape' }];
+  }
+
+  reset(): void {
+    this.decoder = new StringDecoder('utf8');
+    this.pending = '';
+  }
 }
 
 function parseOne(value: string): { key: TerminalKey; length: number } | null {
+  if (value === '\x1b') return null;
   const sgrMouse = value.match(/^\x1b\[<(\d+);(\d+);(\d+)([Mm])/u);
   if (sgrMouse) {
     const button = Number(sgrMouse[1]);
@@ -157,6 +176,7 @@ function parseOne(value: string): { key: TerminalKey; length: number } | null {
   for (const [sequence, key] of sequences) {
     if (value.startsWith(sequence)) return { key, length: sequence.length };
   }
+  if (sequences.some(([sequence]) => sequence.startsWith(value))) return null;
   if (value.startsWith('\x1b[') && !/^\x1b\[[0-?]*[ -/]*[@-~]/u.test(value)) {
     return null;
   }

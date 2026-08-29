@@ -2,12 +2,13 @@ import { dirname, resolve } from 'node:path';
 
 import { CachedResource, type ResourcePolicy } from '../data/cached-resource.js';
 import {
+  readResponseErrorDetail,
   readResponseJson,
-  readResponseText,
   ResponseBodyLimitError,
 } from '../data/response-body.js';
 import { ResilientFetch, type RequestPolicy } from '../data/resilient-fetch.js';
 import { getSharedSebDatabase, type SebDatabase } from '../data/sqlite-store.js';
+import { currentRequestSignal } from '../ai/request-signal.js';
 
 import type {
   ResolvedTrendingPlayer,
@@ -231,12 +232,15 @@ export class SleeperClient {
       url.href,
       url.href,
       { ...policy, validate: (value) => schema.parse(value) },
+      this,
     );
+    const signal = currentRequestSignal();
     const result = await resource.read(async (conditional) => {
       let response: Response;
       try {
         response = await this.http.request(url, {
           headers: conditionalHeaders('application/json', conditional),
+          signal: conditional.signal,
         });
       } catch (error) {
         throw new SleeperApiError(
@@ -249,7 +253,7 @@ export class SleeperClient {
         return { notModified: true };
       }
       if (!response.ok) {
-        const body = (await readResponseText(response, MAX_ERROR_BYTES)).slice(0, 300);
+        const body = await readResponseErrorDetail(response, MAX_ERROR_BYTES);
         throw new SleeperApiError(
           `Sleeper returned HTTP ${response.status}.${body ? ` Response: ${body}` : ''}`,
           response.status,
@@ -268,7 +272,7 @@ export class SleeperClient {
         }
         throw new SleeperApiError('Sleeper returned invalid JSON.', response.status, url.href);
       }
-    });
+    }, signal ? { signal } : {});
     this.onSource?.({
       cacheOutcome: result.outcome,
       ...(result.error ? { error: result.error } : {}),

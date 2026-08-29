@@ -57,14 +57,38 @@ describe('SleeperClient', () => {
     expect(players.map((player) => player.player_id)).toEqual(['1']);
   });
 
-  it('returns a typed error for a failed request', async () => {
+  it('keeps provider context when a failed response body exceeds the limit', async () => {
     const fetch: typeof globalThis.fetch = async () =>
-      new Response('missing', { status: 404 });
+      new Response('missing', {
+        status: 404,
+        headers: { 'content-length': '5000' },
+      });
     const client = new SleeperClient({ fetch, playerCacheFile: false });
 
     await expect(client.getLeague('missing')).rejects.toMatchObject({
       name: 'SleeperApiError',
       status: 404,
+      url: 'https://api.sleeper.app/v1/league/missing',
+      message: expect.stringContaining('exceeds 4096 bytes'),
+    } satisfies Partial<SleeperApiError>);
+  });
+
+  it('keeps provider context when a failed response stream breaks', async () => {
+    const client = new SleeperClient({
+      fetch: async () => new Response(new ReadableStream({
+        start(controller) {
+          controller.error(new Error('socket closed'));
+        },
+      }), { status: 503 }),
+      playerCacheFile: false,
+      policy: { maxAttempts: 1 },
+    });
+
+    await expect(client.getLeague('unavailable')).rejects.toMatchObject({
+      name: 'SleeperApiError',
+      status: 503,
+      url: 'https://api.sleeper.app/v1/league/unavailable',
+      message: expect.stringContaining('Response body unavailable: socket closed'),
     } satisfies Partial<SleeperApiError>);
   });
 

@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   registerConnectorHandlers,
   ModelResponseError,
+  waitForSignal,
   withWebSources,
   type ConnectorRuntime,
 } from '../src/connectors/bot.js';
@@ -90,6 +91,81 @@ describe('connector handlers', () => {
     await bot.shutdown();
   });
 
+  it('bounds a pending new-mention subscription with the reply deadline', async () => {
+    const replyAbort = new AbortController();
+    const failureAbort = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((delay) =>
+      delay === 120_000 ? replyAbort.signal : failureAbort.signal
+    );
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const postMessage = vi.fn().mockResolvedValue(undefined);
+    const adapter = createMockAdapter('slack', { postMessage });
+    const state = createMockState();
+    vi.spyOn(state, 'subscribe').mockImplementation(
+      () => new Promise<void>(() => undefined),
+    );
+    const bot = new Chat({
+      adapters: { slack: adapter },
+      state,
+      userName: 'seb',
+    });
+    const reply = vi.fn().mockResolvedValue(undefined);
+    registerConnectorHandlers(bot, reply);
+    await bot.initialize();
+
+    try {
+      const message = createTestMessage('message-subscribe', '<@seb> rank my team', {
+        isMention: true,
+      });
+      const pending = bot.processMessage(adapter, message.threadId, message);
+      await vi.waitFor(() => expect(state.subscribe).toHaveBeenCalledOnce());
+
+      replyAbort.abort(
+        new DOMException('The reply deadline expired.', 'TimeoutError'),
+      );
+
+      await expect(pending).resolves.toBeUndefined();
+      expect(reply).not.toHaveBeenCalled();
+      expect(postMessage).toHaveBeenCalledOnce();
+      expect(timeout).toHaveBeenCalledWith(120_000);
+    } finally {
+      await bot.shutdown();
+      timeout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it('does not subscribe a queued mention after reply shutdown', async () => {
+    const adapter = createMockAdapter('slack');
+    const state = createMockState();
+    const subscribe = vi.spyOn(state, 'subscribe');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const bot = new Chat({
+      adapters: { slack: adapter },
+      state,
+      userName: 'seb',
+    });
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const shutdown = new AbortController();
+    shutdown.abort(new DOMException('The service stopped.', 'AbortError'));
+    registerConnectorHandlers(bot, reply, shutdown.signal);
+    await bot.initialize();
+
+    try {
+      const message = createTestMessage('message-after-stop', '<@seb> rank my team', {
+        isMention: true,
+      });
+
+      await bot.processMessage(adapter, message.threadId, message);
+
+      expect(subscribe).not.toHaveBeenCalled();
+      expect(reply).not.toHaveBeenCalled();
+    } finally {
+      await bot.shutdown();
+      stderr.mockRestore();
+    }
+  });
+
   it('routes direct messages through the shared reply', async () => {
     const adapter = createMockAdapter('slack');
     const state = createMockState();
@@ -110,6 +186,55 @@ describe('connector handlers', () => {
 
     expect(reply).toHaveBeenCalledOnce();
     await bot.shutdown();
+  });
+
+  it('bounds a failure post with an independent deadline', async () => {
+    const failureAbort = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+      .mockReturnValue(failureAbort.signal);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const postMessage = vi.fn(() => new Promise<never>(() => {}));
+    const adapter = createMockAdapter('slack', { postMessage });
+    const bot = new Chat({
+      adapters: { slack: adapter },
+      state: createMockState(),
+      userName: 'seb',
+    });
+    const reply = vi.fn().mockRejectedValue(new Error('The model failed.'));
+    registerConnectorHandlers(bot, reply);
+    await bot.initialize();
+
+    try {
+      const message = createTestMessage('message-3', 'Show my matchups.', {
+        isMention: false,
+        threadId: 'slack:D123:1234.5678',
+      });
+      const pending = bot.processMessage(adapter, message.threadId, message);
+      await vi.waitFor(() => expect(postMessage).toHaveBeenCalledOnce());
+
+      expect(timeout).toHaveBeenCalledWith(5_000);
+      failureAbort.abort(
+        new DOMException('The failure post deadline expired.', 'TimeoutError'),
+      );
+      await expect(pending).resolves.toBeUndefined();
+    } finally {
+      await bot.shutdown();
+      timeout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it('observes pending work when the signal already aborted', async () => {
+    const controller = new AbortController();
+    const reason = new DOMException('The reply stopped.', 'AbortError');
+    controller.abort(reason);
+    const pending = Promise.reject(new Error('The pending task failed later.'));
+    const observe = vi.spyOn(pending, 'catch');
+
+    const result = waitForSignal(pending, controller.signal);
+
+    expect(observe).toHaveBeenCalledOnce();
+    await expect(result).rejects.toBe(reason);
   });
 });
 
@@ -201,6 +326,59 @@ describe('connector web sources', () => {
       name: 'ModelResponseError',
     } satisfies Partial<ModelResponseError>);
   });
+
+  it.each([
+    { emittedOutput: false, includeText: false },
+    { emittedOutput: true, includeText: true },
+  ])(
+    'rejects an aborted model stream when emittedOutput is $emittedOutput',
+    async ({ emittedOutput, includeText }) => {
+      const controller = new AbortController();
+      const reason = new DOMException('The reply deadline expired.', 'TimeoutError');
+      controller.abort(reason);
+      const stream = (async function* () {
+        if (includeText) yield { type: 'text-delta', text: 'Partial answer.' };
+        yield { type: 'abort' };
+      })();
+
+      await expect(async () => {
+        for await (const _part of withWebSources(
+          stream,
+          undefined,
+          '',
+          controller.signal,
+        )) {
+          // Consume the wrapped response.
+        }
+      }).rejects.toMatchObject({
+        cause: reason,
+        emittedOutput,
+        name: 'ModelResponseError',
+      } satisfies Partial<ModelResponseError>);
+    },
+  );
+
+  it('rejects an aborted guarded recommendation stream', async () => {
+    const controller = new AbortController();
+    controller.abort(new DOMException('The reply stopped.', 'AbortError'));
+    const stream = (async function* () {
+      yield { type: 'abort' };
+    })();
+
+    await expect(async () => {
+      for await (const _part of withWebSources(
+        stream,
+        new SourceTracker(),
+        'Should I start Example Player?',
+        controller.signal,
+      )) {
+        // Consume the wrapped response.
+      }
+    }).rejects.toMatchObject({
+      emittedOutput: false,
+      name: 'ModelResponseError',
+    } satisfies Partial<ModelResponseError>);
+  });
 });
 
 describe('connector HTTP service', () => {
@@ -212,6 +390,7 @@ describe('connector HTTP service', () => {
       userName: 'seb',
     });
     const runtime: ConnectorRuntime = {
+      abortReplies: vi.fn(),
       bot,
       config: {
         botName: 'seb',
@@ -253,6 +432,7 @@ describe('connector HTTP service', () => {
       userName: 'seb',
     });
     const runtime: ConnectorRuntime = {
+      abortReplies: vi.fn(),
       bot,
       config: {
         botName: 'seb',

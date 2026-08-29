@@ -5,9 +5,14 @@ import {
   type ResourceLoadContext,
   type ResourceResult,
 } from '../data/cached-resource.js';
-import { readResponseJson, readResponseText, ResponseBodyLimitError } from '../data/response-body.js';
+import {
+  readResponseErrorDetail,
+  readResponseJson,
+  ResponseBodyLimitError,
+} from '../data/response-body.js';
 import { ResilientFetch, type RequestPolicy } from '../data/resilient-fetch.js';
 import { getSharedSebDatabase, type SebDatabase } from '../data/sqlite-store.js';
+import { currentRequestSignal } from '../ai/request-signal.js';
 import type { SourceObserver } from '../sources.js';
 import { SEB_USER_AGENT } from '../version.js';
 import { z } from 'zod';
@@ -193,6 +198,7 @@ export class WeatherClient {
       if (conditional.lastModified) headers.set('if-modified-since', conditional.lastModified);
       response = await this.http.request(url, {
         headers,
+        signal: conditional.signal,
       });
     } catch (error) {
       throw new WeatherApiError(
@@ -207,7 +213,7 @@ export class WeatherClient {
     }
 
     if (!response.ok) {
-      const detail = (await readResponseText(response, MAX_ERROR_BYTES)).slice(0, 300);
+      const detail = await readResponseErrorDetail(response, MAX_ERROR_BYTES);
       throw new WeatherApiError(
         `The National Weather Service returned HTTP ${response.status}.${detail ? ` Response: ${detail}` : ''}`,
         response.status,
@@ -255,7 +261,9 @@ export class WeatherClient {
         ttlMs,
         validate: (value) => schema.parse(value),
       },
+      this,
     );
+    const signal = currentRequestSignal();
     return resource.read(async (conditional) => {
       const loaded = await this.getJson(url, conditional);
       if ('notModified' in loaded) return loaded;
@@ -265,7 +273,7 @@ export class WeatherClient {
         sourceTimestamp: loaded.lastModified,
         value: parse(loaded.document),
       };
-    });
+    }, signal ? { signal } : {});
   }
 
   private validateNwsUrl(url: string): void {

@@ -6,6 +6,35 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The agent now removes old reasoning and tool data before each model step.
+- The final agent step now produces an answer without another tool call.
+- Agents without web tools now state that current news is unavailable.
+- Connector replies now use one two-minute deadline across primary and fallback models.
+- Concurrent reads in one Seb process now share one source refresh per database file.
+
+### Security
+
+- Remote session strings now have a length limit and use one labeled JSON value.
+- Cache reads now require the stored source URL to match the requested source.
+
+### Fixed
+
+- Stopping an interactive model request or network command now cancels active source work.
+- Connector shutdown now cancels active model and source work.
+- One cancelled caller no longer cancels a shared refresh that other callers still need.
+- Each shared refresh now writes one cache value and applies each caller's stale fallback.
+- A cancelled refresh no longer returns stale data or counts as a source failure.
+- Retry cleanup and oversized-body cleanup no longer delay caller cancellation.
+- Cancelling an nflverse request now stops file expansion and CSV parsing.
+- Cache reads now apply the current freshness policy to an existing record.
+- Cache policy deadlines now persist before storage pruning runs.
+- Closing a shared database now removes it from the shared database registry.
+- Unreadable or oversized HTTP error bodies now preserve the useful source error.
+- Interactive account changes now commit only after discovery and profile storage succeed.
+- The doctor now stops its Gemini check when the caller cancels the command.
+
 ## [0.0.11] - 2026-08-21
 
 ### Changed

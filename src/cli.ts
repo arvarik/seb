@@ -41,7 +41,8 @@ import { runSebInteractiveTui } from './interactive/tui.js';
 import { InteractiveUiState } from './interactive/ui-state.js';
 import {
   createSessionState,
-  formatSessionContext,
+  formatSessionData,
+  formatSessionInstructions,
   recordUsage,
 } from './interactive/session.js';
 import { isModelCapacityError } from './model-capacity-error.js';
@@ -284,7 +285,8 @@ async function startInteractiveChat(
     apiKey: selection.apiKey,
     model: selection.primaryModel,
     ...clients,
-    getRuntimeInstructions: () => formatSessionContext(session),
+    getRuntimeContext: () => formatSessionData(session),
+    getRuntimeInstructions: () => formatSessionInstructions(session),
     onUsage: (usage) => recordUsage(session, usage),
   });
   await runSebInteractiveTui({
@@ -468,7 +470,8 @@ async function generateWithModel(
     apiKey: selection.apiKey,
     model,
     ...clients,
-    getRuntimeInstructions: () => automaticContext,
+    getRuntimeContext: () => automaticContext.data,
+    getRuntimeInstructions: () => automaticContext.instructions,
   });
   const research = await researchAgent.generate({ prompt });
   for (const source of research.sources) {
@@ -584,7 +587,8 @@ async function streamAnswer(
       apiKey: selection.apiKey,
       model,
       ...clients,
-      getRuntimeInstructions: () => automaticContext,
+      getRuntimeContext: () => automaticContext.data,
+      getRuntimeInstructions: () => automaticContext.instructions,
     });
     const result = await agent.stream({ prompt });
 
@@ -686,7 +690,7 @@ async function streamAnswer(
 async function loadAutomaticContext(
   environment: NodeJS.ProcessEnv,
   sleeper: SleeperClient,
-): Promise<string> {
+): Promise<{ data: string; instructions: string }> {
   const session = createSessionState();
   const profileStore = new FileSetupProfileStore({ environment });
   try {
@@ -702,7 +706,10 @@ async function loadAutomaticContext(
     session.accountError = errorMessage(error);
     session.accountStatus = 'error';
   }
-  return formatSessionContext(session);
+  return {
+    data: formatSessionData(session),
+    instructions: formatSessionInstructions(session),
+  };
 }
 
 function selectModels(

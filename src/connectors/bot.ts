@@ -45,8 +45,11 @@ import {
 } from './config.js';
 
 const HISTORY_LIMIT = 20;
+const CONNECTOR_FAILURE_TIMEOUT_MS = 5_000;
+const CONNECTOR_REPLY_TIMEOUT_MS = 120_000;
 const FAILURE_MESSAGE =
   'Seb could not answer this request. Check the connector service logs, then retry.';
+const NEVER_ABORT_SIGNAL = new AbortController().signal;
 
 export class ModelResponseError extends Error {
   readonly emittedOutput: boolean;
@@ -60,7 +63,15 @@ export class ModelResponseError extends Error {
   }
 }
 
+class ConnectorShutdownError extends Error {
+  constructor() {
+    super('The connector service is stopping.');
+    this.name = 'ConnectorShutdownError';
+  }
+}
+
 export interface ConnectorRuntime {
+  abortReplies(): void;
   bot: Chat<Record<string, Adapter>>;
   config: ConnectorConfig;
   discord?: ReturnType<typeof createDiscordAdapter>;
@@ -70,7 +81,8 @@ export interface ConnectorRuntime {
 export type ConnectorReply = (
   thread: Thread,
   message: Message,
-  context?: MessageContext,
+  context: MessageContext | undefined,
+  signal: AbortSignal,
 ) => Promise<void>;
 
 export function createConnectorRuntime(
@@ -127,10 +139,16 @@ export function createConnectorRuntime(
     state,
     userName: config.botName,
   });
+  const replyAbort = new AbortController();
 
-  registerConnectorHandlers(bot, createAgentReply(environment));
+  registerConnectorHandlers(
+    bot,
+    createAgentReply(environment),
+    replyAbort.signal,
+  );
 
   return {
+    abortReplies: () => replyAbort.abort(new ConnectorShutdownError()),
     bot,
     config,
     ...(discord ? { discord } : {}),
@@ -141,18 +159,37 @@ export function createConnectorRuntime(
 export function registerConnectorHandlers(
   bot: Chat<Record<string, Adapter>>,
   reply: ConnectorReply,
+  shutdownSignal = NEVER_ABORT_SIGNAL,
 ): void {
   bot.onNewMention(async (thread, message, context) => {
-    await thread.subscribe();
-    await runReply(reply, thread, message, context);
+    await runReply(
+      reply,
+      thread,
+      message,
+      context,
+      connectorReplySignal(shutdownSignal),
+      true,
+    );
   });
 
   bot.onDirectMessage(async (thread, message, _channel, context) => {
-    await runReply(reply, thread, message, context);
+    await runReply(
+      reply,
+      thread,
+      message,
+      context,
+      connectorReplySignal(shutdownSignal),
+    );
   });
 
   bot.onSubscribedMessage(async (thread, message, context) => {
-    await runReply(reply, thread, message, context);
+    await runReply(
+      reply,
+      thread,
+      message,
+      context,
+      connectorReplySignal(shutdownSignal),
+    );
   });
 }
 
@@ -191,12 +228,22 @@ function createAgentReply(environment: Environment): ConnectorReply {
           ...clients,
         });
 
-  return async (thread, message, context) => {
+  return async (thread, message, context, requestSignal) => {
+    requestSignal.throwIfAborted();
     await sourceContext.run(new SourceTracker(), async () => {
       const sources = sourceContext.getStore() as SourceTracker;
-      const prompt = await buildPrompt(thread, message, context);
+      const prompt = await waitForSignal(
+        buildPrompt(thread, message, context),
+        requestSignal,
+      );
       try {
-        await postAgentResponse(thread, primaryAgent, prompt, sources);
+        await postAgentResponse(
+          thread,
+          primaryAgent,
+          prompt,
+          sources,
+          requestSignal,
+        );
       } catch (error) {
         if (
           !(error instanceof ModelResponseError) ||
@@ -207,7 +254,13 @@ function createAgentReply(environment: Environment): ConnectorReply {
           throw error;
         }
         sources.clear();
-        await postAgentResponse(thread, fallbackAgent, prompt, sources);
+        await postAgentResponse(
+          thread,
+          fallbackAgent,
+          prompt,
+          sources,
+          requestSignal,
+        );
       }
     });
   };
@@ -218,27 +271,38 @@ async function postAgentResponse(
   agent: ReturnType<typeof createFantasyFootballAgent>,
   prompt: Awaited<ReturnType<typeof buildPrompt>>,
   directSources: SourceTracker,
+  signal: AbortSignal,
 ): Promise<void> {
   let result: Awaited<ReturnType<typeof agent.stream>>;
   try {
-    result = await agent.stream({ prompt });
+    result = await agent.stream({ abortSignal: signal, prompt });
   } catch (error) {
     throw new ModelResponseError(error, false);
   }
-  await thread.post(withWebSources(
-    result.fullStream,
-    directSources,
-    latestRecommendationQuestion(prompt),
-  ));
+  await waitForSignal(
+    thread.post(withWebSources(
+      result.fullStream,
+      directSources,
+      latestRecommendationQuestion(prompt),
+      signal,
+    )),
+    signal,
+  );
 }
 
 export function withWebSources(
   stream: AsyncIterable<unknown>,
   directSources?: SourceTracker,
   question = '',
+  abortSignal?: AbortSignal,
 ) {
   if (questionRequestsRecommendation(question)) {
-    return guardedRecommendationStream(stream, directSources ?? new SourceTracker(), question);
+    return guardedRecommendationStream(
+      stream,
+      directSources ?? new SourceTracker(),
+      question,
+      abortSignal,
+    );
   }
   const answerSources = directSources ?? new SourceTracker();
   let emittedOutput = false;
@@ -246,6 +310,13 @@ export function withWebSources(
     try {
       for await (const part of stream) {
         if (isErrorPart(part)) throw new ModelResponseError(part.error, emittedOutput);
+        if (isAbortPart(part)) {
+          throw new ModelResponseError(
+            abortSignal?.reason ??
+              new DOMException('The model stream stopped.', 'AbortError'),
+            emittedOutput,
+          );
+        }
         if (isModelOutputPart(part)) emittedOutput = true;
         if (isUrlSourcePart(part)) {
           const url = normalizeWebUrl(part.url);
@@ -275,6 +346,7 @@ function guardedRecommendationStream(
   stream: AsyncIterable<unknown>,
   directSources: SourceTracker,
   question: string,
+  abortSignal?: AbortSignal,
 ) {
   return (async function* () {
     let answer = '';
@@ -282,6 +354,13 @@ function guardedRecommendationStream(
     try {
       for await (const part of stream) {
         if (isErrorPart(part)) throw new ModelResponseError(part.error, false);
+        if (isAbortPart(part)) {
+          throw new ModelResponseError(
+            abortSignal?.reason ??
+              new DOMException('The model stream stopped.', 'AbortError'),
+            answer.length > 0,
+          );
+        }
         if (isTextDeltaPart(part)) answer += part.text;
         if (isUrlSourcePart(part)) {
           const url = normalizeWebUrl(part.url);
@@ -397,6 +476,14 @@ function isErrorPart(value: unknown): value is { error: unknown; type: 'error' }
   );
 }
 
+function isAbortPart(value: unknown): value is { type: 'abort' } {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    (value as { type?: unknown }).type === 'abort',
+  );
+}
+
 function isUrlSourcePart(value: unknown): value is {
   sourceType: 'url';
   title?: string;
@@ -444,24 +531,66 @@ async function runReply(
   reply: ConnectorReply,
   thread: Thread,
   message: Message,
-  context?: MessageContext,
+  context: MessageContext | undefined,
+  signal: AbortSignal,
+  subscribe = false,
 ): Promise<void> {
   try {
-    await reply(thread, message, context);
+    signal.throwIfAborted();
+    if (subscribe) {
+      await waitForSignal(thread.subscribe(), signal);
+    }
+    await reply(thread, message, context, signal);
   } catch (error) {
+    if (connectorShutdown(error)) return;
     const reason = error instanceof Error ? error.message : String(error);
     process.stderr.write(`Seb connector reply failed: ${reason}\n`);
     await postFailureMessage(thread);
   }
 }
 
+function connectorReplySignal(shutdownSignal: AbortSignal): AbortSignal {
+  return AbortSignal.any([
+    shutdownSignal,
+    AbortSignal.timeout(CONNECTOR_REPLY_TIMEOUT_MS),
+  ]);
+}
+
+function connectorShutdown(error: unknown): boolean {
+  return error instanceof ConnectorShutdownError ||
+    (error instanceof ModelResponseError &&
+      error.cause instanceof ConnectorShutdownError);
+}
+
+export function waitForSignal<T>(
+  pending: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    void pending.catch(() => undefined);
+    return Promise.reject(abortReason(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(abortReason(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    pending.then(resolve, reject).finally(() => {
+      signal.removeEventListener('abort', onAbort);
+    }).catch(() => undefined);
+  });
+}
+
 async function postFailureMessage(target: Thread): Promise<void> {
+  const signal = AbortSignal.timeout(CONNECTOR_FAILURE_TIMEOUT_MS);
   try {
-    await target.post(FAILURE_MESSAGE);
+    await waitForSignal(target.post(FAILURE_MESSAGE), signal);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     process.stderr.write(`Seb could not post the failure message: ${reason}\n`);
   }
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
 }
 
 function createSlack(

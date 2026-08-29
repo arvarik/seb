@@ -260,6 +260,38 @@ export class SebDatabase {
     return this.getCache(namespace, key, new Date(cachedAt));
   }
 
+  updateCachePolicy(
+    namespace: string,
+    key: string,
+    cachedAt: string,
+    checksum: string,
+    ttlMs: number,
+    staleIfErrorMs: number,
+  ): boolean {
+    validateDuration(ttlMs, 'cache TTL');
+    validateDuration(staleIfErrorMs, 'stale-if-error period');
+    const cachedAtMs = Date.parse(cachedAt);
+    if (!Number.isFinite(cachedAtMs)) {
+      throw new TypeError('The cache retrieval time must use ISO 8601 format.');
+    }
+    const result = this.database
+      .prepare(`
+        UPDATE cache_entries
+        SET expires_at = ?, stale_until = ?
+        WHERE namespace = ? AND cache_key = ?
+          AND cached_at = ? AND checksum = ?
+      `)
+      .run(
+        new Date(cachedAtMs + ttlMs).toISOString(),
+        new Date(cachedAtMs + ttlMs + staleIfErrorMs).toISOString(),
+        namespace,
+        key,
+        cachedAt,
+        checksum,
+      );
+    return Number(result.changes) > 0;
+  }
+
   deleteCache(namespace: string, key?: string): number {
     const result = key === undefined
       ? this.database.prepare('DELETE FROM cache_entries WHERE namespace = ?').run(namespace)
@@ -634,6 +666,9 @@ export class SebDatabase {
 
   close(): void {
     this.database.close();
+    if (sharedDatabases.get(this.file) === this) {
+      sharedDatabases.delete(this.file);
+    }
   }
 
   private configure(): void {

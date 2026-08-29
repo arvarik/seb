@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { WeatherClient } from '../src/weather/client.js';
+import { WeatherApiError, WeatherClient } from '../src/weather/client.js';
 
 describe('WeatherClient', () => {
   it('discovers and loads an NWS hourly forecast with the required user agent', async () => {
@@ -84,6 +84,26 @@ describe('WeatherClient', () => {
     });
 
     await expect(client.getPointMetadata(47.5952, -122.3316)).rejects.toThrow();
+  });
+
+  it('keeps provider context when a failed response body exceeds the limit', async () => {
+    const client = new WeatherClient({
+      baseUrl: 'https://api.weather.test',
+      cacheDirectory: false,
+      fetch: async () => new Response('unavailable', {
+        status: 404,
+        headers: { 'content-length': '5000' },
+      }),
+    });
+
+    await expect(
+      client.getActiveAlerts(47.5952, -122.3316),
+    ).rejects.toMatchObject({
+      name: 'WeatherApiError',
+      status: 404,
+      url: expect.stringContaining('https://api.weather.test/alerts/active'),
+      message: expect.stringContaining('exceeds 4096 bytes'),
+    } satisfies Partial<WeatherApiError>);
   });
 });
 

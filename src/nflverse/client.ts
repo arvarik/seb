@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { setImmediate } from 'node:timers/promises';
-import { gunzip } from 'node:zlib';
+import { createGunzip } from 'node:zlib';
 
 import { parse } from 'csv-parse';
 
@@ -10,12 +10,18 @@ import {
   type ResourceLoadContext,
   type ResourceResult,
 } from '../data/cached-resource.js';
-import { readResponseBytes, readResponseText } from '../data/response-body.js';
+import { currentRequestSignal } from '../ai/request-signal.js';
+import {
+  readResponseBytes,
+  readResponseErrorDetail,
+} from '../data/response-body.js';
 import { ResilientFetch, type RequestPolicy } from '../data/resilient-fetch.js';
 import { getSharedSebDatabase, type SebDatabase } from '../data/sqlite-store.js';
 import type { SourceObserver } from '../sources.js';
 import { SEB_USER_AGENT } from '../version.js';
 import {
+  nflverseGameSchema,
+  nflversePlayerWeekSchema,
   nflversePlayerStatsSchema,
   nflverseScheduleSchema,
 } from './schemas.js';
@@ -104,8 +110,6 @@ export class NflverseClient {
   private readonly database: SebDatabase | false;
   private readonly http: ResilientFetch;
   private readonly onSource: SourceObserver | undefined;
-  private scheduleRequest: Promise<ResourceResult<NflverseGame[]>> | undefined;
-  private readonly statsRequests = new Map<number, Promise<ResourceResult<NflversePlayerWeek[]>>>();
 
   constructor(options: NflverseClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
@@ -205,6 +209,7 @@ export class NflverseClient {
       response = await this.http.request(url, {
         headers,
         redirect: 'follow',
+        signal: conditional.signal,
       });
     } catch (error) {
       throw new NflverseApiError(
@@ -219,7 +224,7 @@ export class NflverseClient {
     }
 
     if (!response.ok) {
-      const detail = (await readResponseText(response, MAX_ERROR_BYTES)).slice(0, 300);
+      const detail = await readResponseErrorDetail(response, MAX_ERROR_BYTES);
       throw new NflverseApiError(
         `nflverse returned HTTP ${response.status}.${detail ? ` Response: ${detail}` : ''}`,
         response.status,
@@ -229,13 +234,14 @@ export class NflverseClient {
 
     try {
       const bytes = await readResponseBytes(response, MAX_DOWNLOAD_BYTES);
+      conditional.signal.throwIfAborted();
       const expanded = url.endsWith('.gz')
-        ? await gunzipBytes(bytes, MAX_EXPANDED_BYTES)
+        ? await gunzipBytes(bytes, MAX_EXPANDED_BYTES, conditional.signal)
         : bytes;
       if (expanded.byteLength > MAX_EXPANDED_BYTES) {
         throw new Error(`The expanded nflverse file exceeds ${MAX_EXPANDED_BYTES} bytes.`);
       }
-      const rows = await parseCsv(expanded.toString('utf8'));
+      const rows = await parseCsv(expanded.toString('utf8'), conditional.signal);
       return {
         etag: response.headers.get('etag'),
         lastModified: response.headers.get('last-modified'),
@@ -251,45 +257,39 @@ export class NflverseClient {
   }
 
   private loadSchedule(sourceUrl: string): Promise<ResourceResult<NflverseGame[]>> {
-    if (!this.scheduleRequest) {
-      const resource = new CachedResource<NflverseGame[]>(
-        this.database,
-        'nflverse',
-        `schedule-${CACHE_SCHEMA_VERSION}`,
-        sourceUrl,
-        {
-          schemaVersion: CACHE_SCHEMA_VERSION,
-          snapshotKind: 'nflverse-schedule',
-          snapshotRetention: 8,
-          staleIfErrorMs: STALE_IF_ERROR_MS,
-          ttlMs: SCHEDULE_TTL_MS,
-          validate: (value) => nflverseScheduleSchema.parse(value),
-        },
-      );
-      this.scheduleRequest = resource.read(async (conditional) => {
-        const downloaded = await this.fetchCsv(sourceUrl, conditional);
-        if ('notModified' in downloaded) return downloaded;
-        return {
-          etag: downloaded.etag,
-          lastModified: downloaded.lastModified,
-          sourceTimestamp: downloaded.lastModified,
-          value: parseGames(downloaded.rows),
-        };
-      }).finally(() => {
-        this.scheduleRequest = undefined;
-      });
-    }
-    return this.scheduleRequest;
+    const resource = new CachedResource<NflverseGame[]>(
+      this.database,
+      'nflverse',
+      `schedule-${CACHE_SCHEMA_VERSION}`,
+      sourceUrl,
+      {
+        schemaVersion: CACHE_SCHEMA_VERSION,
+        snapshotKind: 'nflverse-schedule',
+        snapshotRetention: 8,
+        staleIfErrorMs: STALE_IF_ERROR_MS,
+        ttlMs: SCHEDULE_TTL_MS,
+        validate: (value) => nflverseScheduleSchema.parse(value),
+      },
+      this,
+    );
+    const signal = currentRequestSignal();
+    return resource.read(async (conditional) => {
+      const downloaded = await this.fetchCsv(sourceUrl, conditional);
+      if ('notModified' in downloaded) return downloaded;
+      return {
+        etag: downloaded.etag,
+        lastModified: downloaded.lastModified,
+        sourceTimestamp: downloaded.lastModified,
+        value: await parseGames(downloaded.rows, conditional.signal),
+        valueValidated: true,
+      };
+    }, signal ? { signal } : {});
   }
 
   private loadPlayerStats(
     season: number,
     sourceUrl: string,
   ): Promise<ResourceResult<NflversePlayerWeek[]>> {
-    const active = this.statsRequests.get(season);
-    if (active) {
-      return active;
-    }
     const key = `player-stats-${CACHE_SCHEMA_VERSION}-${season}`;
     const resource = new CachedResource<NflversePlayerWeek[]>(
       this.database,
@@ -304,21 +304,20 @@ export class NflverseClient {
         ttlMs: STATS_TTL_MS,
         validate: (value) => nflversePlayerStatsSchema.parse(value),
       },
+      this,
     );
-    const request = resource.read(async (conditional) => {
+    const signal = currentRequestSignal();
+    return resource.read(async (conditional) => {
       const downloaded = await this.fetchCsv(sourceUrl, conditional);
       if ('notModified' in downloaded) return downloaded;
       return {
         etag: downloaded.etag,
         lastModified: downloaded.lastModified,
         sourceTimestamp: downloaded.lastModified,
-        value: parsePlayerWeeks(downloaded.rows),
+        value: await parsePlayerWeeks(downloaded.rows, conditional.signal),
+        valueValidated: true,
       };
-    }).finally(() => {
-      this.statsRequests.delete(season);
-    });
-    this.statsRequests.set(season, request);
-    return request;
+    }, signal ? { signal } : {});
   }
 
   private recordSource<T>(
@@ -437,20 +436,41 @@ function requiredText(value: string | undefined, field: string): string {
   return normalized;
 }
 
-function parseGames(rows: CsvRow[]): NflverseGame[] {
+async function parseGames(
+  rows: CsvRow[],
+  signal: AbortSignal,
+): Promise<NflverseGame[]> {
   if (rows.length === 0) throw new TypeError('The nflverse schedule has no rows.');
   requireColumns(rows[0] as CsvRow, SCHEDULE_REQUIRED_COLUMNS);
-  return nflverseScheduleSchema.parse(rows.map(parseGame));
+  const games: NflverseGame[] = [];
+  for (const [index, row] of rows.entries()) {
+    signal.throwIfAborted();
+    games.push(nflverseGameSchema.parse(parseGame(row)));
+    if ((index + 1) % 1_000 === 0) await setImmediate();
+  }
+  signal.throwIfAborted();
+  return games;
 }
 
-function parsePlayerWeeks(rows: CsvRow[]): NflversePlayerWeek[] {
+async function parsePlayerWeeks(
+  rows: CsvRow[],
+  signal: AbortSignal,
+): Promise<NflversePlayerWeek[]> {
   if (rows.length === 0) throw new TypeError('The nflverse player file has no rows.');
   requireColumns(rows[0] as CsvRow, PLAYER_REQUIRED_COLUMNS);
-  const playerRows = rows.filter((row) => Boolean(row.player_id?.trim()));
-  if (playerRows.length === 0) {
+  const playerWeeks: NflversePlayerWeek[] = [];
+  for (const [index, row] of rows.entries()) {
+    signal.throwIfAborted();
+    if (row.player_id?.trim()) {
+      playerWeeks.push(nflversePlayerWeekSchema.parse(parsePlayerWeek(row)));
+    }
+    if ((index + 1) % 1_000 === 0) await setImmediate();
+  }
+  signal.throwIfAborted();
+  if (playerWeeks.length === 0) {
     throw new TypeError('The nflverse player file has no player rows.');
   }
-  return nflversePlayerStatsSchema.parse(playerRows.map(parsePlayerWeek));
+  return playerWeeks;
 }
 
 function requireColumns(row: CsvRow, columns: readonly string[]): void {
@@ -460,34 +480,83 @@ function requireColumns(row: CsvRow, columns: readonly string[]): void {
   }
 }
 
-async function parseCsv(text: string): Promise<CsvRow[]> {
-  const parser = Readable.from(csvChunks(text)).pipe(parse({
+async function parseCsv(text: string, signal: AbortSignal): Promise<CsvRow[]> {
+  const source = Readable.from(csvChunks(text, signal));
+  const parser = source.pipe(parse({
     bom: true,
     columns: true,
     skip_empty_lines: true,
   }));
+  const onSourceError = (error: Error): void => {
+    parser.destroy(error);
+  };
+  source.on('error', onSourceError);
   const rows: CsvRow[] = [];
-  for await (const row of parser) {
-    rows.push(row as CsvRow);
+  try {
+    for await (const row of parser) {
+      signal.throwIfAborted();
+      rows.push(row as CsvRow);
+    }
+  } finally {
+    source.off('error', onSourceError);
+    source.destroy();
+    parser.destroy();
   }
   return rows;
 }
 
-async function* csvChunks(text: string): AsyncGenerator<string> {
+async function* csvChunks(
+  text: string,
+  signal: AbortSignal,
+): AsyncGenerator<string> {
   const chunkSize = 64 * 1024;
   for (let index = 0; index < text.length; index += chunkSize) {
+    signal.throwIfAborted();
     yield text.slice(index, index + chunkSize);
     await setImmediate();
   }
 }
 
-async function gunzipBytes(bytes: Buffer, maximumBytes: number): Promise<Buffer> {
-  return await new Promise<Buffer>((resolve, reject) => {
-    gunzip(bytes, { maxOutputLength: maximumBytes }, (error, result) => {
-      if (error) reject(error);
-      else resolve(result);
-    });
-  });
+async function gunzipBytes(
+  bytes: Buffer,
+  maximumBytes: number,
+  signal: AbortSignal,
+): Promise<Buffer> {
+  signal.throwIfAborted();
+  const source = Readable.from(bytes);
+  const decoder = createGunzip();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const onAbort = (): void => {
+    const error = abortError(signal);
+    source.destroy();
+    decoder.destroy(error);
+  };
+  signal.addEventListener('abort', onAbort, { once: true });
+  source.pipe(decoder);
+  try {
+    for await (const chunk of decoder) {
+      signal.throwIfAborted();
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+      total += buffer.byteLength;
+      if (total > maximumBytes) {
+        throw new Error(`The expanded nflverse file exceeds ${maximumBytes} bytes.`);
+      }
+      chunks.push(buffer);
+    }
+    signal.throwIfAborted();
+    return Buffer.concat(chunks, total);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+    source.destroy();
+    decoder.destroy();
+  }
+}
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException('The operation was aborted.', 'AbortError');
 }
 
 function nullableNumber(value: string | undefined): number | null {

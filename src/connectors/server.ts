@@ -145,6 +145,7 @@ async function main(): Promise<void> {
     stopping = true;
     process.stdout.write(`Seb received ${signal}. It will stop cleanly.\n`);
     gatewayAbort.abort();
+    runtime.abortReplies();
     const serverClosed = await new Promise<boolean>((resolve) => {
       const timeout = setTimeout(() => {
         if ('closeAllConnections' in server) server.closeAllConnections();

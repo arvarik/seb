@@ -15,6 +15,7 @@ export async function readResponseBytes(
   validateLimit(limitBytes);
   const contentLength = Number(response.headers.get('content-length'));
   if (Number.isFinite(contentLength) && contentLength > limitBytes) {
+    void response.body?.cancel().catch(() => undefined);
     throw new ResponseBodyLimitError(limitBytes);
   }
 
@@ -31,7 +32,7 @@ export async function readResponseBytes(
       if (result.done) break;
       total += result.value.byteLength;
       if (total > limitBytes) {
-        await reader.cancel();
+        void reader.cancel().catch(() => undefined);
         throw new ResponseBodyLimitError(limitBytes);
       }
       chunks.push(result.value);
@@ -49,6 +50,22 @@ export async function readResponseText(
   return (await readResponseBytes(response, limitBytes)).toString('utf8');
 }
 
+export async function readResponseErrorDetail(
+  response: Response,
+  limitBytes: number,
+  maximumCharacters = 300,
+): Promise<string> {
+  try {
+    return (await readResponseText(response, limitBytes)).slice(0, maximumCharacters);
+  } catch (error) {
+    if (error instanceof ResponseBodyLimitError) return error.message;
+    return `Response body unavailable: ${errorMessage(error)}`.slice(
+      0,
+      maximumCharacters,
+    );
+  }
+}
+
 export async function readResponseJson(
   response: Response,
   limitBytes: number,
@@ -60,4 +77,8 @@ function validateLimit(limitBytes: number): void {
   if (!Number.isSafeInteger(limitBytes) || limitBytes < 1) {
     throw new RangeError('The response byte limit must be a positive safe integer.');
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

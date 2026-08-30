@@ -47,6 +47,7 @@ import {
 } from './interactive/session.js';
 import { isModelCapacityError } from './model-capacity-error.js';
 import { NflverseClient } from './nflverse/client.js';
+import { NewsClient } from './news/client.js';
 import { SleeperClient } from './sleeper/client.js';
 import {
   normalizeSourceLabel,
@@ -129,7 +130,7 @@ export async function runCli(
     case 'cache': {
       const database = getSharedSebDatabase();
       if (command.action === 'clear') {
-        const removed = ['sleeper', 'nflverse', 'weather']
+        const removed = ['sleeper', 'nflverse', 'weather', 'news']
           .reduce((total, namespace) => total + database.deleteCache(namespace), 0);
         const result = { removed, snapshotsPreserved: database.status().snapshots };
         streams.stdout.write(command.json
@@ -784,6 +785,7 @@ function describeTool(toolName: string): string {
     getTrendingPlayers: 'Reading player trends',
     getUserLeagues: 'Reading the user leagues',
     readNewsUrl: 'Reading the supplied web page',
+    searchFirstClassNews: 'Searching first-class news sources',
     searchCurrentNews: 'Searching current news',
     predictMatchup: 'Estimating the matchup',
     projectPlayer: 'Building a scoring-aware projection',
@@ -798,11 +800,13 @@ function createDataClients(
   sources: SourceTracker,
 ): {
   nflverseClient: NflverseClient;
+  newsClient: NewsClient;
   sleeperClient: SleeperClient;
   weatherClient: WeatherClient;
 } {
   return {
     nflverseClient: new NflverseClient({ onSource: sources.record }),
+    newsClient: new NewsClient({ onSource: sources.record }),
     sleeperClient: new SleeperClient({ onSource: sources.record }),
     weatherClient: new WeatherClient({
       onSource: sources.record,

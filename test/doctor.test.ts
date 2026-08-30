@@ -1,7 +1,24 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const { generateTextMock } = vi.hoisted(() => ({
+  generateTextMock: vi.fn(),
+}));
+
+vi.mock('ai', async (importOriginal) => {
+  const original = await importOriginal<typeof import('ai')>();
+  return { ...original, generateText: generateTextMock };
+});
 
 import { runWithRequestSignal } from '../src/ai/request-signal.js';
-import { formatDoctorReport, runDoctor } from '../src/doctor.js';
+import {
+  formatDoctorReport,
+  runDoctor,
+  verifyGeminiApi,
+} from '../src/doctor.js';
+
+afterEach(() => {
+  generateTextMock.mockReset();
+});
 
 describe('runDoctor', () => {
   it('checks local requirements without network requests', async () => {
@@ -67,7 +84,7 @@ describe('runDoctor', () => {
       '✓ Sleeper API: 2026 regular, week 3.',
     );
     expect(formatDoctorReport(report)).toContain(
-      '✓ Gemini API: primary-test answered the test request.',
+      '✓ Gemini API: primary-test returned a grounded Google Search source.',
     );
     expect(formatDoctorReport(report)).toContain(
       '✓ nflverse data: 100 schedule rows loaded through the 2026 season.',
@@ -75,6 +92,42 @@ describe('runDoctor', () => {
     expect(formatDoctorReport(report)).toContain(
       '✓ National Weather Service API: 156 hourly periods loaded',
     );
+  });
+
+  it('checks grounded Google Search and requires a valid web source', async () => {
+    generateTextMock.mockResolvedValueOnce({
+      sources: [
+        {
+          id: 'source-1',
+          sourceType: 'url',
+          title: 'NFL report',
+          url: 'https://www.nfl.com/news/',
+        },
+      ],
+    });
+
+    await expect(
+      verifyGeminiApi(
+        'test-key',
+        'primary-test',
+        'fallback-test',
+        AbortSignal.timeout(1_000),
+      ),
+    ).resolves.toEqual({ fallbackUsed: false, model: 'primary-test' });
+
+    const request = generateTextMock.mock.calls[0]?.[0];
+    expect(JSON.stringify(request?.tools)).toContain('google.google_search');
+    expect(request?.prompt).toContain('current NFL news report');
+
+    generateTextMock.mockResolvedValueOnce({ sources: [] });
+    await expect(
+      verifyGeminiApi(
+        'test-key',
+        'primary-test',
+        'fallback-test',
+        AbortSignal.timeout(1_000),
+      ),
+    ).rejects.toThrow('returned no valid web source');
   });
 
   it('reports an old Node.js version and a missing key', async () => {

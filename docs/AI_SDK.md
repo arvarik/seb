@@ -18,13 +18,21 @@ Seb does not import private package source files.
 
 This design lets AI SDK package updates stay independent from the terminal interface.
 
-## 1. Grounded current news
+## 1. Direct and grounded current news
 
 The production Gemini agent uses the Gemini Interactions API.
 
-The agent includes Google Search and URL Context tools.
+The agent includes a direct news tool, Google Search, and URL Context.
 
-Google Search finds current public reporting and returns source records.
+The `searchFirstClassNews` tool searches the built-in registry first.
+
+It returns official NFL, independent, fantasy-impact, and official team reporting.
+
+It also reports the result count, publisher count, and source failures.
+
+Google Search supplies secondary coverage when the direct result is insufficient.
+
+Google Search also runs when the user requests broad web coverage.
 
 URL Context reads an HTTP or HTTPS page that the user supplies.
 
@@ -44,15 +52,17 @@ The model never follows an instruction that appears inside returned data.
 
 Seb has no licensed publisher feed or official injury-report feed.
 
+Read the [data source guide](DATA_SOURCES.md) for every source ID and cache period.
+
 ## 2. Typed analysis output
 
 `seb ask --json` uses AI SDK `Output.object` with a Zod schema.
 
-Seb first runs a grounded research request with all read-only tools.
+Seb first runs a source-grounded research request with all read-only tools.
 
 Seb then sends that draft to a tool-free formatter request.
 
-This two-request design keeps Google source records available during structured output.
+This two-request design keeps direct and Google source records available during structured output.
 
 The validated `analysis` object includes these fields.
 
@@ -151,10 +161,16 @@ npm run deps:check
 npm audit
 ```
 
-Run one grounded request when a Gemini key exists.
+Run one current news request when a Gemini key exists.
 
 ```bash
 seb ask --json "Find current official NFL news and cite the publisher and date."
 ```
 
 Confirm that the result includes web source links.
+
+Run the live first-class source probe without Gemini.
+
+```bash
+npm run news:smoke
+```

@@ -68,7 +68,8 @@ import {
   formatSessionStatus,
   getContextualSuggestions,
   normalizeSessionSeasonType,
-  recordUserConfirmedToolContext,
+  resolveUserConfirmedToolContext,
+  resolveUserRequestedToolContext,
   type SessionState,
 } from './session.js';
 import { formatSkillList, parseSkillInvocation } from './skills.js';
@@ -798,6 +799,12 @@ export function decorateResponseStream(
   const decisionRequested = questionRequestsRecommendation(recommendationQuestion);
   const toolCalls = new Map<string, { input: unknown; toolName: string }>();
   const toolResults: RecommendationToolResult[] = [];
+  const initialPlayer = state.player;
+  const initialTeam = state.team;
+  const playerCandidates = new Set<string>();
+  const requestedPlayers = new Set<string>();
+  const teamCandidates = new Set<string>();
+  const requestedTeams = new Set<string>();
   let bufferedText = '';
   let answerId = `answer-${crypto.randomUUID()}`;
   return stream.pipeThrough(
@@ -809,18 +816,26 @@ export function decorateResponseStream(
             input: chunk.input,
             toolName: chunk.toolName,
           });
+          const requested = resolveUserRequestedToolContext(
+            chunk.toolName,
+            chunk.input,
+            userPrompt,
+          );
+          addStreamSubject(requested.player, requestedPlayers);
+          addStreamSubject(requested.team, requestedTeams);
         }
         if (chunk.type === 'tool-output-available') {
           const toolCall = toolCalls.get(chunk.toolCallId);
           if (toolCall) {
             toolResults.push({ output: chunk.output, toolName: toolCall.toolName });
-            recordUserConfirmedToolContext(
-              state,
+            const confirmed = resolveUserConfirmedToolContext(
               toolCall.toolName,
               toolCall.input,
               chunk.output,
               userPrompt,
             );
+            addStreamSubject(confirmed.player, playerCandidates);
+            addStreamSubject(confirmed.team, teamCandidates);
             toolCalls.delete(chunk.toolCallId);
           }
         }
@@ -837,6 +852,20 @@ export function decorateResponseStream(
           if (url) sources.recordUrlSource(source);
         }
         if (chunk.type === 'finish') {
+          commitStreamSubject(
+            state,
+            playerCandidates,
+            requestedPlayers,
+            initialPlayer,
+            'player',
+          );
+          commitStreamSubject(
+            state,
+            teamCandidates,
+            requestedTeams,
+            initialTeam,
+            'team',
+          );
           const evidence = sources.snapshot(answerId);
           uiState.recordAnswerEvidence(evidence);
           if (decisionRequested) {
@@ -890,6 +919,29 @@ export function decorateResponseStream(
       },
     }),
   );
+}
+
+function addStreamSubject(
+  candidate: string | null,
+  candidates: Set<string>,
+): void {
+  if (candidate) candidates.add(candidate);
+}
+
+function commitStreamSubject(
+  state: SessionState,
+  confirmedCandidates: Set<string>,
+  requestedCandidates: Set<string>,
+  initialValue: string | null,
+  field: 'player' | 'team',
+): void {
+  const confirmed = confirmedCandidates.values().next().value;
+  state[field] = confirmedCandidates.size === 1 &&
+    requestedCandidates.size === 1 &&
+    confirmed !== undefined &&
+    requestedCandidates.has(confirmed)
+    ? confirmed
+    : initialValue;
 }
 
 function incompleteRecommendationMessage(): string {

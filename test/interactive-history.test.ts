@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -38,5 +38,16 @@ describe('prompt history', () => {
 
     expect(path).toBe('/tmp/seb-config-test/history.json');
     expect(history).toBeInstanceOf(MemoryPromptHistory);
+  });
+
+  it('preserves an invalid history file and keeps the new prompt in memory', async () => {
+    const path = join(tmpdir(), `seb-invalid-history-${crypto.randomUUID()}.json`);
+    await writeFile(path, '{invalid json', 'utf8');
+    const history = await FilePromptHistory.load({ SEB_HISTORY_FILE: path });
+
+    await expect(history.add('Keep this prompt')).rejects.toThrow(/preserved/u);
+
+    expect(await readFile(path, 'utf8')).toBe('{invalid json');
+    expect(history.list()).toEqual(['Keep this prompt']);
   });
 });

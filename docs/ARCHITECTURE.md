@@ -12,16 +12,18 @@ This design keeps current facts outside model memory.
 4. The Seb renderer reads and edits the terminal prompt.
 5. The transport selects Explore, My Fantasy, or Analyze from the question.
 6. The transport runs a slash command locally or sends a normal question to the agent.
-7. `ToolLoopAgent` gives Gemini the read-only tools, grounded web tools, and active session instructions.
+7. `ToolLoopAgent` gives Gemini the read-only tools, direct news tools, grounded web tools, and active session instructions.
 8. Middleware adds valid input examples to each compatible data tool.
 9. An identity tool resolves ambiguous player or team identifiers when necessary.
 10. Gemini selects only the tools that the question needs.
 11. A source client reads a fresh SQLite cache record or requests the source.
-12. Google Search or URL Context returns current public reporting when necessary.
-13. A deterministic function calculates summaries and risk signals.
-14. Gemini explains the returned facts.
-15. The transport adds validated web sources and records contextual actions.
-16. The Seb renderer draws the response, responsive tables, record cards, tool progress, badges, and supported charts.
+12. The news client searches built-in sources before Google Search.
+13. Google Search supplies secondary coverage when the direct result has insufficient coverage.
+14. URL Context reads a web page that the user supplies.
+15. A deterministic function calculates summaries and risk signals.
+16. Gemini explains the returned facts.
+17. The transport adds validated web sources and records contextual actions.
+18. The Seb renderer draws the response, responsive tables, record cards, tool progress, badges, and supported charts.
 
 ## Agent harness
 
@@ -181,13 +183,20 @@ Each direct public source has one client class.
 - `SleeperClient` reads JSON endpoints.
 - `NflverseClient` reads compressed CSV releases.
 - `WeatherClient` reads NWS GeoJSON endpoints.
+- `NewsClient` reads feeds, news sitemaps, and supported publisher pages.
 
 The production model uses the Gemini Interactions endpoint.
 
 The model also receives two provider tools.
 
-- Gemini Google Search reads current public reporting.
+- Gemini Google Search supplies secondary public coverage.
 - Gemini URL Context reads a user-supplied web page.
+
+`NewsClient` uses a built-in registry of official, independent, fantasy-impact, and team sources.
+
+It validates publication dates before it returns an article.
+
+It recommends Google Search when direct results contain too few articles or publishers.
 
 Each direct source client accepts an injected `fetch` function.
 
@@ -210,6 +219,10 @@ It opens a short circuit after repeated final failures.
 A caller cancellation stops the active request and its retry delay.
 
 Caller cancellation does not add a source failure to the shared circuit.
+
+The news client checks each publisher's robots policy before it reads content.
+
+It also applies crawl delays, response size limits, and same-site redirect checks.
 
 ## Cache design
 

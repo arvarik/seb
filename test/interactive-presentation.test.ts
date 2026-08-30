@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   formatElapsed,
+  friendlyToolName,
   hardWrapTerminalLine,
   osc52,
   renderAnalysisText,
@@ -15,6 +16,12 @@ import {
 import { createTheme } from '../src/interactive/theme.js';
 
 describe('interactive presentation', () => {
+  it('shows a clear first-class news progress label', () => {
+    expect(friendlyToolName('searchFirstClassNews')).toBe(
+      'Search first-class news sources',
+    );
+  });
+
   it('removes terminal control sequences from untrusted text', () => {
     const theme = createTheme({ NO_COLOR: '1' });
     const unsafe = 'safe\x1b]52;c;Zm9v\x07 text\x1b[2J\x1bPsecret\x1b\\ done\x08';
@@ -167,6 +174,15 @@ describe('interactive presentation', () => {
     expect(output).not.toMatch(/\*{1,3}(?:Decision|Week 1|Detailed report)\*{1,3}/u);
   });
 
+  it('keeps exact spaces inside inline code', () => {
+    const theme = createTheme({ NO_COLOR: '1' });
+
+    expect(renderAnalysisText('Run `a  b` now.', theme)).toBe('Run a  b now.');
+    const wrapped = renderAnalysisText('Use a long setup before `a  b` now.', theme, 20);
+    expect(wrapped).toContain('a  b');
+    expect(wrapped.split('\n').every((line) => visibleLength(line) <= 20)).toBe(true);
+  });
+
   it('keeps inline styles when one long word wraps', () => {
     const theme = createTheme({});
     const word = 'x'.repeat(35);
@@ -234,6 +250,15 @@ describe('interactive presentation', () => {
     expect(output.match(new RegExp(`\\x1b\\]8;;${url}`, 'gu'))?.length).toBeGreaterThanOrEqual(2);
     expect(output).not.toContain('[NFL report source]');
     expect(output.split('\n').every((line) => visibleLength(line) <= 30)).toBe(true);
+  });
+
+  it('keeps balanced parentheses in a Markdown link target', () => {
+    const theme = createTheme({});
+    const url = 'https://example.com/a_(b)';
+    const output = renderAnalysisText(`[report](${url})`, theme);
+
+    expect(output).toContain(`\x1b]8;;${url}\x07`);
+    expect(stripAnsi(output)).toBe('↗ report');
   });
 
   it('rejects unsafe terminal link targets', () => {

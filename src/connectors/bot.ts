@@ -28,6 +28,7 @@ import {
 } from '../analysis/recommendation-eligibility.js';
 import { isModelCapacityError } from '../model-capacity-error.js';
 import { NflverseClient } from '../nflverse/client.js';
+import { NewsClient } from '../news/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import { WeatherClient } from '../weather/client.js';
 import {
@@ -207,13 +208,14 @@ function createAgentReply(environment: Environment): ConnectorReply {
   const onSource: SourceObserver = (source) => sourceContext.getStore()?.record(source);
   const sleeperClient = new SleeperClient({ onSource });
   const nflverseClient = new NflverseClient({ onSource });
+  const newsClient = new NewsClient({ onSource });
   const weatherClient = new WeatherClient({
     onSource,
     ...(environment.NWS_USER_AGENT?.trim()
       ? { userAgent: environment.NWS_USER_AGENT.trim() }
       : {}),
   });
-  const clients = { sleeperClient, nflverseClient, weatherClient };
+  const clients = { sleeperClient, nflverseClient, newsClient, weatherClient };
   const primaryAgent = createFantasyFootballAgent({
     apiKey,
     model: primaryModel,
@@ -317,7 +319,7 @@ export function withWebSources(
             emittedOutput,
           );
         }
-        if (isModelOutputPart(part)) emittedOutput = true;
+        if (isUserVisibleOutputPart(part)) emittedOutput = true;
         if (isUrlSourcePart(part)) {
           const url = normalizeWebUrl(part.url);
           if (url) {
@@ -455,16 +457,12 @@ function isTextDeltaPart(value: unknown): value is { text: string; type: 'text-d
   );
 }
 
-function isModelOutputPart(value: unknown): boolean {
+function isUserVisibleOutputPart(value: unknown): boolean {
+  if (typeof value === 'string') return value.length > 0;
   if (isTextDeltaPart(value)) return value.text.length > 0;
   if (!value || typeof value !== 'object') return false;
-  const record = value as { text?: unknown; type?: unknown };
-  return typeof record.type === 'string' && [
-    'reasoning-delta',
-    'tool-call',
-    'tool-error',
-    'tool-result',
-  ].includes(record.type);
+  const type = (value as { type?: unknown }).type;
+  return type === 'markdown_text' || type === 'task_update' || type === 'plan_update';
 }
 
 function isErrorPart(value: unknown): value is { error: unknown; type: 'error' } {

@@ -1,6 +1,6 @@
 {
   "name": "seb",
-  "version": "0.0.11",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "A source-grounded NFL and fantasy football agent for league, player, team, weather, and news analysis.",
@@ -21,6 +21,7 @@
     "data:smoke": "node --import tsx src/smoke-data-sources.ts",
     "doctor": "node --import tsx src/cli.ts doctor",
     "lint": "oxlint --deny-warnings src test scripts",
+    "news:smoke": "node --import tsx src/smoke-news-sources.ts",
     "seb": "node --import tsx src/cli.ts",
     "sleeper:smoke": "node --import tsx src/smoke-sleeper.ts",
     "start": "npm run seb",
@@ -43,8 +44,10 @@
     "ai": "^7.0.76",
     "better-sqlite3": "^13.0.3",
     "chat": "^4.38.1",
+    "cheerio": "^1.2.0",
     "csv-parse": "^7.0.2",
     "hono": "^4.13.3",
+    "robots-parser": "^3.0.1",
     "string-width": "^8.2.2",
     "tsx": "^4.23.12",
     "zod": "^4.4.3"

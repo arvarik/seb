@@ -7,8 +7,6 @@ import {
 import { getSkill } from './skills.js';
 
 const TEAM_IDENTITIES = new TeamIdentityRegistry();
-const SESSION_TEXT_LIMIT = 500;
-const SESSION_COLLECTION_LIMIT = 25;
 
 export type SessionSeasonType = 'post' | 'pre' | 'regular' | null;
 export type SebExperienceMode = 'analyze' | 'explore' | 'fantasy';
@@ -363,26 +361,61 @@ export function recordUserConfirmedToolContext(
   output: unknown,
   userPrompt?: string,
 ): void {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return;
+  const confirmed = resolveUserConfirmedToolContext(
+    toolName,
+    input,
+    output,
+    userPrompt,
+  );
+  if (confirmed.player) state.player = confirmed.player;
+  if (confirmed.team) state.team = confirmed.team;
+}
+
+export function resolveUserConfirmedToolContext(
+  toolName: string,
+  input: unknown,
+  output: unknown,
+  userPrompt?: string,
+): { player: string | null; team: string | null } {
+  const requested = resolveUserRequestedToolContext(toolName, input, userPrompt);
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { player: null, team: null };
+  }
+  const values = input as Record<string, unknown>;
+  const confirmedPlayer =
+    requested.player && playerResultResolvesSubject(toolName, output)
+      ? requested.player
+      : null;
+  const team = resolvedTeamCode(toolName, values, output);
+  return {
+    player: confirmedPlayer,
+    team: team && promptContainsTeam(userPrompt, team) ? team : null,
+  };
+}
+
+export function resolveUserRequestedToolContext(
+  toolName: string,
+  input: unknown,
+  userPrompt?: string,
+): { player: string | null; team: string | null } {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { player: null, team: null };
+  }
   const values = input as Record<string, unknown>;
   const player = toolName === 'findPlayers'
     ? stringValue(values.query)
     : toolName === 'resolvePlayerIdentity'
       ? stringValue(values.name)
-      : toolName === 'getPlayerWeeklyStats'
+      : toolName === 'getPlayerWeeklyStats' || toolName === 'projectPlayer'
         ? stringValue(values.playerName)
         : toolName === 'comparePlayerTrends' && Array.isArray(values.playerNames) && values.playerNames.length === 1
           ? stringValue(values.playerNames[0])
           : null;
-  if (
-    player &&
-    playerResultResolvesSubject(toolName, output) &&
-    promptContainsSubject(userPrompt, player)
-  ) {
-    state.player = player;
-  }
-  const team = resolvedTeamCode(toolName, values, output);
-  if (team && promptContainsTeam(userPrompt, team)) state.team = team;
+  const team = requestedTeamCode(toolName, values);
+  return {
+    player: player && promptContainsSubject(userPrompt, player) ? player : null,
+    team: team && promptContainsTeam(userPrompt, team) ? team : null,
+  };
 }
 
 export function normalizeSessionSeasonType(
@@ -494,6 +527,10 @@ function playerResultResolvesSubject(toolName: string, output: unknown): boolean
   if (toolName === 'comparePlayerTrends') {
     return uniqueStringFields(arrayField(output, 'players'), 'playerId').length === 1;
   }
+  if (toolName === 'projectPlayer') {
+    const player = objectField(output, 'player');
+    return typeof objectField(player, 'playerId') === 'string';
+  }
   return false;
 }
 
@@ -506,10 +543,43 @@ function resolvedTeamCode(
     if (findIdentityStatus(output) !== 'resolved') return null;
     return teamValue(objectField(objectField(output, 'identity'), 'code'));
   }
+  if (toolName === 'getDefenseVsPosition') {
+    return teamValue(input.defense);
+  }
   return [
     'getGameEnvironment',
     'getGameWeather',
     'getNflSchedule',
+    'getPlayerWeeklyStats',
+    'getStadiumForecast',
+    'getTeamPerformance',
+    'getTeamPlayers',
+  ].includes(toolName)
+    ? teamValue(input.team)
+    : null;
+}
+
+function requestedTeamCode(
+  toolName: string,
+  input: Record<string, unknown>,
+): string | null {
+  if (toolName === 'resolveTeamIdentity') {
+    const query = typeof input.query === 'string' ? input.query.trim() : '';
+    if (!query) return null;
+    const provider = input.provider;
+    const resolution = provider === 'nflverse' || provider === 'sleeper'
+      ? TEAM_IDENTITIES.resolveSource(provider, query)
+      : TEAM_IDENTITIES.resolve(query);
+    return resolution.status === 'resolved' ? resolution.identity.code : null;
+  }
+  if (toolName === 'getDefenseVsPosition') {
+    return teamValue(input.defense);
+  }
+  return [
+    'getGameEnvironment',
+    'getGameWeather',
+    'getNflSchedule',
+    'getPlayerWeeklyStats',
     'getStadiumForecast',
     'getTeamPerformance',
     'getTeamPlayers',
@@ -621,15 +691,9 @@ function actionUrgencyLabel(action: FantasyLeagueAction): string {
 }
 
 function stringifySessionData(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => {
-    if (typeof item === 'string' && item.length > SESSION_TEXT_LIMIT) {
-      return `${item.slice(0, SESSION_TEXT_LIMIT)}…`;
-    }
-    if (Array.isArray(item) && item.length > SESSION_COLLECTION_LIMIT) {
-      return item.slice(0, SESSION_COLLECTION_LIMIT);
-    }
-    return item;
-  }).replace(/\u2028/gu, '\\u2028').replace(/\u2029/gu, '\\u2029');
+  return JSON.stringify(value)
+    .replace(/\u2028/gu, '\\u2028')
+    .replace(/\u2029/gu, '\\u2029');
 }
 
 function formatNflNow(state: SessionState): string {

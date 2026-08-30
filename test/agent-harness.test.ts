@@ -239,6 +239,45 @@ describe('fantasy football agent harness', () => {
     });
   });
 
+  it('keeps complete session collections when they fit the runtime limit', async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: {
+        content: [{ type: 'text', text: 'Complete context received.' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage,
+        warnings: [],
+      },
+    });
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    session.leagues = Array.from({ length: 26 }, (_, index) => ({
+      deadlines: [],
+      leagueId: String(index + 1),
+      name: `League ${index + 1}`,
+      rosterIds: [index + 1],
+      status: 'in_season',
+      warning: null,
+    }));
+    session.leagueOptions = session.leagues.map(({ leagueId }) => leagueId);
+    const agent = createFantasyFootballAgent({
+      languageModel: model,
+      getRuntimeContext: () => formatSessionData(session),
+    });
+
+    await agent.generate({ prompt: 'Review every league.' });
+
+    const envelope = runtimeEnvelopeFromPrompt(model.doGenerateCalls[0]?.prompt);
+    const sleeper = envelope.data.sleeper as { leagues?: unknown[] };
+    const decisionContext = envelope.data.decisionContext as {
+      league?: { options?: unknown[] };
+    };
+    expect(envelope.truncated).toBe(false);
+    expect(sleeper.leagues).toHaveLength(26);
+    expect(decisionContext.league?.options).toHaveLength(26);
+    expect(sleeper.leagues).toContainEqual(
+      expect.objectContaining({ leagueId: '26', name: 'League 26' }),
+    );
+  });
+
   it('reserves the twelfth model step for the final text answer', async () => {
     const toolSteps = Array.from({ length: 11 }, (_, index) => ({
       content: [{

@@ -1,6 +1,6 @@
 # Terminal interface guide
 
-Seb `0.0.11` includes a local terminal renderer for interactive research.
+Seb `0.1.0` includes a local terminal renderer for interactive research.
 
 Seb owns the conversation loop and uses the public AI SDK transport contract.
 

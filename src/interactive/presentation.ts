@@ -8,10 +8,11 @@ import { paint, symbol, type SebTheme } from './theme.js';
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/gu;
 const UNTRUSTED_ESCAPE_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)|[PX^_][\s\S]*?\x1b\\|[@-_])|\x1b/gu;
 const UNTRUSTED_CONTROL_PATTERN = /[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f-\x9f]/gu;
-const INLINE_LINK_PATTERN = /(!?)\[([^\]]+)\]\((?:<([^>\s]+)>|(https?:\/\/[^)\s]+))\)|<(https?:\/\/[^>\s]+)>|(https?:\/\/[^\s<>\x1b]+)/gu;
+const INLINE_LINK_PATTERN = /(!?)\[([^\]]+)\]\((?:<([^>\s]+)>|(https?:\/\/(?:[^()\s<>\x1b]+|\([^()\s<>\x1b]*\))+))\)|<(https?:\/\/[^>\s]+)>|(https?:\/\/[^\s<>\x1b]+)/gu;
 const TERMINAL_LINK_PATTERN = /\x1b\]8;;([^\x07\x1b]*)(?:\x07|\x1b\\)([\s\S]*?)\x1b\]8;;(?:\x07|\x1b\\)/gu;
 const TERMINAL_CONTROL_PATTERN = /^\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/u;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
+const INLINE_CODE_SPACE = '\u{e102}';
 
 type TableAlignment = 'center' | 'left' | 'right';
 
@@ -51,6 +52,7 @@ export function friendlyToolName(toolName: string): string {
     rankWaiverTargets: 'Rank waiver and FAAB targets',
     analyzeTradeImpact: 'Compare trade impact',
     readNewsUrl: 'Read the supplied web page',
+    searchFirstClassNews: 'Search first-class news sources',
     searchCurrentNews: 'Search current news',
   };
   return descriptions[toolName] ?? humanize(toolName);
@@ -115,7 +117,7 @@ export function renderTerminalMarkdown(
 
     output.push(...renderMarkdownLine(line, theme, maximumWidth));
   }
-  return output.join('\n');
+  return output.join('\n').replaceAll(INLINE_CODE_SPACE, ' ');
 }
 
 function renderMarkdownLine(
@@ -713,11 +715,10 @@ function protectCodeSpans(
   protect: (value: string) => string,
 ): string {
   return value.replace(/(`+)([\s\S]*?)\1/gu, (_match, _delimiter: string, content: string) => {
-    const normalized = content.replace(/\s+/gu, ' ');
-    const code = normalized.startsWith(' ') && normalized.endsWith(' ') && normalized.trim()
-      ? normalized.slice(1, -1)
-      : normalized;
-    return protect(inlineCode(theme, code));
+    const code = content.startsWith(' ') && content.endsWith(' ') && content.trim()
+      ? content.slice(1, -1)
+      : content;
+    return protect(inlineCode(theme, code.replaceAll(' ', INLINE_CODE_SPACE)));
   });
 }
 

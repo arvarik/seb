@@ -28,6 +28,7 @@ export function normalizeWebUrl(value: string): string | null {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+    if (url.username || url.password) return null;
     return url.href;
   } catch {
     return null;
@@ -45,9 +46,12 @@ export class SourceTracker {
   private readonly records = new Map<string, DataSourceRecord>();
 
   readonly record: SourceObserver = (source) => {
+    const url = normalizeWebUrl(source.url);
+    if (!url) return;
     this.records.set(source.id, {
       ...source,
       accessedAt: new Date().toISOString(),
+      url,
       ...(source.warnings ? { warnings: [...source.warnings] } : {}),
     });
   };

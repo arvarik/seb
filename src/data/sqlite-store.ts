@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 
 import Database from 'better-sqlite3';
 
-const DATABASE_SCHEMA_VERSION = 3;
+const DATABASE_SCHEMA_VERSION = 4;
 const DEFAULT_DATABASE_FILE = resolve(process.cwd(), '.cache/seb.sqlite');
 const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
 const MAX_PROVENANCE_BYTES = 32 * 1024 * 1024;
@@ -39,6 +39,16 @@ export interface CacheWrite<T> {
   staleIfErrorMs: number;
   ttlMs: number;
   value: T;
+}
+
+type CacheRenewalCondition = Pick<
+  CacheEntry<unknown>,
+  'cachedAt' | 'checksum' | 'schemaVersion' | 'sourceUrl'
+>;
+
+interface CacheRevisionCondition {
+  namespace: string;
+  revision: number;
 }
 
 export interface SnapshotWrite<T> {
@@ -147,45 +157,23 @@ export class SebDatabase {
       return null;
     }
 
-    const expiresAt = requiredText(row.expires_at);
-    const staleUntil = requiredText(row.stale_until);
-    const valueJson = requiredText(row.value_json);
-    const checksum = requiredText(row.checksum);
-    if (sha256(valueJson) !== checksum) {
-      this.deleteCache(namespace, key);
-      return null;
-    }
-    const nowMs = now.getTime();
-    const freshness: CacheFreshness =
-      nowMs < Date.parse(expiresAt)
-        ? 'fresh'
-        : nowMs <= Date.parse(staleUntil)
-          ? 'stale'
-          : 'expired';
     try {
-      return {
-        cachedAt: requiredText(row.cached_at),
-        checksum,
-        etag: optionalText(row.etag),
-        expiresAt,
-        freshness,
-        key: requiredText(row.cache_key),
-        lastModified: optionalText(row.last_modified),
-        namespace: requiredText(row.namespace),
-        schemaVersion: requiredText(row.schema_version),
-        sourceUrl: optionalText(row.source_url),
-        staleUntil,
-        value: JSON.parse(valueJson) as T,
-      };
+      return parseCacheEntry<T>(row, now);
     } catch {
       this.deleteCache(namespace, key);
       return null;
     }
   }
 
-  putCache<T>(write: CacheWrite<T>): CacheEntry<T> {
+  putCache<T>(write: CacheWrite<T>): CacheEntry<T>;
+  putCache<T>(write: CacheWrite<T>, expectedRevision: number): CacheEntry<T> | null;
+  putCache<T>(
+    write: CacheWrite<T>,
+    expectedRevision?: number,
+  ): CacheEntry<T> | null {
     validateDuration(write.ttlMs, 'cache TTL');
     validateDuration(write.staleIfErrorMs, 'stale-if-error period');
+    if (expectedRevision !== undefined) validateCacheRevision(expectedRevision);
     const cachedAt = write.cachedAt ?? new Date().toISOString();
     const cachedAtMs = Date.parse(cachedAt);
     if (!Number.isFinite(cachedAtMs)) {
@@ -197,12 +185,22 @@ export class SebDatabase {
     const staleUntil = new Date(
       cachedAtMs + write.ttlMs + write.staleIfErrorMs,
     ).toISOString();
-    this.database
+    const revisionSql = expectedRevision === undefined
+      ? ''
+      : `
+          WHERE EXISTS (
+            SELECT 1 FROM cache_generations
+            WHERE namespace = ? AND revision = ?
+          )
+        `;
+    const row = this.database
       .prepare(`
         INSERT INTO cache_entries (
           namespace, cache_key, value_json, cached_at, expires_at, stale_until,
           etag, last_modified, source_url, schema_version, checksum
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ${revisionSql}
         ON CONFLICT(namespace, cache_key) DO UPDATE SET
           value_json = excluded.value_json,
           cached_at = excluded.cached_at,
@@ -213,8 +211,11 @@ export class SebDatabase {
           source_url = excluded.source_url,
           schema_version = excluded.schema_version,
           checksum = excluded.checksum
+        RETURNING namespace, cache_key, value_json, cached_at, expires_at,
+                  stale_until, etag, last_modified, source_url, schema_version,
+                  checksum
       `)
-      .run(
+      .get(
         write.namespace,
         write.key,
         valueJson,
@@ -226,12 +227,14 @@ export class SebDatabase {
         write.sourceUrl ?? null,
         write.schemaVersion,
         checksum,
-      );
-    const entry = this.getCache<T>(write.namespace, write.key, new Date(cachedAt));
-    if (!entry) {
+        ...(expectedRevision === undefined
+          ? []
+          : [write.namespace, expectedRevision]),
+      ) as DatabaseRow | undefined;
+    if (!row && expectedRevision === undefined) {
       throw new Error('Seb could not read the cache entry after it saved the entry.');
     }
-    return entry;
+    return row ? parseCacheEntry<T>(row, new Date(cachedAt)) : null;
   }
 
   touchCache(
@@ -240,24 +243,122 @@ export class SebDatabase {
     ttlMs: number,
     staleIfErrorMs: number,
     cachedAt = new Date().toISOString(),
+    condition?: CacheRenewalCondition,
+    expectedRevision?: number,
+  ): CacheEntry<unknown> | null {
+    return this.touchCacheRow(
+      namespace,
+      key,
+      ttlMs,
+      staleIfErrorMs,
+      cachedAt,
+      condition,
+      expectedRevision,
+    );
+  }
+
+  cacheRevision(namespace: string): number {
+    const existing = this.database.prepare(`
+      SELECT revision FROM cache_generations
+      WHERE namespace = ?
+    `).get(namespace) as DatabaseRow | undefined;
+    if (existing) {
+      const revision = Number(existing.revision);
+      validateCacheRevision(revision);
+      return revision;
+    }
+    this.database.prepare(`
+      INSERT INTO cache_generations (namespace, revision)
+      VALUES (?, 0)
+      ON CONFLICT(namespace) DO NOTHING
+    `).run(namespace);
+    const row = this.database.prepare(`
+      SELECT revision FROM cache_generations
+      WHERE namespace = ?
+    `).get(namespace) as DatabaseRow | undefined;
+    const revision = Number(row?.revision);
+    validateCacheRevision(revision);
+    return revision;
+  }
+
+  private touchCacheRow(
+    namespace: string,
+    key: string,
+    ttlMs: number,
+    staleIfErrorMs: number,
+    cachedAt: string,
+    condition?: CacheRenewalCondition,
+    expectedRevision?: number,
   ): CacheEntry<unknown> | null {
     validateDuration(ttlMs, 'cache TTL');
     validateDuration(staleIfErrorMs, 'stale-if-error period');
+    if (expectedRevision !== undefined) validateCacheRevision(expectedRevision);
     const cachedAtMs = Date.parse(cachedAt);
-    this.database
+    if (!Number.isFinite(cachedAtMs)) {
+      throw new TypeError('The cache retrieval time must use ISO 8601 format.');
+    }
+    const conditionSql = condition
+      ? `
+          AND cached_at = ?
+          AND checksum = ?
+          AND source_url IS ?
+          AND schema_version = ?
+        `
+      : '';
+    const revisionSql = expectedRevision === undefined
+      ? ''
+      : `
+          AND EXISTS (
+            SELECT 1 FROM cache_generations
+            WHERE namespace = ? AND revision = ?
+          )
+        `;
+    const row = this.database
       .prepare(`
         UPDATE cache_entries
         SET cached_at = ?, expires_at = ?, stale_until = ?
         WHERE namespace = ? AND cache_key = ?
+        ${conditionSql}
+        ${revisionSql}
+        RETURNING namespace, cache_key, value_json, cached_at, expires_at,
+                  stale_until, etag, last_modified, source_url, schema_version,
+                  checksum
       `)
-      .run(
+      .get(
         cachedAt,
         new Date(cachedAtMs + ttlMs).toISOString(),
         new Date(cachedAtMs + ttlMs + staleIfErrorMs).toISOString(),
         namespace,
         key,
-      );
-    return this.getCache(namespace, key, new Date(cachedAt));
+        ...(condition
+          ? [
+              condition.cachedAt,
+              condition.checksum,
+              condition.sourceUrl,
+              condition.schemaVersion,
+            ]
+          : []),
+        ...(expectedRevision === undefined
+          ? []
+          : [namespace, expectedRevision]),
+      ) as DatabaseRow | undefined;
+    if (!row) return null;
+    try {
+      return parseCacheEntry(row, new Date(cachedAt));
+    } catch {
+      this.database
+        .prepare(`
+          DELETE FROM cache_entries
+          WHERE namespace = ? AND cache_key = ? AND cached_at = ? AND checksum = ?
+        `)
+        .run(
+          namespace,
+          key,
+          cachedAt,
+          requiredText(row.checksum),
+        );
+      return null;
+    }
   }
 
   updateCachePolicy(
@@ -293,26 +394,54 @@ export class SebDatabase {
   }
 
   deleteCache(namespace: string, key?: string): number {
-    const result = key === undefined
-      ? this.database.prepare('DELETE FROM cache_entries WHERE namespace = ?').run(namespace)
-      : this.database
-          .prepare('DELETE FROM cache_entries WHERE namespace = ? AND cache_key = ?')
-          .run(namespace, key);
-    return Number(result.changes);
+    return this.transaction(() => {
+      this.database.prepare(`
+        INSERT INTO cache_generations (namespace, revision)
+        VALUES (?, 1)
+        ON CONFLICT(namespace) DO UPDATE SET revision = revision + 1
+      `).run(namespace);
+      const result = key === undefined
+        ? this.database.prepare('DELETE FROM cache_entries WHERE namespace = ?').run(namespace)
+        : this.database
+            .prepare('DELETE FROM cache_entries WHERE namespace = ? AND cache_key = ?')
+            .run(namespace, key);
+      return Number(result.changes);
+    });
   }
 
   deleteCachePrefix(namespace: string, keyPrefix: string): number {
     const escaped = keyPrefix.replace(/[\\%_]/g, (value) => `\\${value}`);
-    const result = this.database
-      .prepare(`DELETE FROM cache_entries WHERE namespace = ? AND cache_key LIKE ? ESCAPE '\\'`)
-      .run(namespace, `${escaped}%`);
-    return Number(result.changes);
+    return this.transaction(() => {
+      this.database.prepare(`
+        INSERT INTO cache_generations (namespace, revision)
+        VALUES (?, 1)
+        ON CONFLICT(namespace) DO UPDATE SET revision = revision + 1
+      `).run(namespace);
+      const result = this.database
+        .prepare(`DELETE FROM cache_entries WHERE namespace = ? AND cache_key LIKE ? ESCAPE '\\'`)
+        .run(namespace, `${escaped}%`);
+      return Number(result.changes);
+    });
   }
 
-  createSnapshot<T>(write: SnapshotWrite<T>, retain = DEFAULT_SNAPSHOT_LIMIT): SnapshotRecord<T> {
+  createSnapshot<T>(
+    write: SnapshotWrite<T>,
+    retain?: number,
+  ): SnapshotRecord<T>;
+  createSnapshot<T>(
+    write: SnapshotWrite<T>,
+    retain: number | undefined,
+    cacheCondition: CacheRevisionCondition,
+  ): SnapshotRecord<T> | null;
+  createSnapshot<T>(
+    write: SnapshotWrite<T>,
+    retain = DEFAULT_SNAPSHOT_LIMIT,
+    cacheCondition?: CacheRevisionCondition,
+  ): SnapshotRecord<T> | null {
     if (!Number.isInteger(retain) || retain < 1 || retain > 10_000) {
       throw new RangeError('The snapshot retention count must be from 1 through 10000.');
     }
+    if (cacheCondition) validateCacheRevision(cacheCondition.revision);
     const payloadJson = stableJson(write.payload);
     if (Buffer.byteLength(payloadJson) > MAX_SNAPSHOT_BYTES) {
       throw new RangeError(`The snapshot exceeds ${MAX_SNAPSHOT_BYTES} bytes.`);
@@ -327,7 +456,13 @@ export class SebDatabase {
     const checksum = sha256(payloadJson);
     const provenanceChecksum = sha256(provenanceJson);
 
-    this.transaction(() => {
+    const stored = this.transaction(() => {
+      if (
+        cacheCondition &&
+        !this.cacheRevisionMatches(cacheCondition)
+      ) {
+        return false;
+      }
       this.database
         .prepare(`
           INSERT INTO snapshots (
@@ -361,7 +496,10 @@ export class SebDatabase {
         `)
         .run(write.kind, write.entityKey, retain);
       this.enforceSnapshotByteLimit(MAX_TOTAL_SNAPSHOT_BYTES);
+      return true;
     });
+
+    if (!stored) return null;
 
     return {
       asOf,
@@ -664,6 +802,14 @@ export class SebDatabase {
     };
   }
 
+  private cacheRevisionMatches(condition: CacheRevisionCondition): boolean {
+    const row = this.database.prepare(`
+      SELECT revision FROM cache_generations
+      WHERE namespace = ?
+    `).get(condition.namespace) as DatabaseRow | undefined;
+    return Number(row?.revision) === condition.revision;
+  }
+
   close(): void {
     this.database.close();
     if (sharedDatabases.get(this.file) === this) {
@@ -775,13 +921,26 @@ export class SebDatabase {
         this.database.pragma('user_version = 3');
       });
     }
+    if (version < 4) {
+      this.transaction(() => {
+        this.database.exec(`
+          CREATE TABLE IF NOT EXISTS cache_generations (
+            namespace TEXT NOT NULL PRIMARY KEY,
+            revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+            CHECK(length(namespace) > 0)
+          );
+          PRAGMA user_version = 4;
+        `);
+      });
+    }
   }
 
-  private transaction(run: () => void): void {
+  private transaction<T>(run: () => T): T {
     this.database.exec('BEGIN IMMEDIATE');
     try {
-      run();
+      const result = run();
       this.database.exec('COMMIT');
+      return result;
     } catch (error) {
       this.database.exec('ROLLBACK');
       throw error;
@@ -833,6 +992,37 @@ export function getSharedSebDatabase(file = DEFAULT_DATABASE_FILE): SebDatabase 
 
 export function defaultDatabaseFile(): string {
   return DEFAULT_DATABASE_FILE;
+}
+
+function parseCacheEntry<T>(row: DatabaseRow, now: Date): CacheEntry<T> {
+  const expiresAt = requiredText(row.expires_at);
+  const staleUntil = requiredText(row.stale_until);
+  const valueJson = requiredText(row.value_json);
+  const checksum = requiredText(row.checksum);
+  if (sha256(valueJson) !== checksum) {
+    throw new Error('The cache entry failed its checksum validation.');
+  }
+  const nowMs = now.getTime();
+  const freshness: CacheFreshness =
+    nowMs < Date.parse(expiresAt)
+      ? 'fresh'
+      : nowMs <= Date.parse(staleUntil)
+        ? 'stale'
+        : 'expired';
+  return {
+    cachedAt: requiredText(row.cached_at),
+    checksum,
+    etag: optionalText(row.etag),
+    expiresAt,
+    freshness,
+    key: requiredText(row.cache_key),
+    lastModified: optionalText(row.last_modified),
+    namespace: requiredText(row.namespace),
+    schemaVersion: requiredText(row.schema_version),
+    sourceUrl: optionalText(row.source_url),
+    staleUntil,
+    value: JSON.parse(valueJson) as T,
+  };
 }
 
 function parseSnapshot<T>(row: DatabaseRow): SnapshotRecord<T> {
@@ -934,6 +1124,12 @@ function optionalText(value: unknown): string | null {
 function validateDuration(value: number, label: string): void {
   if (!Number.isFinite(value) || value < 0) {
     throw new RangeError(`The ${label} must be a nonnegative number.`);
+  }
+}
+
+function validateCacheRevision(value: number): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError('The cache revision must be a nonnegative safe integer.');
   }
 }
 

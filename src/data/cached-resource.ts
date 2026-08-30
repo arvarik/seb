@@ -74,8 +74,10 @@ export class CachedResource<T> {
     options.signal?.throwIfAborted();
     const warnings: string[] = [];
     let cached: CacheEntry<T> | null = null;
+    let cacheRevision: number | null = this.database ? null : 0;
     if (this.database) {
       try {
+        cacheRevision = this.database.cacheRevision(this.namespace);
         cached = this.validateCachedEntry(
           this.database.getCache<unknown>(this.namespace, this.key),
           warnings,
@@ -106,7 +108,7 @@ export class CachedResource<T> {
     const registry = typeof flightScope === 'string'
       ? databaseFlightRegistry(flightScope)
       : scopedFlightRegistry(flightScope);
-    const key = this.flightKey();
+    const key = this.flightKey(cacheRevision);
     let flight = registry.get(key);
     if (!flight || flight.controller.signal.aborted) {
       const controller = new AbortController();
@@ -124,6 +126,7 @@ export class CachedResource<T> {
         warnings,
         load,
         controller.signal,
+        cacheRevision,
       ).finally(() => {
         createdFlight.settled = true;
         if (registry.get(key) === createdFlight) registry.delete(key);
@@ -166,6 +169,7 @@ export class CachedResource<T> {
     warnings: string[],
     load: (context: ResourceLoadContext) => Promise<ResourceLoadResult>,
     signal: AbortSignal,
+    cacheRevision: number | null = null,
   ): Promise<ResourceResult<T>> {
     const loaded = await load({
       etag: conditional?.etag ?? null,
@@ -173,17 +177,21 @@ export class CachedResource<T> {
       signal,
     });
     signal.throwIfAborted();
-    return this.storeLoaded(conditional, warnings, loaded);
+    return this.storeLoaded(conditional, warnings, loaded, cacheRevision);
   }
 
   private storeLoaded(
     conditional: CacheEntry<T> | null,
     warnings: string[],
     loaded: ResourceLoadResult,
+    cacheRevision: number | null,
   ): ResourceResult<T> {
     if ('notModified' in loaded) {
       if (!conditional || !this.database) {
         throw new Error('The source returned not modified without a cached value.');
+      }
+      if (cacheRevision === null) {
+        return this.notModifiedMemoryResult(conditional, warnings);
       }
       try {
         const touched = this.database.touchCache(
@@ -191,6 +199,9 @@ export class CachedResource<T> {
           this.key,
           this.policy.ttlMs,
           this.policy.staleIfErrorMs,
+          undefined,
+          conditional,
+          cacheRevision,
         ) as CacheEntry<T> | null;
         if (touched) {
           return {
@@ -203,20 +214,7 @@ export class CachedResource<T> {
       } catch (error) {
         warnings.push(`Seb could not renew the local cache: ${errorMessage(error)}`);
       }
-      return {
-        cache: memoryEntry(
-          this.namespace,
-          this.key,
-          conditional.value,
-          this.sourceUrl,
-          this.policy,
-          conditional.etag,
-          conditional.lastModified,
-        ),
-        outcome: 'source-not-modified',
-        value: conditional.value,
-        ...(warnings.length > 0 ? { warnings } : {}),
-      };
+      return this.notModifiedMemoryResult(conditional, warnings);
     }
 
     const value = loaded.valueValidated
@@ -224,9 +222,9 @@ export class CachedResource<T> {
       : this.validate(loaded.value);
     let stored = false;
     let cache: CacheEntry<T>;
-    if (this.database) {
+    if (this.database && cacheRevision !== null) {
       try {
-        cache = this.database.putCache<T>({
+        const storedCache = this.database.putCache<T>({
           etag: loaded.etag ?? null,
           key: this.key,
           lastModified: loaded.lastModified ?? null,
@@ -236,8 +234,21 @@ export class CachedResource<T> {
           staleIfErrorMs: this.policy.staleIfErrorMs,
           ttlMs: this.policy.ttlMs,
           value,
-        });
-        stored = true;
+        }, cacheRevision);
+        if (storedCache) {
+          cache = storedCache;
+          stored = true;
+        } else {
+          cache = memoryEntry(
+            this.namespace,
+            this.key,
+            value,
+            this.sourceUrl,
+            this.policy,
+            loaded.etag ?? null,
+            loaded.lastModified ?? null,
+          );
+        }
       } catch (error) {
         warnings.push(`Seb could not save the local cache: ${errorMessage(error)}`);
         cache = memoryEntry(
@@ -261,7 +272,12 @@ export class CachedResource<T> {
         loaded.lastModified ?? null,
       );
     }
-    if (this.database && stored && this.policy.snapshotKind) {
+    if (
+      this.database &&
+      stored &&
+      this.policy.snapshotKind &&
+      cacheRevision !== null
+    ) {
       try {
         const sourceId = `${this.namespace}:${this.key}`;
         const provenance = createDirectProvenanceManifest(value, {
@@ -292,6 +308,10 @@ export class CachedResource<T> {
             sourceTimestamp: loaded.sourceTimestamp ?? null,
           },
           this.policy.snapshotRetention,
+          {
+            namespace: this.namespace,
+            revision: cacheRevision,
+          },
         );
       } catch (error) {
         warnings.push(`Seb could not save the source snapshot: ${errorMessage(error)}`);
@@ -301,6 +321,26 @@ export class CachedResource<T> {
       cache,
       outcome: 'source-updated',
       value,
+      ...(warnings.length > 0 ? { warnings } : {}),
+    };
+  }
+
+  private notModifiedMemoryResult(
+    conditional: CacheEntry<T>,
+    warnings: string[],
+  ): ResourceResult<T> {
+    return {
+      cache: memoryEntry(
+        this.namespace,
+        this.key,
+        conditional.value,
+        this.sourceUrl,
+        this.policy,
+        conditional.etag,
+        conditional.lastModified,
+      ),
+      outcome: 'source-not-modified',
+      value: conditional.value,
       ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
@@ -388,7 +428,7 @@ export class CachedResource<T> {
     }
   }
 
-  private flightKey(): string {
+  private flightKey(cacheRevision: number | null): string {
     return JSON.stringify([
       this.namespace,
       this.key,
@@ -398,6 +438,7 @@ export class CachedResource<T> {
       this.policy.staleIfErrorMs,
       this.policy.snapshotKind ?? null,
       this.policy.snapshotRetention ?? null,
+      cacheRevision,
     ]);
   }
 }

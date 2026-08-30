@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -60,13 +61,48 @@ describe('SebDatabase', () => {
     const database = new SebDatabase(file);
     databases.push(database);
 
-    expect(database.status().schemaVersion).toBe(3);
+    expect(database.status().schemaVersion).toBe(4);
     expect(database.putIdentity({
       canonicalId: 'nfl-team:SEA',
       entityType: 'team',
       sourceIdentities: [{ provider: 'nflverse', id: 'SEA' }],
       value: { canonicalId: 'nfl-team:SEA', code: 'SEA' },
     }).canonicalId).toBe('nfl-team:SEA');
+  });
+
+  it('migrates a version 3 database to a durable namespace generation', () => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'seb-sqlite-v3-'));
+    const file = resolve(directory, 'seb.sqlite');
+    const initial = new SebDatabase(file);
+    initial.close();
+    const legacy = new Database(file);
+    legacy.exec(`
+      DROP TABLE cache_generations;
+      PRAGMA user_version = 3;
+    `);
+    legacy.close();
+
+    const database = new SebDatabase(file);
+    databases.push(database);
+    const revision = database.cacheRevision('test');
+    database.deleteCache('test', 'migration');
+
+    expect(database.status().schemaVersion).toBe(4);
+    expect(revision).toBe(0);
+    expect(database.cacheRevision('test')).toBe(1);
+    const external = new Database(file, { readonly: true });
+    expect(external.prepare('SELECT * FROM cache_generations').all()).toEqual([
+      { namespace: 'test', revision: 1 },
+    ]);
+    external.close();
+  });
+
+  it('records a namespace clear before the first cache read', () => {
+    const database = createDatabase();
+
+    expect(database.deleteCache('empty', 'missing-key')).toBe(0);
+
+    expect(database.cacheRevision('empty')).toBe(1);
   });
 
   it('stores versioned cache values and reports freshness', () => {
@@ -312,6 +348,121 @@ describe('CachedResource', () => {
     });
   });
 
+  it('does not renew or return a replacement row after a 304 response', async () => {
+    const database = createDatabase();
+    database.putCache({
+      cachedAt: new Date(Date.now() - 30_000).toISOString(),
+      etag: 'source-a-etag',
+      key: 'conditional-race',
+      namespace: 'test',
+      schemaVersion: 'v1',
+      sourceUrl: 'https://source-a.test/data',
+      staleIfErrorMs: 60_000,
+      ttlMs: 1_000,
+      value: { source: 'a' },
+    });
+    const policy = { schemaVersion: 'v1', staleIfErrorMs: 60_000, ttlMs: 1_000 };
+    const sourceA = new CachedResource<{ source: string }>(
+      database,
+      'test',
+      'conditional-race',
+      'https://source-a.test/data',
+      policy,
+    );
+    const sourceB = new CachedResource<{ source: string }>(
+      database,
+      'test',
+      'conditional-race',
+      'https://source-b.test/data',
+      policy,
+    );
+    let markSourceAStarted!: () => void;
+    let releaseSourceA!: () => void;
+    const sourceAStarted = new Promise<void>((resolveStarted) => {
+      markSourceAStarted = resolveStarted;
+    });
+    const sourceAGate = new Promise<void>((resolveSourceA) => {
+      releaseSourceA = resolveSourceA;
+    });
+
+    const pendingSourceA = sourceA.read(async (context) => {
+      expect(context.etag).toBe('source-a-etag');
+      markSourceAStarted();
+      await sourceAGate;
+      return { notModified: true };
+    });
+    await sourceAStarted;
+    const sourceBResult = await sourceB.read(async () => ({
+      etag: 'source-b-etag',
+      value: { source: 'b' },
+    }));
+    releaseSourceA();
+    const sourceAResult = await pendingSourceA;
+
+    expect(sourceAResult).toMatchObject({
+      cache: { sourceUrl: 'https://source-a.test/data' },
+      outcome: 'source-not-modified',
+      value: { source: 'a' },
+    });
+    expect(sourceBResult.value).toEqual({ source: 'b' });
+    expect(database.getCache<{ source: string }>('test', 'conditional-race')).toMatchObject({
+      etag: 'source-b-etag',
+      sourceUrl: 'https://source-b.test/data',
+      value: { source: 'b' },
+    });
+  });
+
+  it('does not renew a 304 response after the namespace revision changes', async () => {
+    const database = createDatabase();
+    const oldCachedAt = new Date(Date.now() - 30_000).toISOString();
+    database.putCache({
+      cachedAt: oldCachedAt,
+      etag: 'etag-1',
+      key: 'conditional-clear',
+      namespace: 'test',
+      schemaVersion: 'v1',
+      sourceUrl: 'https://example.test/conditional-clear',
+      staleIfErrorMs: 60_000,
+      ttlMs: 1_000,
+      value: { version: 'cached' },
+    });
+    const resource = new CachedResource<{ version: string }>(
+      database,
+      'test',
+      'conditional-clear',
+      'https://example.test/conditional-clear',
+      { schemaVersion: 'v1', staleIfErrorMs: 60_000, ttlMs: 1_000 },
+    );
+    let markLoadStarted!: () => void;
+    let releaseLoad!: () => void;
+    const loadStarted = new Promise<void>((resolveStarted) => {
+      markLoadStarted = resolveStarted;
+    });
+    const loadGate = new Promise<void>((resolveLoad) => {
+      releaseLoad = resolveLoad;
+    });
+
+    const pending = resource.read(async () => {
+      markLoadStarted();
+      await loadGate;
+      return { notModified: true };
+    });
+    await loadStarted;
+    database.deleteCache('test', 'another-key');
+    releaseLoad();
+    const result = await pending;
+
+    expect(result).toMatchObject({
+      outcome: 'source-not-modified',
+      value: { version: 'cached' },
+    });
+    expect(result.cache.cachedAt).not.toBe(oldCachedAt);
+    expect(database.getCache('test', 'conditional-clear')).toMatchObject({
+      cachedAt: oldCachedAt,
+      value: { version: 'cached' },
+    });
+  });
+
   it('continues with a live load after a cache read fails', async () => {
     const database = createDatabase();
     vi.spyOn(database, 'getCache').mockImplementationOnce(() => {
@@ -508,6 +659,125 @@ describe('CachedResource', () => {
     await expect(second).resolves.toMatchObject({ value: { ok: true } });
     expect(load).toHaveBeenCalledTimes(1);
     expect(database.listSnapshots({ kind: 'single-flight-test' })).toHaveLength(1);
+  });
+
+  it('does not join or persist a source load that started before a cache clear', async () => {
+    const database = createDatabase();
+    const resource = new CachedResource<{ version: number }>(
+      database,
+      'test',
+      'clear-flight',
+      'https://example.test/clear-flight',
+      {
+        schemaVersion: 'v1',
+        snapshotKind: 'clear-flight-test',
+        staleIfErrorMs: 60_000,
+        ttlMs: 60_000,
+      },
+    );
+    let markFirstLoadStarted!: () => void;
+    let releaseFirstLoad!: () => void;
+    const firstLoadStarted = new Promise<void>((resolveStarted) => {
+      markFirstLoadStarted = resolveStarted;
+    });
+    const firstLoadGate = new Promise<void>((resolveLoad) => {
+      releaseFirstLoad = resolveLoad;
+    });
+    let loads = 0;
+    const load = vi.fn(async () => {
+      loads += 1;
+      const version = loads;
+      if (version === 1) {
+        markFirstLoadStarted();
+        await firstLoadGate;
+      }
+      return { value: { version } };
+    });
+
+    const first = resource.read(load);
+    await firstLoadStarted;
+    database.deleteCache('test');
+    const secondResult = await resource.read(load);
+    releaseFirstLoad();
+    const firstResult = await first;
+
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(firstResult.value).toEqual({ version: 1 });
+    expect(secondResult.value).toEqual({ version: 2 });
+    expect(database.getCache<{ version: number }>('test', 'clear-flight')).toMatchObject({
+      value: { version: 2 },
+    });
+    expect(database.listSnapshots<{ version: number }>({
+      kind: 'clear-flight-test',
+    })).toMatchObject([{ payload: { version: 2 } }]);
+  });
+
+  it('honors a cache clear from another process while a source load runs', async () => {
+    const database = createDatabase();
+    const resource = new CachedResource<{ version: number }>(
+      database,
+      'test',
+      'cross-process-clear',
+      'https://example.test/cross-process-clear',
+      {
+        schemaVersion: 'v1',
+        snapshotKind: 'cross-process-clear-test',
+        staleIfErrorMs: 60_000,
+        ttlMs: 60_000,
+      },
+    );
+    let markFirstLoadStarted!: () => void;
+    let releaseFirstLoad!: () => void;
+    const firstLoadStarted = new Promise<void>((resolveStarted) => {
+      markFirstLoadStarted = resolveStarted;
+    });
+    const firstLoadGate = new Promise<void>((resolveLoad) => {
+      releaseFirstLoad = resolveLoad;
+    });
+    let loads = 0;
+    const load = vi.fn(async () => {
+      loads += 1;
+      const version = loads;
+      if (version === 1) {
+        markFirstLoadStarted();
+        await firstLoadGate;
+      }
+      return { value: { version } };
+    });
+
+    const first = resource.read(load);
+    await firstLoadStarted;
+    const child = spawnSync(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        '--input-type=module',
+        '--eval',
+        [
+          "import { SebDatabase } from './src/data/sqlite-store.ts';",
+          'const database = new SebDatabase(process.argv[1]);',
+          "database.deleteCache('test');",
+          'database.close();',
+        ].join('\n'),
+        database.file,
+      ],
+      { cwd: process.cwd(), encoding: 'utf8' },
+    );
+    const second = resource.read(load);
+    releaseFirstLoad();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(child.stderr).toBe('');
+    expect(child.status).toBe(0);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(firstResult.value).toEqual({ version: 1 });
+    expect(secondResult.value).toEqual({ version: 2 });
+    expect(database.getCache<{ version: number }>('test', 'cross-process-clear'))
+      .toMatchObject({ value: { version: 2 } });
+    expect(database.listSnapshots<{ version: number }>({
+      kind: 'cross-process-clear-test',
+    })).toMatchObject([{ payload: { version: 2 } }]);
   });
 
   it('shares one load across database objects for the same file', async () => {
@@ -766,6 +1036,8 @@ describe('CachedResource', () => {
 
   it('returns a valid source response when the cache write fails', async () => {
     const failingDatabase = {
+      cacheRevision: () => 0,
+      file: 'failing-database',
       getCache: () => null,
       putCache: () => {
         throw new Error('disk full');

@@ -116,9 +116,11 @@ These rules provide analysis context. They do not create an official projection.
 
 The `news-briefing` skill prevents false current-news claims.
 
-It searches current public reporting through Gemini Google Search.
+It searches the built-in first-class news sources before Google Search.
 
-It includes publisher links and dates when Gemini returns those values.
+It uses Google Search when direct sources return insufficient coverage.
+
+It includes validated publisher links and publication dates.
 
 It uses Sleeper for league facts and nflverse for historical statistics.
 

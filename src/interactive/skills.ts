@@ -32,7 +32,8 @@ export const SEB_SKILLS: readonly SebSkill[] = [
       'Use findPlayers for the current player profile.',
       'Use resolvePlayerIdentity when the name is ambiguous.',
       'Use getPlayerWeeklyStats for game logs and season statistics.',
-      'Use searchCurrentNews only when the request needs current reporting.',
+      'Use searchFirstClassNews when the request needs current reporting.',
+      'Use searchCurrentNews only when the direct result recommends fallback.',
       'Separate profile data, recorded statistics, and news claims.',
     ].join(' '),
     suggestions: [
@@ -53,7 +54,8 @@ export const SEB_SKILLS: readonly SebSkill[] = [
       'Use getTeamPlayers for current Sleeper player records.',
       'Use getNflSchedule for the schedule and recorded results.',
       'Use getTeamPerformance for prior performance statistics.',
-      'Use searchCurrentNews only when the request needs current reporting.',
+      'Use searchFirstClassNews when the request needs current reporting.',
+      'Use searchCurrentNews only when the direct result recommends fallback.',
       'Do not call Sleeper player records an official NFL roster.',
     ].join(' '),
     suggestions: [
@@ -118,7 +120,8 @@ export const SEB_SKILLS: readonly SebSkill[] = [
       'Use the prior completed season when the current regular season has no completed games.',
       'Use getRosterPlayers when roster context affects fit.',
       'Use getLeagueTransactions only for an identified Sleeper transaction.',
-      'Use searchCurrentNews only for current reporting.',
+      'Use searchFirstClassNews first for current reporting.',
+      'Use searchCurrentNews only when the direct result recommends fallback.',
       'Separate current evidence, rest-of-season assumptions, roster fit, and risk.',
       'Never invent trade-chart or market values.',
     ].join(' '),
@@ -221,7 +224,7 @@ export const SEB_SKILLS: readonly SebSkill[] = [
     title: 'Source-safe briefing',
     category: 'Research',
     description: 'Combine public reporting with Sleeper and nflverse evidence.',
-    instructions: 'Use searchCurrentNews for current reporting. Include publisher links and dates. Keep Sleeper and nflverse authoritative for league data and statistics.',
+    instructions: 'Use searchFirstClassNews for current reporting. Use searchCurrentNews only when the direct result recommends fallback. Include publisher links and dates. Keep Sleeper and nflverse authoritative for league data and statistics.',
     suggestions: ['Find current player news.', 'Show current injury fields.', 'Compare reporting with recent usage.'],
   },
 ] as const;

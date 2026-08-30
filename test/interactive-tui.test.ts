@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
 
 import {
@@ -70,6 +70,26 @@ describe('SebConversationRunner', () => {
       approval: { approved: true, id: 'approval-1' },
       state: 'approval-responded',
     });
+  });
+
+  it('closes the renderer when transport setup fails', async () => {
+    const close = vi.fn();
+    const renderer = {
+      ...rendererFor(['Question'], []),
+      close,
+    };
+    const transport: ChatTransport<UIMessage> = {
+      reconnectToStream: () => Promise.resolve(null),
+      sendMessages: () => Promise.reject(new Error('Transport setup failed')),
+    };
+
+    await expect(new SebConversationRunner({
+      renderer,
+      title: 'Seb test',
+      transport,
+    }).run()).rejects.toThrow('Transport setup failed');
+
+    expect(close).toHaveBeenCalledOnce();
   });
 });
 

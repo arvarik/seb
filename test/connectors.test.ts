@@ -327,6 +327,26 @@ describe('connector web sources', () => {
     } satisfies Partial<ModelResponseError>);
   });
 
+  it('does not count hidden tool activity as posted connector output', async () => {
+    const capacityError = { message: 'The model has no capacity.', statusCode: 503 };
+    const stream = (async function* () {
+      yield { type: 'reasoning-delta', text: 'I should inspect the current state.' };
+      yield { type: 'tool-call', toolName: 'getNflState' };
+      yield { type: 'tool-result', toolName: 'getNflState', output: { week: 2 } };
+      yield { type: 'error', error: capacityError };
+    })();
+
+    await expect(async () => {
+      for await (const _part of withWebSources(stream)) {
+        // Consume the wrapped response.
+      }
+    }).rejects.toMatchObject({
+      cause: capacityError,
+      emittedOutput: false,
+      name: 'ModelResponseError',
+    } satisfies Partial<ModelResponseError>);
+  });
+
   it.each([
     { emittedOutput: false, includeText: false },
     { emittedOutput: true, includeText: true },

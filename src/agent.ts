@@ -20,7 +20,11 @@ import { WeatherClient } from './weather/client.js';
 import { createWeatherTools } from './weather/tools.js';
 import { createIdentityTools } from './identity/tools.js';
 import type { IdentityRepository } from './identity/repository.js';
-import { createGroundedNewsTools } from './news/tools.js';
+import { NewsClient } from './news/client.js';
+import {
+  createFirstClassNewsTools,
+  createGroundedNewsTools,
+} from './news/tools.js';
 import { createProjectionTools } from './projection/tools.js';
 import { createWaiverTools } from './waivers/tools.js';
 import { createTradeTools } from './trades/tools.js';
@@ -77,6 +81,7 @@ export interface FantasyFootballAgentOptions {
   identityRepository?: IdentityRepository | false;
   languageModel?: LanguageModel;
   model?: string;
+  newsClient?: NewsClient;
   nflverseClient?: NflverseClient;
   onUsage?: (usage: {
     inputTokens: number | undefined;
@@ -154,6 +159,7 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
   let toolProvider = googleProvider;
   const sleeperClient = options.sleeperClient ?? new SleeperClient();
   const nflverseClient = options.nflverseClient ?? new NflverseClient();
+  const newsClient = options.newsClient ?? new NewsClient();
   const weatherClient = options.weatherClient ?? new WeatherClient();
   const enableWebTools = webToolsEnabled(options);
   if (enableWebTools && !toolProvider) {
@@ -173,6 +179,7 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
         ? {}
         : { repository: options.identityRepository },
     ),
+    ...(enableWebTools ? createFirstClassNewsTools(newsClient) : {}),
     ...(enableWebTools && toolProvider
       ? createGroundedNewsTools(toolProvider)
       : {}),
@@ -229,6 +236,7 @@ function omitWebToolCommands(value: string | undefined): string | undefined {
       .split(/(?<=[.!?])\s+/u)
       .filter((sentence) =>
         !sentence.includes('searchCurrentNews') &&
+        !sentence.includes('searchFirstClassNews') &&
         !sentence.includes('readNewsUrl')
       )
       .join(' '))
@@ -486,13 +494,16 @@ For schedule analysis, add a comma-separated Schedule difficulty line when the t
 const WEB_NEWS_INSTRUCTIONS = `
 Use current news before a final waiver, FAAB, accept, or decline recommendation.
 Do not turn a trade impact result into an accept or decline action without current news evidence.
-Use searchCurrentNews for current reporting, injuries, trades, depth-chart changes, and recent team news.
+Use searchFirstClassNews first for current reporting, injuries, trades, depth-chart changes, and recent team news.
+The first-class tool searches official NFL and team sites, independent reporting, and fantasy-impact sources.
+Use searchCurrentNews only when searchFirstClassNews sets fallbackRecommended to true or the user explicitly requests broad web coverage.
+Do not call searchCurrentNews before searchFirstClassNews for a current NFL or fantasy news request.
 Use readNewsUrl when the user supplies an HTTP or HTTPS article URL.
 Treat web reporting as news evidence, not as the source for league data, schedules, or statistics.
 Give the publisher and publication date for each current news claim when those values are available.
 For roster news, read each relevant owned roster before you search current news.
-Seb has no licensed publisher feed or official injury-report feed.
-Google Search can provide current public reporting with source links.
+Seb uses public feeds, sitemaps, and structured article metadata. Seb has no licensed publisher feed.
+Google Search supplies secondary public coverage with source links.
 Sleeper profile fields can contain injury information, but those fields are not a news report.
 State this limit when a request needs current reporting.
 Do not present model memory as current news.

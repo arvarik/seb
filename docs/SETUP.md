@@ -41,7 +41,7 @@ GOOGLE_GENERATIVE_AI_API_KEY=your-key
 Add a contact value to the NWS user agent.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.0.11 (you@example.com)
+NWS_USER_AGENT=seb/0.1.0 (you@example.com)
 ```
 
 The default value identifies the public Seb repository. A direct contact value helps the NWS contact you about request problems.
@@ -95,6 +95,20 @@ This test loads the 2026 schedule and 2025 weekly player statistics.
 The test also loads the Seattle stadium hourly forecast and active alerts.
 
 This test does not call Gemini.
+
+Run the direct news source smoke test.
+
+```bash
+npm run news:smoke
+```
+
+This test reads all 44 built-in news sources from their live public endpoints.
+
+It verifies that each source returns at least one valid dated article.
+
+The test can take longer when a publisher requires a crawl delay.
+
+This test does not call Gemini or Google Search.
 
 ## 4. Verify Gemini
 

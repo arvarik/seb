@@ -36,31 +36,69 @@ export class MemoryPromptHistory implements PromptHistory {
 }
 
 export class FilePromptHistory extends MemoryPromptHistory {
-  private writable = true;
-  private writeFailure: string | null = null;
+  private pendingFailure: string | null;
+  private writable: boolean;
+  private writeFailure: string | null;
 
   private constructor(
     readonly path: string,
     entries: readonly string[],
+    initialFailure: string | null = null,
   ) {
     super(entries);
+    this.pendingFailure = initialFailure;
+    this.writable = initialFailure === null;
+    this.writeFailure = initialFailure;
   }
 
   static async load(environment: NodeJS.ProcessEnv): Promise<PromptHistory> {
     if (isDisabled(environment.SEB_HISTORY)) return new MemoryPromptHistory();
     const path = promptHistoryPath(environment);
-    let entries: unknown = [];
+    let content: string;
     try {
-      entries = JSON.parse(await readFile(path, 'utf8'));
+      content = await readFile(path, 'utf8');
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') entries = [];
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return new FilePromptHistory(path, []);
+      }
+      return new FilePromptHistory(
+        path,
+        [],
+        `Seb could not read the history file: ${errorMessage(error)}`,
+      );
     }
-    return new FilePromptHistory(path, Array.isArray(entries) ? entries.filter(isString) : []);
+    let entries: unknown;
+    try {
+      entries = JSON.parse(content);
+    } catch (error) {
+      return new FilePromptHistory(
+        path,
+        [],
+        `The history file contains invalid JSON: ${errorMessage(error)}`,
+      );
+    }
+    if (!Array.isArray(entries)) {
+      return new FilePromptHistory(
+        path,
+        [],
+        'The history file must contain a JSON array.',
+      );
+    }
+    return new FilePromptHistory(path, entries.filter(isString));
   }
 
   override async add(prompt: string): Promise<void> {
     await super.add(prompt);
-    if (!this.writable) return;
+    if (!this.writable) {
+      if (this.pendingFailure) {
+        const failure = this.pendingFailure;
+        this.pendingFailure = null;
+        throw new Error(
+          `Seb kept the prompt in memory and preserved ${this.path}: ${failure}`,
+        );
+      }
+      return;
+    }
     try {
       await this.save();
     } catch (error) {

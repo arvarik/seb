@@ -133,4 +133,37 @@ describe('TerminalKeyParser', () => {
     expect(parser.parse('\x1b[<64;12;')).toEqual([]);
     expect(parser.parse('8M')).toEqual([{ type: 'scroll-up' }]);
   });
+
+  it('collects an arrow escape sequence across input chunks', () => {
+    const parser = new TerminalKeyParser();
+
+    expect(parser.parse(Buffer.from('\x1b'))).toEqual([]);
+    expect(parser.parse(Buffer.from('[A'))).toEqual([{ type: 'up' }]);
+  });
+
+  it('collects an SS3 escape sequence across input chunks', () => {
+    const parser = new TerminalKeyParser();
+
+    expect(parser.parse(Buffer.from('\x1bO'))).toEqual([]);
+    expect(parser.parse(Buffer.from('H'))).toEqual([{ type: 'home' }]);
+  });
+
+  it('decodes one UTF-8 character across input chunks', () => {
+    const parser = new TerminalKeyParser();
+    const football = Buffer.from('🏈');
+
+    expect(parser.parse(football.subarray(0, 2))).toEqual([]);
+    expect(parser.parse(football.subarray(2))).toEqual([
+      { type: 'character', value: '🏈' },
+    ]);
+  });
+
+  it('flushes a standalone Escape key after the sequence wait', () => {
+    const parser = new TerminalKeyParser();
+
+    expect(parser.parse('\x1b')).toEqual([]);
+    expect(parser.hasPendingEscape()).toBe(true);
+    expect(parser.flushPendingEscape()).toEqual([{ type: 'escape' }]);
+    expect(parser.hasPendingEscape()).toBe(false);
+  });
 });

@@ -36,6 +36,24 @@ export {
   type NflverseClientOptions,
 } from './nflverse/client.js';
 export {
+  NewsClient,
+  NewsSourceError,
+  type NewsClientOptions,
+} from './news/client.js';
+export {
+  FIRST_CLASS_NEWS_SOURCES,
+  findNewsSource,
+  listTeamNewsSites,
+} from './news/sources.js';
+export type {
+  NewsArticle,
+  NewsSearchInput,
+  NewsSearchResult,
+  NewsSourceCategory,
+  NewsSourceDefinition,
+  NewsSourceProbeResult,
+} from './news/types.js';
+export {
   summarizeDefenseAgainstPosition,
   summarizePlayerTrends,
   summarizeTeamPerformance,

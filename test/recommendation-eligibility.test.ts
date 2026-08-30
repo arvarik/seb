@@ -93,6 +93,44 @@ describe('recommendation eligibility', () => {
     expect(result.analysis).not.toBe(analysis);
   });
 
+  it('accepts current first-class news without a Google result', () => {
+    const analysis = exampleAnalysis();
+    const evidence = buildRecommendationEvidence({
+      analysis,
+      question: 'Should I start Example Player in my league?',
+      sources: [directSource(), firstClassNewsSource()],
+      toolResults: [
+        {
+          toolName: 'findPlayers',
+          output: [{
+            injuryStatus: null,
+            name: 'Example Player',
+            playerId: 'player-1',
+            practiceParticipation: 'Full',
+          }],
+        },
+        {
+          toolName: 'searchFirstClassNews',
+          output: {
+            articles: [{
+              publishedAt: '2026-08-21T12:00:00.000Z',
+              stale: false,
+              title: 'Example Player returns to practice',
+            }],
+          },
+        },
+        {
+          toolName: 'getLeagueOverview',
+          output: { league: { scoring_settings: { rec: 1 } } },
+        },
+      ],
+    });
+
+    expect(evidence.injury).toBe('present');
+    expect(enforceRecommendationEligibility(analysis, evidence).eligibility.outcome)
+      .toBe('allowed');
+  });
+
   it.each([
     ['missing current evidence', evidence({ currentEvidence: 'missing' }), 'No current source'],
     ['stale current evidence', evidence({ currentEvidence: 'stale' }), 'source data is stale'],
@@ -363,5 +401,16 @@ function webSource(): DataSourceRecord {
     id: 'web:news-1',
     label: 'Team injury report',
     url: 'https://example.com/injury-report',
+  };
+}
+
+function firstClassNewsSource(): DataSourceRecord {
+  return {
+    accessedAt: '2026-08-21T12:00:00.000Z',
+    cacheOutcome: 'source-updated',
+    id: 'news-article:team-ne:https://example.com/news/report',
+    label: 'New England Patriots News: Practice report',
+    retrievedAt: '2026-08-21T12:00:00.000Z',
+    url: 'https://example.com/news/report',
   };
 }

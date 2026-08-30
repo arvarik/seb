@@ -374,9 +374,26 @@ function playerStatusEvidenceState(
       ? hasProjectionPlayerStatus(result.output)
       : hasPlayerStatusFields(result.output))
   );
-  const hasCurrentNews = toolResults.some((result) => result.toolName === 'searchCurrentNews') &&
-    sources.some((source) => source.id.startsWith('web:'));
+  const hasGroundedWebNews = toolResults.some(
+    (result) => result.toolName === 'searchCurrentNews',
+  ) && sources.some((source) => source.id.startsWith('web:'));
+  const hasFirstClassNews = toolResults.some((result) =>
+    result.toolName === 'searchFirstClassNews' &&
+    hasUsableFirstClassNews(result.output)
+  ) && sources.some((source) =>
+    source.id.startsWith('news-article:') &&
+    source.cacheOutcome !== 'stale-if-error'
+  );
+  const hasCurrentNews = hasGroundedWebNews || hasFirstClassNews;
   return hasPlayerStatus && hasCurrentNews ? 'present' : 'missing';
+}
+
+function hasUsableFirstClassNews(value: unknown): boolean {
+  const articles = asRecord(value)?.articles;
+  return Array.isArray(articles) && articles.some((article) => {
+    const record = asRecord(article);
+    return record?.stale === false && typeof record.publishedAt === 'string';
+  });
 }
 
 function leagueScoringEvidenceState(

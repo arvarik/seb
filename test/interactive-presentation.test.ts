@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   formatElapsed,
+  friendlyToolName,
   hardWrapTerminalLine,
   osc52,
   renderAnalysisText,
@@ -15,6 +16,12 @@ import {
 import { createTheme } from '../src/interactive/theme.js';
 
 describe('interactive presentation', () => {
+  it('shows a clear first-class news progress label', () => {
+    expect(friendlyToolName('searchFirstClassNews')).toBe(
+      'Search first-class news sources',
+    );
+  });
+
   it('removes terminal control sequences from untrusted text', () => {
     const theme = createTheme({ NO_COLOR: '1' });
     const unsafe = 'safe\x1b]52;c;Zm9v\x07 text\x1b[2J\x1bPsecret\x1b\\ done\x08';

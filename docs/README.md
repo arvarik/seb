@@ -33,7 +33,7 @@ New users should read the setup and experience guides first.
 ## Build and operate
 
 - [Architecture](ARCHITECTURE.md) describes request flow, agent boundaries, source clients, and extension points.
-- [AI SDK integration](AI_SDK.md) covers grounded news, typed output, context pruning, and local traces.
+- [AI SDK integration](AI_SDK.md) covers direct news, Google coverage, typed output, context pruning, and local traces.
 - [Production operations](OPERATIONS.md) covers state, scaling, health checks, secrets, upgrades, and incidents.
 - [Versioning](VERSIONING.md) defines release versions, tags, checks, and guarantees.
 - [V1 design](V1.md) records the longer-term roadmap for injuries, projections, and simulations.

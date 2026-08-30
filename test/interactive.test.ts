@@ -1230,7 +1230,7 @@ describe('SebInteractiveTransport', () => {
       session,
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
-      version: '0.0.11',
+      version: '0.1.0',
       weather: clients.weatherClient,
     });
     const controller = new AbortController();

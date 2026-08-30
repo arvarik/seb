@@ -232,15 +232,25 @@ Check whether the fallback model also fails.
 
 Keep webhook acknowledgements active so platforms do not create a retry storm.
 
-### Grounded news fails
+### Current news fails
 
 Inspect the visible web source list in a local reproduction.
 
-Retry the request after a temporary Gemini Search error.
+Run the live direct source probe.
+
+```bash
+npm run news:smoke
+```
+
+Inspect the failed source ID, discovery URL, and publication date.
+
+Check the site's robots policy and required crawl delay.
+
+Retry the request after a temporary direct source or Gemini Search error.
 
 Do not replace current reporting with model memory.
 
-Keep the answer unavailable when the request needs current news and grounding fails.
+Keep the answer unavailable when both direct and secondary coverage fail.
 
 ### Sleeper fails
 

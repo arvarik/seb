@@ -28,6 +28,7 @@ import {
 } from '../analysis/recommendation-eligibility.js';
 import { isModelCapacityError } from '../model-capacity-error.js';
 import { NflverseClient } from '../nflverse/client.js';
+import { NewsClient } from '../news/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import { WeatherClient } from '../weather/client.js';
 import {
@@ -207,13 +208,14 @@ function createAgentReply(environment: Environment): ConnectorReply {
   const onSource: SourceObserver = (source) => sourceContext.getStore()?.record(source);
   const sleeperClient = new SleeperClient({ onSource });
   const nflverseClient = new NflverseClient({ onSource });
+  const newsClient = new NewsClient({ onSource });
   const weatherClient = new WeatherClient({
     onSource,
     ...(environment.NWS_USER_AGENT?.trim()
       ? { userAgent: environment.NWS_USER_AGENT.trim() }
       : {}),
   });
-  const clients = { sleeperClient, nflverseClient, weatherClient };
+  const clients = { sleeperClient, nflverseClient, newsClient, weatherClient };
   const primaryAgent = createFantasyFootballAgent({
     apiKey,
     model: primaryModel,

@@ -6,8 +6,24 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-29
+
+### Added
+
+- Seb now searches 44 built-in NFL news sources before it uses Google Search.
+- The registry includes official NFL, independent, fantasy-impact, and all 32 official team news sources.
+- News discovery now reads RSS feeds, news sitemaps, and supported publisher pages.
+- Article enrichment now validates canonical URLs and publication dates from structured page metadata.
+- The `news:smoke` command now tests every retained source against its live public endpoint.
+
 ### Changed
 
+- Google Search now supplies secondary coverage when direct sources return fewer than five results or fewer than two publishers.
+- Direct news results now prefer recent, relevant, and official reporting while limiting one publisher to three results.
+- Syndicated RSS items now preserve the original publisher for coverage counts and citations.
+- News requests now identify team sources from a team code, city, name, or supported alias.
+- News cache records now include discovery data, article metadata, and robots policies.
+- News source progress and cache clearing now use the `news` source family.
 - The agent now removes old reasoning and tool data before each model step.
 - The final agent step now produces an answer without another tool call.
 - Agents without web tools now state that current news is unavailable.
@@ -16,11 +32,24 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- The news client now follows each site's robots policy and crawl delay.
+- The news client now rejects cross-site redirects, `no-store` responses, oversized bodies, and invalid content types.
+- The news client now validates each redirect and its robots policy before it requests the next URL.
+- Crawler retries no longer bypass a publisher crawl delay.
+- Synthetic content hashes now support conditional cache reuse when a source omits an HTTP validator.
 - Remote session strings now have a length limit and use one labeled JSON value.
 - Cache reads now require the stored source URL to match the requested source.
 
 ### Fixed
 
+- Duplicate news URLs and titles no longer produce repeated evidence.
+- Detailed news queries no longer accept substring matches or generic intent words as relevant coverage.
+- Invalid, missing, stale, or future publication dates no longer appear as current news.
+- Publisher home-page canonical links no longer replace a valid article URL.
+- Mixed Yahoo and PFF feeds no longer add unrelated college items.
+- First-class news now satisfies the recommendation evidence gate without a Google result.
+- Cached and stale news now display their actual cache state instead of a live badge.
+- FantasyPros dates now come from the current server-rendered page without extra article requests.
 - Stopping an interactive model request or network command now cancels active source work.
 - Connector shutdown now cancels active model and source work.
 - One cancelled caller no longer cancels a shared refresh that other callers still need.

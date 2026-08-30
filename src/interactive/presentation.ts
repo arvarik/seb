@@ -52,6 +52,7 @@ export function friendlyToolName(toolName: string): string {
     rankWaiverTargets: 'Rank waiver and FAAB targets',
     analyzeTradeImpact: 'Compare trade impact',
     readNewsUrl: 'Read the supplied web page',
+    searchFirstClassNews: 'Search first-class news sources',
     searchCurrentNews: 'Search current news',
   };
   return descriptions[toolName] ?? humanize(toolName);

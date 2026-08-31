@@ -1,10 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
 import {
   simulateReadableStream,
   type UIMessage,
   type UIMessageChunk,
 } from 'ai';
+
+const { runDoctorMock } = vi.hoisted(() => ({
+  runDoctorMock: vi.fn(async () => ({ checks: [], ok: true })),
+}));
+
+vi.mock('../src/doctor.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../src/doctor.js')>();
+  return { ...original, runDoctor: runDoctorMock };
+});
 
 import { createFantasyFootballAgent } from '../src/agent.js';
 import {
@@ -24,6 +33,7 @@ import {
   decorateResponseStream,
   INTERACTIVE_HELP,
   SebInteractiveTransport,
+  type SebInteractiveTransportOptions,
 } from '../src/interactive/transport.js';
 import { InteractiveUiState } from '../src/interactive/ui-state.js';
 import { NflverseClient } from '../src/nflverse/client.js';
@@ -31,6 +41,7 @@ import { SleeperClient } from '../src/sleeper/client.js';
 import { SourceTracker } from '../src/sources.js';
 import { WeatherClient } from '../src/weather/client.js';
 import type { SebSetupProfile, SetupProfileStore } from '../src/setup/profile.js';
+import type { UsageDataset, UsageQuery } from '../src/usage/types.js';
 
 describe('interactive skills', () => {
   it('defines unique skills for the major fantasy workflows', () => {
@@ -278,6 +289,145 @@ function sessionContextData(context: string): Record<string, unknown> {
 }
 
 describe('SebInteractiveTransport', () => {
+  it('links a live doctor command to the current usage session', async () => {
+    runDoctorMock.mockClear();
+    const clients = dataClients();
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    const usageTelemetryDatabase = {
+      finishUsageRun: vi.fn(),
+      putUsageStep: vi.fn(),
+      putUsageToolCall: vi.fn(),
+      startUsageRun: vi.fn(),
+    } as unknown as NonNullable<
+      SebInteractiveTransportOptions['usageTelemetryDatabase']
+    >;
+    const environment = { GOOGLE_GENERATIVE_AI_API_KEY: 'test-key' };
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({
+        identityRepository: false,
+        languageModel: new MockLanguageModelV4({}),
+        ...clients,
+      }),
+      environment,
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session,
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      usageSessionId: 'interactive-session',
+      usageTelemetryDatabase,
+      version: '0.1.0',
+      weather: clients.weatherClient,
+    });
+
+    const output = await sendCommand(transport, '/doctor', 'doctor-command');
+
+    expect(output).toContain('All required checks passed.');
+    expect(runDoctorMock).toHaveBeenCalledWith({
+      environment,
+      geminiTelemetry: {
+        agentKind: 'doctor',
+        database: usageTelemetryDatabase,
+        sessionId: 'interactive-session',
+        sessionUsage: session.usage,
+        surface: 'interactive',
+      },
+      offline: false,
+    });
+  });
+
+  it('reports local usage and detailed statistics without a model call', async () => {
+    const model = new MockLanguageModelV4({});
+    const clients = dataClients();
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    const queries: UsageQuery[] = [];
+    const dataset = usageDatasetFixture();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({
+        identityRepository: false,
+        languageModel: model,
+        ...clients,
+      }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session,
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      usageDatabase: {
+        readUsageDataset: (query = {}) => {
+          queries.push(query);
+          return dataset;
+        },
+      },
+      usageNow: () => new Date('2026-08-20T12:30:00Z'),
+      usageSessionId: 'session-1',
+      version: '0.1.0',
+      weather: clients.weatherClient,
+    });
+
+    const usage = await sendCommand(transport, '/usage', 'usage-command');
+    const stats = await sendCommand(transport, '/stats 7d', 'stats-command');
+    const invalid = await sendCommand(transport, '/stats quarter', 'stats-error');
+    const extra = await sendCommand(transport, '/usage 7d extra', 'usage-extra-error');
+
+    expect(usage).toContain('## Seb-observed API usage');
+    expect(usage).toContain('Model calls: 1');
+    expect(usage).toContain('Input tokens: 100');
+    expect(stats).toContain('## Seb usage analytics');
+    expect(stats).toContain('### Tool calls');
+    expect(stats).toContain('| getNflState | 1 |');
+    expect(invalid).toContain('Use session, today, 7d, 30d, or all.');
+    expect(extra).toContain('Use /usage [session|today|7d|30d|all].');
+    expect(queries[0]).toMatchObject({ sessionId: 'session-1' });
+    expect(queries[1]).not.toHaveProperty('sessionId');
+    expect(queries).toHaveLength(2);
+    expect(model.doGenerateCalls).toHaveLength(0);
+    expect(model.doStreamCalls).toHaveLength(0);
+  });
+
+  it('closes unfinished usage records when the interactive signal stops', async () => {
+    const clients = dataClients();
+    const abortUnfinished = vi.fn();
+    const closeUnfinished = vi.fn();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({
+        identityRepository: false,
+        languageModel: new MockLanguageModelV4({}),
+        ...clients,
+      }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      usageTelemetry: { abortUnfinished, closeUnfinished },
+      version: '0.1.0',
+      weather: clients.weatherClient,
+    });
+    const controller = new AbortController();
+    const stream = await transport.sendMessages({
+      abortSignal: controller.signal,
+      chatId: 'abort-usage-chat',
+      messageId: undefined,
+      messages: [{
+        id: 'abort-usage-message',
+        parts: [{ text: '/help', type: 'text' }],
+        role: 'user',
+      }],
+      trigger: 'submit-message',
+    });
+    const reason = new DOMException('The user stopped the request.', 'AbortError');
+
+    controller.abort(reason);
+    await stream.cancel(reason);
+
+    expect(abortUnfinished).toHaveBeenCalledOnce();
+    expect(abortUnfinished).toHaveBeenCalledWith(reason);
+    expect(closeUnfinished).not.toHaveBeenCalled();
+  });
+
   it('rejects league and roster selections outside discovered context', async () => {
     const clients = dataClients();
     const session = createSessionState();
@@ -741,6 +891,71 @@ describe('SebInteractiveTransport', () => {
     expect(output).not.toContain('I recommend the incomplete action');
   });
 
+  it('closes unfinished telemetry when the UI stream reports an error', async () => {
+    const closeUnfinished = vi.fn();
+    const sourceStream = new ReadableStream<UIMessageChunk>({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'failed-answer' });
+        controller.enqueue({
+          type: 'error',
+          errorText: 'The provider stream failed.',
+        });
+        controller.close();
+      },
+    });
+
+    await streamText(decorateResponseStream(
+      sourceStream,
+      createSessionState(),
+      new SourceTracker(),
+      new InteractiveUiState(),
+      'Show the current NFL state.',
+      undefined,
+      closeUnfinished,
+    ));
+
+    expect(closeUnfinished).toHaveBeenCalledOnce();
+    expect(closeUnfinished.mock.calls[0]?.[0]).toMatchObject({
+      message: 'The provider stream failed.',
+    });
+  });
+
+  it('aborts unfinished telemetry when the UI consumer cancels the stream', async () => {
+    const abortUnfinished = vi.fn();
+    const closeUnfinished = vi.fn();
+    const upstreamCancel = vi.fn();
+    const sourceStream = new ReadableStream<UIMessageChunk>({
+      cancel: upstreamCancel,
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'cancelled-answer' });
+      },
+    });
+    const stream = decorateResponseStream(
+      sourceStream,
+      createSessionState(),
+      new SourceTracker(),
+      new InteractiveUiState(),
+      'Show the current NFL state.',
+      undefined,
+      closeUnfinished,
+      abortUnfinished,
+    );
+    const reader = stream.getReader();
+    const reason = new DOMException('The user stopped reading.', 'AbortError');
+
+    expect(await reader.read()).toMatchObject({
+      done: false,
+      value: { messageId: 'cancelled-answer', type: 'start' },
+    });
+    await reader.cancel(reason);
+
+    expect(abortUnfinished).toHaveBeenCalledOnce();
+    expect(abortUnfinished).toHaveBeenCalledWith(reason);
+    expect(upstreamCancel).toHaveBeenCalledOnce();
+    expect(upstreamCancel).toHaveBeenCalledWith(reason);
+    expect(closeUnfinished).not.toHaveBeenCalled();
+  });
+
   it('adds web sources without repeating suggestions after a streamed answer', async () => {
     const model = new MockLanguageModelV4({
       doStream: async () => ({
@@ -1012,6 +1227,7 @@ describe('SebInteractiveTransport', () => {
       playerCacheFile: false,
     });
     const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    const usageReference = session.usage;
     const profileStore = new MemoryProfileStore();
     const transport = new SebInteractiveTransport({
       agent: createFantasyFootballAgent({
@@ -1050,6 +1266,7 @@ describe('SebInteractiveTransport', () => {
       season: 2026,
       mode: 'fantasy',
     });
+    expect(session.usage).toBe(usageReference);
     expect(profileStore.profile).toMatchObject({
       schemaVersion: 3,
       sleeper: { username: 'arvarik' },
@@ -1297,6 +1514,56 @@ function dataClients() {
     nflverseClient: new NflverseClient({ cacheDirectory: false, fetch: unavailableFetch }),
     sleeperClient: new SleeperClient({ fetch: unavailableFetch, playerCacheFile: false }),
     weatherClient: new WeatherClient({ cacheDirectory: false, fetch: unavailableFetch }),
+  };
+}
+
+function usageDatasetFixture(): UsageDataset {
+  return {
+    runs: [{
+      agentKind: 'research',
+      callId: 'call-1',
+      endedAt: '2026-08-20T12:00:02.000Z',
+      errorKind: null,
+      finalFinishReason: 'stop',
+      sessionId: 'session-1',
+      startedAt: '2026-08-20T12:00:00.000Z',
+      status: 'completed',
+      surface: 'interactive',
+    }],
+    steps: [{
+      cacheReadInputTokens: 20,
+      cacheWriteInputTokens: 0,
+      callId: 'call-1',
+      finishReason: 'stop',
+      groundingCounts: { google_search: 1 },
+      inputTokens: 100,
+      modelId: 'gemini-test',
+      noCacheInputTokens: 80,
+      outputTokens: 40,
+      provider: 'google.generative-ai',
+      providerTotalTokens: 140,
+      rawFinishReason: 'STOP',
+      reasoningTokens: 10,
+      responseTimeMs: 500,
+      serviceTier: 'standard',
+      stepNumber: 0,
+      stepTimeMs: 700,
+      textTokens: 30,
+      timeToFirstOutputMs: 100,
+      toolUseTokens: 5,
+      totalTokens: 140,
+    }],
+    toolCalls: [{
+      callId: 'call-1',
+      dynamic: false,
+      executionLocation: 'client',
+      executionMs: 150,
+      outcome: 'returned',
+      stepNumber: 0,
+      toolCallId: 'tool-1',
+      toolName: 'getNflState',
+    }],
+    truncated: false,
   };
 }
 

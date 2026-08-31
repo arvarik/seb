@@ -1,6 +1,7 @@
-import { registerTelemetry } from 'ai';
+import { registerTelemetry, type Telemetry } from 'ai';
 
 let configured = false;
+let devToolsTelemetry: Telemetry | null = null;
 
 export async function configureAiDevTools(
   environment: NodeJS.ProcessEnv = process.env,
@@ -11,9 +12,14 @@ export async function configureAiDevTools(
   }
   if (configured) return true;
   const { DevToolsTelemetry } = await import('@ai-sdk/devtools');
-  registerTelemetry(DevToolsTelemetry());
+  devToolsTelemetry = DevToolsTelemetry();
+  registerTelemetry(devToolsTelemetry);
   configured = true;
   return true;
+}
+
+export function activeAiDevToolsTelemetry(): readonly Telemetry[] {
+  return devToolsTelemetry ? [devToolsTelemetry] : [];
 }
 
 export function devToolsRequested(value: string | undefined): boolean {

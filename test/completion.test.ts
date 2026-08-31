@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -20,7 +22,8 @@ describe('interactive command completion', () => {
 
   it('finds commands with prefixes, descriptions, and fuzzy characters', () => {
     expect(searchInteractiveCommands('ref')[0]?.name).toBe('refresh');
-    expect(searchInteractiveCommands('token')[0]?.name).toBe('usage');
+    expect(searchInteractiveCommands('token')[0]?.name).toBe('stats');
+    expect(searchInteractiveCommands('api usage')[0]?.name).toBe('usage');
     expect(searchInteractiveCommands('dctr')[0]?.name).toBe('doctor');
   });
 
@@ -137,4 +140,108 @@ describe('interactive command completion', () => {
       expect(script).toContain('ask');
     },
   );
+
+  it('offers Bash cleanup flags only after a cleanup action', () => {
+    const script = generateShellCompletion('bash');
+
+    expect(script).toContain(
+      'for word in "${COMP_WORDS[@]:2:COMP_CWORD-2}"',
+    );
+    expect(script).toContain(
+      'if [[ -n "${range}" ]]; then',
+    );
+    expect(script).toContain(
+      'clear) COMPREPLY=( $(compgen -W "--include-unfinished --json --help"',
+    );
+    expect(script).toContain(
+      'prune) COMPREPLY=( $(compgen -W "--retain-days --include-unfinished --json --help"',
+    );
+    expect(script).not.toContain(
+      'today 7d 30d all clear prune --retain-days --include-unfinished',
+    );
+    expect(script).toContain(
+      '--*) COMPREPLY=( $(compgen -W "today 7d 30d all --json --help"',
+    );
+  });
+
+  it('does not offer a second Bash range or a late cleanup action', () => {
+    expect(bashCompletionChoices(['seb', 'usage', '7d', ''])).toEqual([
+      '--help',
+      '--json',
+    ]);
+    expect(bashCompletionChoices(['seb', 'stats', '--json', '7d', ''])).toEqual([
+      '--help',
+      '--json',
+    ]);
+    expect(bashCompletionChoices(['seb', 'stats', '--json', ''])).toEqual([
+      '--help',
+      '--json',
+      '30d',
+      '7d',
+      'all',
+      'today',
+    ]);
+    expect(bashCompletionChoices(['seb', 'stats', 'prune', ''])).toEqual([
+      '--help',
+      '--include-unfinished',
+      '--json',
+      '--retain-days',
+    ]);
+  });
+
+  it('uses action-specific Fish conditions for stats cleanup flags', () => {
+    const script = generateShellCompletion('fish');
+
+    expect(script).toContain(
+      "__fish_seen_subcommand_from stats; and __fish_seen_subcommand_from prune' -l retain-days",
+    );
+    expect(script).toContain(
+      "__fish_seen_subcommand_from stats; and __fish_seen_subcommand_from clear prune' -l include-unfinished",
+    );
+    expect(script).not.toContain(
+      "__fish_seen_subcommand_from stats' -l retain-days",
+    );
+    expect(script).toContain(
+      "test (count (commandline -opc)) -eq 2' -a 'clear prune'",
+    );
+    expect(script).toContain(
+      "clear prune' -a 'today 7d 30d all'",
+    );
+  });
+
+  it('uses action-specific Zsh arguments for stats cleanup flags', () => {
+    const script = generateShellCompletion('zsh');
+
+    expect(script).toContain('case "$words[3]" in');
+    expect(script).toContain(
+      "today|7d|30d|all) _arguments '--json[Print JSON]' '--help[Show help]'",
+    );
+    expect(script).toContain(
+      "prune) _arguments '--retain-days[Retain recent usage days]:days:'",
+    );
+    expect(script).toContain(
+      "--*) _arguments '1:range:(today 7d 30d all)'",
+    );
+    expect(script).not.toContain(
+      "'1:range or action:(today 7d 30d all clear prune)' '--retain-days",
+    );
+  });
 });
+
+function bashCompletionChoices(words: readonly string[]): string[] {
+  const script = generateShellCompletion('bash');
+  const command = [
+    script,
+    `COMP_WORDS=(${words.map(bashQuote).join(' ')})`,
+    `COMP_CWORD=${words.length - 1}`,
+    '_seb_completion',
+    'printf "%s\\n" "${COMPREPLY[@]}"',
+  ].join('\n');
+  return execFileSync('bash', ['--noprofile', '--norc', '-c', command], {
+    encoding: 'utf8',
+  }).trim().split('\n').filter(Boolean).sort();
+}
+
+function bashQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}

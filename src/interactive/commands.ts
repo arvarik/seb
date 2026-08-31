@@ -133,7 +133,28 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('icons', '/icons unicode|ascii', 'Select Unicode or ASCII symbols.', 'Preferences', 'Change terminal symbols for this session.', undefined, ['unicode', 'ascii'], undefined, 1),
   command('doctor', '/doctor [offline]', 'Check the local setup and connected services.', 'Diagnostics', 'Run local and optional network checks.', undefined, ['offline', '--offline'], undefined, 1),
   command('devtools', '/devtools', 'Show local AI SDK DevTools status.', 'Diagnostics', 'Print local AI SDK trace settings.', undefined, undefined, undefined, 0),
-  command('usage', '/usage', 'Show model token use for this session.', 'Diagnostics', 'Print the session token counters.', ['cost'], undefined, undefined, 0),
+  command(
+    'usage',
+    '/usage [session|today|7d|30d|all]',
+    'Show concise, locally observed Gemini API usage.',
+    'Diagnostics',
+    'Print model calls, token classes, coverage, and local tool activity.',
+    ['cost'],
+    ['session', 'today', '7d', '30d', 'all'],
+    undefined,
+    1,
+  ),
+  command(
+    'stats',
+    '/stats [session|today|7d|30d|all]',
+    'Show detailed token, latency, model, and tool-call analytics.',
+    'Diagnostics',
+    'Analyze locally recorded model and tool activity for one time range.',
+    undefined,
+    ['session', 'today', '7d', '30d', 'all'],
+    undefined,
+    1,
+  ),
   command('next', '/next', 'Show useful next actions.', 'Essentials', 'Print useful actions for the active context.', ['suggest', 'suggestions'], undefined, undefined, 0),
   command('shell-completion', '/shell-completion bash|fish|zsh', 'Print a shell completion script.', 'Preferences', 'Print a completion script for the selected shell.', ['completion'], ['bash', 'fish', 'zsh'], undefined, 1),
   command('version', '/version', 'Show the Seb and Gemini model versions.', 'Diagnostics', 'Print the active Seb and model versions.', undefined, undefined, undefined, 0),
@@ -531,14 +552,20 @@ function normalizeSearch(value: string): string {
 function bashCompletion(): string {
   return `# Seb completion for Bash
 _seb_completion() {
-  local current previous
+  local action current previous range word
   COMPREPLY=()
   current="\${COMP_WORDS[COMP_CWORD]}"
   previous="\${COMP_WORDS[COMP_CWORD-1]}"
   if [[ "\${COMP_CWORD}" -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "chat ask doctor setup cache snapshots replay completion help version" -- "\${current}") )
+    COMPREPLY=( $(compgen -W "chat ask doctor setup cache snapshots replay usage stats completion help version" -- "\${current}") )
     return
   fi
+  range=""
+  for word in "\${COMP_WORDS[@]:2:COMP_CWORD-2}"; do
+    case "\${word}" in
+      today|7d|30d|all) range="\${word}" ;;
+    esac
+  done
   case "\${COMP_WORDS[1]}" in
     chat) COMPREPLY=( $(compgen -W "--model --help" -- "\${current}") ) ;;
     ask) COMPREPLY=( $(compgen -W "--json --model --no-progress --help" -- "\${current}") ) ;;
@@ -546,6 +573,26 @@ _seb_completion() {
     cache) COMPREPLY=( $(compgen -W "status clear prune --max-size-mb --max-age-days --retain --json --help" -- "\${current}") ) ;;
     snapshots) COMPREPLY=( $(compgen -W "--kind --entity --id --limit --json --help" -- "\${current}") ) ;;
     replay) COMPREPLY=( $(compgen -W "--season --through-week --position --output --json --help" -- "\${current}") ) ;;
+    usage)
+      if [[ -n "\${range}" ]]; then
+        COMPREPLY=( $(compgen -W "--json --help" -- "\${current}") )
+      else
+        COMPREPLY=( $(compgen -W "today 7d 30d all --json --help" -- "\${current}") )
+      fi
+      ;;
+    stats)
+      action="\${COMP_WORDS[2]}"
+      if [[ -n "\${range}" ]]; then
+        COMPREPLY=( $(compgen -W "--json --help" -- "\${current}") )
+        return
+      fi
+      case "\${action}" in
+        clear) COMPREPLY=( $(compgen -W "--include-unfinished --json --help" -- "\${current}") ) ;;
+        prune) COMPREPLY=( $(compgen -W "--retain-days --include-unfinished --json --help" -- "\${current}") ) ;;
+        --*) COMPREPLY=( $(compgen -W "today 7d 30d all --json --help" -- "\${current}") ) ;;
+        *) COMPREPLY=( $(compgen -W "today 7d 30d all clear prune --json --help" -- "\${current}") ) ;;
+      esac
+      ;;
     completion) COMPREPLY=( $(compgen -W "bash fish zsh" -- "\${current}") ) ;;
   esac
 }
@@ -562,6 +609,8 @@ complete -c seb -n '__fish_use_subcommand' -a setup -d 'Configure a Sleeper prof
 complete -c seb -n '__fish_use_subcommand' -a cache -d 'Inspect or clear the SQLite cache'
 complete -c seb -n '__fish_use_subcommand' -a snapshots -d 'List source snapshots'
 complete -c seb -n '__fish_use_subcommand' -a replay -d 'Measure historical baseline accuracy'
+complete -c seb -n '__fish_use_subcommand' -a usage -d 'Show local Gemini API usage'
+complete -c seb -n '__fish_use_subcommand' -a stats -d 'Show detailed model and tool analytics'
 complete -c seb -n '__fish_use_subcommand' -a completion -d 'Print shell completion'
 complete -c seb -n '__fish_use_subcommand' -a help -d 'Show help'
 complete -c seb -n '__fish_use_subcommand' -a version -d 'Show the version'
@@ -573,7 +622,12 @@ complete -c seb -n '__fish_seen_subcommand_from cache' -a 'status clear prune'
 complete -c seb -n '__fish_seen_subcommand_from cache' -l max-size-mb -r -d 'Set the snapshot size limit'
 complete -c seb -n '__fish_seen_subcommand_from cache' -l max-age-days -r -d 'Delete older snapshots'
 complete -c seb -n '__fish_seen_subcommand_from cache' -l retain -r -d 'Retain snapshots per source key'
-complete -c seb -n '__fish_seen_subcommand_from cache snapshots replay' -l json -d 'Print JSON'
+complete -c seb -n '__fish_seen_subcommand_from cache snapshots replay usage stats' -l json -d 'Print JSON'
+complete -c seb -n '__fish_seen_subcommand_from usage; and not __fish_seen_subcommand_from today 7d 30d all' -a 'today 7d 30d all'
+complete -c seb -n '__fish_seen_subcommand_from stats; and not __fish_seen_subcommand_from today 7d 30d all clear prune' -a 'today 7d 30d all'
+complete -c seb -n '__fish_seen_subcommand_from stats; and not __fish_seen_subcommand_from today 7d 30d all clear prune; and test (count (commandline -opc)) -eq 2' -a 'clear prune'
+complete -c seb -n '__fish_seen_subcommand_from stats; and __fish_seen_subcommand_from prune' -l retain-days -r -d 'Retain recent usage days'
+complete -c seb -n '__fish_seen_subcommand_from stats; and __fish_seen_subcommand_from clear prune' -l include-unfinished -d 'Also remove unfinished usage runs'
 complete -c seb -n '__fish_seen_subcommand_from snapshots' -l kind -r -d 'Filter snapshot kind'
 complete -c seb -n '__fish_seen_subcommand_from snapshots' -l entity -r -d 'Filter entity key'
 complete -c seb -n '__fish_seen_subcommand_from snapshots' -l id -r -d 'Inspect snapshot provenance'
@@ -597,6 +651,8 @@ _seb() {
     'cache:Inspect or clear the SQLite cache'
     'snapshots:List source snapshots'
     'replay:Measure historical baseline accuracy'
+    'usage:Show local Gemini API usage'
+    'stats:Show detailed model and tool analytics'
     'completion:Print shell completion'
     'help:Show help'
     'version:Show the version'
@@ -614,6 +670,16 @@ _seb() {
         cache) _arguments '1:action:(status clear prune)' '--max-size-mb[Set the snapshot size limit]:megabytes:' '--max-age-days[Delete older snapshots]:days:' '--retain[Retain snapshots per source key]:count:' '--json[Print JSON]' '--help[Show help]' ;;
         snapshots) _arguments '--kind[Filter snapshot kind]:kind:' '--entity[Filter entity key]:key:' '--id[Inspect snapshot provenance]:id:' '--limit[Limit results]:number:' '--json[Print JSON]' '--help[Show help]' ;;
         replay) _arguments '--season[Select the season]:year:' '--through-week[Select the final week]:week:' '--position[Filter positions]:positions:' '--output[Save the report]:file:_files' '--json[Print JSON]' '--help[Show help]' ;;
+        usage) _arguments '1:range:(today 7d 30d all)' '--json[Print JSON]' '--help[Show help]' ;;
+        stats)
+          case "$words[3]" in
+            clear) _arguments '--include-unfinished[Also remove unfinished usage runs]' '--json[Print JSON]' '--help[Show help]' ;;
+            prune) _arguments '--retain-days[Retain recent usage days]:days:' '--include-unfinished[Also remove unfinished usage runs]' '--json[Print JSON]' '--help[Show help]' ;;
+            today|7d|30d|all) _arguments '--json[Print JSON]' '--help[Show help]' ;;
+            --*) _arguments '1:range:(today 7d 30d all)' '--json[Print JSON]' '--help[Show help]' ;;
+            *) _arguments '1:range or action:(today 7d 30d all clear prune)' '--json[Print JSON]' '--help[Show help]' ;;
+          esac
+          ;;
         completion) _arguments '1:shell:(bash fish zsh)' ;;
       esac
       ;;

@@ -133,7 +133,63 @@ The examples also distinguish league IDs, roster IDs, team codes, seasons, and w
 
 This feature improves tool selection without changing the tool input schema.
 
-## 5. Local AI SDK DevTools
+## 5. Local usage telemetry
+
+The production Gemini model uses the Google Interactions API.
+
+Google returns interaction usage for input, output, thought, cached, tool-use, and total tokens when those values exist.
+
+AI SDK normalizes model usage and performance for each logical model step.
+
+Seb registers `SebUsageTelemetry` through the AI SDK telemetry integration interface.
+
+The integration observes run, model-step, tool-execution, completion, error, and cancellation events.
+
+The interactive transport closes unfinished runs when a user stops local stream consumption.
+
+This explicit action covers stream cancellation paths that do not emit an AI SDK abort event.
+
+Seb applies terminal precedence in this order: aborted, failed, then completed.
+
+This rule corrects a completed callback when later structured-output validation fails.
+
+It also corrects a startup error when a later abort callback confirms cancellation.
+
+Seb keeps the first terminal timestamp during each correction.
+
+It records interactive, top-level command, connector, doctor, setup, and live contract activity in the local SQLite database.
+
+One recorded model call equals one AI SDK model step.
+
+The provider can make HTTP retries inside one step. The AI SDK event does not expose those retries to Seb.
+
+Seb saves AI SDK token classes and selected Google usage fields.
+
+The Google fields add provider totals, tool-use tokens, grounding counts, and service tier when Google returns them.
+
+Seb recognizes the `standard`, `priority`, `flex`, and `deferred` service tiers. It maps another value to `other`.
+
+Seb keeps a missing provider metric as `null`. The reports show the known coverage for each token class.
+
+AI SDK performance data supplies model response time, time to first output, and complete step time.
+
+AI SDK tool lifecycle events supply client execution duration and final outcome.
+
+Model content parts supply provider tool calls and provider results.
+
+Seb sets `recordInputs: false` and `recordOutputs: false` when DevTools is off.
+
+DevTools enables both shared AI SDK flags because it records content in its separate trace store.
+
+The local analytics integration ignores content in both configurations.
+
+The analytics tables do not contain prompts, answers, tool inputs, tool results, or raw errors.
+
+The `/usage` and `/stats` commands read these local records without a Gemini request.
+
+The JSON reports use stable schema version 1.
+
+## 6. Local AI SDK DevTools
 
 AI SDK DevTools records model calls, messages, outputs, and tool data on the local computer.
 
@@ -163,6 +219,10 @@ Seb rejects this configuration when `NODE_ENV=production`.
 
 Delete local trace files with a normal file operation when you no longer need them.
 
+DevTools and local usage telemetry have different privacy rules.
+
+DevTools records complete content. Local usage telemetry records metadata only.
+
 ## Verification
 
 Run the complete local checks.
@@ -186,3 +246,23 @@ Run the live first-class source probe without Gemini.
 ```bash
 npm run news:smoke
 ```
+
+## 2026 design sources
+
+These official sources define the current telemetry and usage basis.
+
+- [AI SDK telemetry](https://ai-sdk.dev/docs/ai-sdk-core/telemetry)
+- [AI SDK tool calling](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling)
+- [Gemini Interactions API](https://ai.google.dev/api/interactions-api)
+- [Gemini token guidance](https://ai.google.dev/gemini-api/docs/tokens)
+- [Gemini rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)
+- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/)
+- [OpenTelemetry 2026 GenAI observability guidance](https://opentelemetry.io/blog/2026/genai-observability/)
+
+AI SDK marks its telemetry interface as experimental. Seb isolates that interface behind its own versioned recorder.
+
+The 2026 OpenTelemetry guidance calls for agent, model, tool, token, and latency visibility.
+
+Seb records those dimensions locally. It keeps prompt and output content disabled for this analytics store.
+
+The local JSON schema is not an OpenTelemetry exporter. Its fields remain stable through Seb schema version 1.

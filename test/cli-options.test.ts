@@ -139,4 +139,63 @@ describe('parseCliArguments', () => {
       '--position accepts QB, RB, WR, TE, and K',
     );
   });
+
+  it('parses local usage and statistics reports', () => {
+    expect(parseCliArguments(['usage'])).toEqual({
+      name: 'usage',
+      json: false,
+      scope: 'today',
+    });
+    expect(parseCliArguments(['stats', '30d', '--json'])).toEqual({
+      action: 'report',
+      name: 'stats',
+      json: true,
+      scope: '30d',
+    });
+    expect(parseCliArguments(['stats'])).toEqual({
+      action: 'report',
+      name: 'stats',
+      json: false,
+      scope: '7d',
+    });
+    expect(parseCliArguments([
+      'stats', 'clear', '--include-unfinished', '--json',
+    ])).toEqual({
+      action: 'clear',
+      includeUnfinished: true,
+      name: 'stats',
+      json: true,
+      scope: 'all',
+    });
+    expect(parseCliArguments([
+      'stats', 'prune', '--retain-days', '30', '--include-unfinished',
+    ])).toEqual({
+      action: 'prune',
+      includeUnfinished: true,
+      name: 'stats',
+      json: false,
+      retainDays: 30,
+      scope: 'all',
+    });
+    expect(parseCliArguments(['stats', 'clear'])).toMatchObject({
+      includeUnfinished: false,
+    });
+    expect(parseCliArguments(['stats', 'prune'])).toMatchObject({
+      includeUnfinished: false,
+    });
+    expect(parseCliArguments(['stats', 'clear', '--help'])).toEqual({ name: 'help' });
+    expect(parseCliArguments(['stats', 'prune', '-h'])).toEqual({ name: 'help' });
+    expect(() => parseCliArguments(['stats', 'prune', '--retain-days', '0'])).toThrow(
+      '--retain-days must be an integer from 1 through 36500.',
+    );
+    expect(() => parseCliArguments(['stats', 'prune', '--retain-days', '36501'])).toThrow(
+      '--retain-days must be an integer from 1 through 36500.',
+    );
+    expect(() => parseCliArguments(['usage', '7d', 'all'])).toThrow(
+      'Use only one usage time range.',
+    );
+    expect(() => parseCliArguments(['stats', 'session'])).toThrow(
+      'Use seb stats [today|7d|30d|all] [--json].',
+    );
+  });
 });

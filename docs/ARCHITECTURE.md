@@ -22,11 +22,13 @@ This design keeps current facts outside model memory.
 14. URL Context reads a web page that the user supplies.
 15. A deterministic function calculates summaries and risk signals.
 16. Gemini explains the returned facts.
-17. The transport records each executed tool input and result.
-18. A decision gate matches that evidence to the requested subject and selected league.
-19. The gate replaces an unsupported action before any user-facing output.
-20. The transport adds validated web sources and records contextual actions.
-21. The Seb renderer draws the response, responsive tables, record cards, tool progress, badges, and supported charts.
+17. AI SDK telemetry emits run, model-step, performance, and tool lifecycle events.
+18. Seb writes bounded usage metadata to the local SQLite database.
+19. The transport records each executed tool input and result for the decision gate.
+20. A decision gate matches that evidence to the requested subject and selected league.
+21. The gate replaces an unsupported action before any user-facing output.
+22. The transport adds validated web sources and records contextual actions.
+23. The Seb renderer draws the response, responsive tables, record cards, tool progress, badges, and supported charts.
 
 ## Agent harness
 
@@ -370,6 +372,72 @@ The gate replaces a blocked action with exact missing requirements.
 
 It reduces confidence when fresh required evidence includes a stale supplemental source.
 
+## Local usage analytics
+
+Seb uses the AI SDK telemetry integration interface for local usage records.
+
+The production model uses the Google Interactions API.
+
+AI SDK supplies normalized model-step usage, performance values, and tool lifecycle events.
+
+Google usage adds provider-specific totals, tool-use tokens, grounding counts, and service tier when available.
+
+One model call in a report means one logical AI SDK model step.
+
+Provider HTTP retries can occur inside that step. Seb does not observe those retries.
+
+`SebUsageTelemetry` records runs, model steps, and tool calls across the interactive, command-line, and connector surfaces.
+
+It deduplicates repeated lifecycle events by run, step, and tool-call identifiers.
+
+The recorder writes input, cache-read, cache-write, output, text, reasoning, tool-use, and total token classes.
+
+It keeps an omitted metric as unknown. It never converts an omitted metric to zero.
+
+Seb keeps the AI SDK normalized total separate from the provider total. The two totals can use different provider accounting rules.
+
+The recorder also writes response time, time to first output, complete step time, and client tool duration.
+
+Tool records separate client execution from provider execution.
+
+Tool outcomes include returned, error, invalid, cancelled, and unresolved.
+
+Analytics calculate totals, matched-call weighted token ratios, distributions, model groups, tool groups, repeated calls, and daily trends.
+
+Each ratio reports its matched-call count. A missing token class never becomes zero in a ratio.
+
+Model totals, daily totals, and cumulative client duration also report their measured-call coverage.
+
+A stored `running` status means the recorder received no terminal lifecycle event. Reports call this state `unfinished` because a stopped process can leave it behind.
+
+The interactive transport explicitly closes active usage runs when a user stops a stream.
+
+Terminal state precedence is aborted, failed, then completed.
+
+This order resolves AI SDK callback races without changing the first terminal timestamp.
+
+A repeated call is each extra call with the same tool name in one run. The analytics do not compare tool input.
+
+Reports include missing metrics, conflicting token fields, and truncated query state.
+
+Each report reads the 10,000 newest matching runs at most.
+
+Top-level JSON output uses schema version 1.
+
+The local reports do not query Google quota, credits, billing totals, or currency cost.
+
+The recorder disables input and output capture for local analytics.
+
+It stores identifiers, timestamps, numeric metrics, and bounded categories.
+
+It does not store prompts, answers, tool inputs, tool results, or raw errors.
+
+AI SDK DevTools uses a separate content-rich trace store.
+
+Read the [AI SDK guide](AI_SDK.md#5-local-usage-telemetry) for the event and provider basis.
+
+Read the [storage guide](STORAGE.md#usage-telemetry) for schema and retention details.
+
 ## Local model inspection
 
 Seb can register AI SDK DevTools telemetry during local development.
@@ -402,7 +470,7 @@ Read the [evaluation guide](EVALUATION.md) for exact rules and limits.
 
 ## Test design
 
-Vitest checks clients, SQLite storage, identities, provenance, evaluation, commands, setup, weather, CLI behavior, and connectors.
+Vitest checks clients, SQLite storage, usage telemetry, analytics, identities, provenance, evaluation, commands, setup, weather, CLI behavior, and connectors.
 
 AI SDK `MockLanguageModelV4` checks complete agent tool loops without model cost.
 

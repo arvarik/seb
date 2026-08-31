@@ -4,6 +4,7 @@ import { createMemoryState } from '@chat-adapter/state-memory';
 import { createRedisState } from '@chat-adapter/state-redis';
 import { createTelegramAdapter } from '@chat-adapter/telegram';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import {
   Chat,
   fromFullStream,
@@ -26,6 +27,7 @@ import {
   recommendationContextQuestion,
   type RecommendationToolResult,
 } from '../analysis/recommendation-eligibility.js';
+import { getSharedSebDatabase } from '../data/sqlite-store.js';
 import { isModelCapacityError } from '../model-capacity-error.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { NewsClient } from '../news/client.js';
@@ -37,6 +39,7 @@ import {
   SourceTracker,
   type SourceObserver,
 } from '../sources.js';
+import { SebUsageTelemetry } from '../usage/telemetry.js';
 import {
   CONNECTOR_NAMES,
   readConnectorConfig,
@@ -216,22 +219,41 @@ function createAgentReply(environment: Environment): ConnectorReply {
       : {}),
   });
   const clients = { sleeperClient, nflverseClient, newsClient, weatherClient };
-  const primaryAgent = createFantasyFootballAgent({
-    apiKey,
-    model: primaryModel,
-    ...clients,
-  });
-  const fallbackAgent =
-    fallbackModel === primaryModel
+  const database = getSharedSebDatabase();
+
+  return async (thread, message, context, requestSignal) => {
+    requestSignal.throwIfAborted();
+    const usageSessionId = randomUUID();
+    const primaryUsageTelemetry = new SebUsageTelemetry({
+      agentKind: 'research',
+      database,
+      sessionId: usageSessionId,
+      surface: 'connector',
+    });
+    const primaryAgent = createFantasyFootballAgent({
+      apiKey,
+      model: primaryModel,
+      ...clients,
+      telemetryFunctionId: 'seb.connector.research',
+      telemetryIntegrations: [primaryUsageTelemetry],
+    });
+    const fallbackUsageTelemetry = fallbackModel === primaryModel
+      ? primaryUsageTelemetry
+      : new SebUsageTelemetry({
+          agentKind: 'research',
+          database,
+          sessionId: usageSessionId,
+          surface: 'connector',
+        });
+    const fallbackAgent = fallbackModel === primaryModel
       ? primaryAgent
       : createFantasyFootballAgent({
           apiKey,
           model: fallbackModel,
           ...clients,
+          telemetryFunctionId: 'seb.connector.research',
+          telemetryIntegrations: [fallbackUsageTelemetry],
         });
-
-  return async (thread, message, context, requestSignal) => {
-    requestSignal.throwIfAborted();
     await sourceContext.run(new SourceTracker(), async () => {
       const sources = sourceContext.getStore() as SourceTracker;
       const prompt = await waitForSignal(
@@ -245,6 +267,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
           prompt,
           sources,
           requestSignal,
+          primaryUsageTelemetry,
         );
       } catch (error) {
         if (
@@ -262,6 +285,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
           prompt,
           sources,
           requestSignal,
+          fallbackUsageTelemetry,
         );
       }
     });
@@ -274,6 +298,7 @@ async function postAgentResponse(
   prompt: Awaited<ReturnType<typeof buildPrompt>>,
   directSources: SourceTracker,
   signal: AbortSignal,
+  usageTelemetry: SebUsageTelemetry,
 ): Promise<void> {
   let result: Awaited<ReturnType<typeof agent.stream>>;
   try {
@@ -287,6 +312,11 @@ async function postAgentResponse(
       directSources,
       latestRecommendationQuestion(prompt),
       signal,
+      () => usageTelemetry.abortUnfinished(
+        signal.reason ??
+          new DOMException('The connector stopped reading the response.', 'AbortError'),
+      ),
+      (error) => usageTelemetry.closeUnfinished(error),
     )),
     signal,
   );
@@ -297,13 +327,19 @@ export function withWebSources(
   directSources?: SourceTracker,
   question = '',
   abortSignal?: AbortSignal,
+  onConsumerCancel?: () => void,
+  onStreamError?: (error: unknown) => void,
 ) {
   if (questionRequestsRecommendation(question)) {
-    return guardedRecommendationStream(
-      stream,
-      directSources ?? new SourceTracker(),
-      question,
-      abortSignal,
+    return observeConsumerCancellation(
+      guardedRecommendationStream(
+        stream,
+        directSources ?? new SourceTracker(),
+        question,
+        abortSignal,
+      ),
+      onConsumerCancel,
+      onStreamError,
     );
   }
   const answerSources = directSources ?? new SourceTracker();
@@ -338,9 +374,35 @@ export function withWebSources(
     }
   })();
   const text = fromFullStream(monitored);
-  return (async function* () {
+  const response = (async function* () {
     for await (const part of text) yield part;
     yield sourceAppendix(answerSources);
+  })();
+  return observeConsumerCancellation(response, onConsumerCancel, onStreamError);
+}
+
+function observeConsumerCancellation<T>(
+  stream: AsyncIterable<T>,
+  onConsumerCancel?: () => void,
+  onStreamError?: (error: unknown) => void,
+): AsyncIterable<T> {
+  if (!onConsumerCancel && !onStreamError) return stream;
+  return (async function* () {
+    let consumerCancelled = true;
+    try {
+      for await (const part of stream) yield part;
+      consumerCancelled = false;
+    } catch (error) {
+      consumerCancelled = false;
+      try {
+        onStreamError?.(error);
+      } catch {
+        // Preserve the stream error when telemetry fails.
+      }
+      throw error;
+    } finally {
+      if (consumerCancelled) onConsumerCancel?.();
+    }
   })();
 }
 

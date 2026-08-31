@@ -61,7 +61,7 @@ describe('SebDatabase', () => {
     const database = new SebDatabase(file);
     databases.push(database);
 
-    expect(database.status().schemaVersion).toBe(4);
+    expect(database.status().schemaVersion).toBe(6);
     expect(database.putIdentity({
       canonicalId: 'nfl-team:SEA',
       entityType: 'team',
@@ -87,7 +87,7 @@ describe('SebDatabase', () => {
     const revision = database.cacheRevision('test');
     database.deleteCache('test', 'migration');
 
-    expect(database.status().schemaVersion).toBe(4);
+    expect(database.status().schemaVersion).toBe(6);
     expect(revision).toBe(0);
     expect(database.cacheRevision('test')).toBe(1);
     const external = new Database(file, { readonly: true });

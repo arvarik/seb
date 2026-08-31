@@ -16,6 +16,8 @@ The registry contains official NFL, independent, fantasy-impact, and official te
 
 Seb validates each article URL and publication date before it returns the article.
 
+Seb validates each parsed discovery record and article metadata value before it stores the value.
+
 Seb ranks relevant articles by query match, source class, and publication time.
 
 Seb limits one publisher to three results in one answer.
@@ -146,6 +148,8 @@ The default search includes articles from the last seven days.
 
 Seb removes tracking parameters and deduplicates canonical URLs and normalized titles.
 
+Query matching treats common singular and plural forms as the same search term.
+
 These methods use current public web standards. They do not bypass access controls.
 
 ### News cache periods
@@ -169,13 +173,13 @@ Run `seb cache clear` to clear all cache entries, including direct news entries.
 
 ## Live source validation
 
-The 2026-08-29 source audit tested each retained discovery URL and a dated article.
+The 2026-08-31 release audit tested each retained discovery URL and a dated article.
 
 The audit also tested the robots policy, redirect target, content type, and cache policy.
 
-All 32 official team sites passed the live source audit.
+All 44 built-in sources passed the live source audit.
 
-Every retained general source returned at least one plausible publication date.
+The result includes 12 general sources and all 32 official team sites.
 
 Run the complete live probe from the same network as Seb.
 

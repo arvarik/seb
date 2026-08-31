@@ -11,6 +11,7 @@ This documentation explains how to use, understand, extend, and operate Seb.
 | Learn the terminal interface | [Interactive guide](INTERACTIVE.md) |
 | Use scripts, pipes, or JSON | [Command-line guide](CLI.md) |
 | Find keyboard and display controls | [Terminal interface](TERMINAL_UI.md) |
+| Understand decision safeguards | [Skill guide](SKILLS.md#decision-safeguards) |
 
 New users should read the setup and experience guides first.
 
@@ -33,7 +34,7 @@ New users should read the setup and experience guides first.
 ## Build and operate
 
 - [Architecture](ARCHITECTURE.md) describes request flow, agent boundaries, source clients, and extension points.
-- [AI SDK integration](AI_SDK.md) covers direct news, Google coverage, typed output, context pruning, and local traces.
+- [AI SDK integration](AI_SDK.md) covers direct news, decision safeguards, typed output, context pruning, and local traces.
 - [Production operations](OPERATIONS.md) covers state, scaling, health checks, secrets, upgrades, and incidents.
 - [Versioning](VERSIONING.md) defines release versions, tags, checks, and guarantees.
 - [V1 design](V1.md) records the longer-term roadmap for injuries, projections, and simulations.

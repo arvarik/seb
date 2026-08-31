@@ -22,8 +22,11 @@ This design keeps current facts outside model memory.
 14. URL Context reads a web page that the user supplies.
 15. A deterministic function calculates summaries and risk signals.
 16. Gemini explains the returned facts.
-17. The transport adds validated web sources and records contextual actions.
-18. The Seb renderer draws the response, responsive tables, record cards, tool progress, badges, and supported charts.
+17. The transport records each executed tool input and result.
+18. A decision gate matches that evidence to the requested subject and selected league.
+19. The gate replaces an unsupported action before any user-facing output.
+20. The transport adds validated web sources and records contextual actions.
+21. The Seb renderer draws the response, responsive tables, record cards, tool progress, badges, and supported charts.
 
 ## Agent harness
 
@@ -65,6 +68,10 @@ Summary tools can read a complete file internally and return a small result.
 
 The identity tools return ambiguity instead of a guessed source join.
 
+Each answer path records a tool input with its result.
+
+The decision gate never relies on the model's claim about which tool ran.
+
 `seb ask --json` uses a separate agent with AI SDK `Output.object`.
 
 The first request gathers evidence and grounded source records.
@@ -72,6 +79,8 @@ The first request gathers evidence and grounded source records.
 The second tool-free request converts that evidence into the validated schema.
 
 Seb formats that object into the compatible `answer` field.
+
+The gate removes an ineligible recommendation after schema validation.
 
 ## Interactive renderer and transport
 
@@ -104,6 +113,10 @@ The transport records a tool-selected player only when the user named that playe
 The transport also binds validated direct and web sources to the answer ID.
 
 This step uses no extra Gemini request.
+
+The transport buffers a direct action answer until the decision gate finishes.
+
+An error or cancellation discards an unsupported partial action.
 
 The `/commands` search uses local command metadata.
 
@@ -195,6 +208,8 @@ The model also receives two provider tools.
 `NewsClient` uses a built-in registry of official, independent, fantasy-impact, and team sources.
 
 It validates publication dates before it returns an article.
+
+It validates parsed discovery arrays and article metadata before it stores them.
 
 It recommends Google Search when direct results contain too few articles or publishers.
 
@@ -331,8 +346,29 @@ Plain TypeScript functions calculate the following results.
 - Team offense totals.
 - Defense PPR points and targets allowed by position.
 - Weather risk and its reason list.
+- Scoring-aware player projections and eligibility.
+- Stable waiver production, demand, need, and risk scores.
+- Trade production value and roster position changes.
 
 The model explains these results. It does not calculate hidden source facts.
+
+## Decision gate
+
+The gate activates when a question requests a direct fantasy action.
+
+It checks current source state, player identity, status, news, league scoring, and projection eligibility.
+
+The identity and league checks compare the question with the executed tool inputs and results.
+
+A start-sit action needs a projection with enough games and complete supported active scoring rules.
+
+The trade service rejects duplicate players and received players from several opposing rosters.
+
+The waiver service uses fixed production references and an absolute demand scale.
+
+The gate replaces a blocked action with exact missing requirements.
+
+It reduces confidence when fresh required evidence includes a stale supplemental source.
 
 ## Local model inspection
 

@@ -119,6 +119,56 @@ describe('trade impact analysis', () => {
     expect(calls).toEqual([{ season: 2025, seasonType: 'REG', throughWeek: 18 }]);
     expect(result).toMatchObject({ analysisSeason: 2025, throughWeek: 18 });
   });
+
+  it('rejects duplicate players and packages from different opposing rosters', async () => {
+    const give = player('give', 'Give Receiver', 'WR');
+    const receive = player('receive', 'Receive Runner', 'RB');
+    const secondReceive = player('receive-two', 'Second Runner', 'RB');
+    const sleeper = {
+      getLeague: async () => league(),
+      getLeagueRosters: async () => [
+        roster(),
+        { league_id: 'league-1', players: ['receive'], roster_id: 8, settings: {} },
+        { league_id: 'league-1', players: ['receive-two'], roster_id: 9, settings: {} },
+      ],
+      getNflState: async () => ({
+        leg: 4,
+        previous_season: '2025',
+        season: '2026',
+        season_type: 'regular',
+        week: 4,
+      }),
+      getPlayers: async () => ({
+        give,
+        receive,
+        'receive-two': secondReceive,
+      }),
+    } as unknown as SleeperClient;
+    const nflverse = {
+      getPlayerWeeklyStats: async () => [
+        stat('Give Receiver', 'give', 1, { receivingYards: 100 }),
+        stat('Receive Runner', 'receive', 1, { rushingYards: 100 }),
+        stat('Second Runner', 'receive-two', 1, { rushingYards: 100 }),
+      ],
+    } as unknown as NflverseClient;
+    const execute = createTradeTools(sleeper, nflverse).analyzeTradeImpact.execute;
+    if (!execute) throw new Error('The trade tool execute function is missing.');
+    const context = { context: {}, messages: [], toolCallId: 'trade-validation-test' };
+
+    await expect(execute({
+      givePlayerNames: ['Give Receiver'],
+      leagueId: '123456789012345678',
+      receivePlayerNames: ['Receive Runner', 'Receive Runner'],
+      rosterId: 4,
+    }, context)).rejects.toThrow('receive side must appear only once');
+
+    await expect(execute({
+      givePlayerNames: ['Give Receiver'],
+      leagueId: '123456789012345678',
+      receivePlayerNames: ['Receive Runner', 'Second Runner'],
+      rosterId: 4,
+    }, context)).rejects.toThrow('same opposing roster');
+  });
 });
 
 function league(): SleeperLeague {

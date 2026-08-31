@@ -24,6 +24,16 @@ describe('recommendation eligibility', () => {
     expect(questionRequestsRecommendation('Show my waiver rules.')).toBe(false);
   });
 
+  it.each([
+    'Do I start Player A?',
+    'Is Player A worth adding?',
+    'Which player should start?',
+    'Can I drop Player A?',
+    'Player A or Player B this week?',
+  ])('detects the common decision wording: %s', (question) => {
+    expect(questionRequestsRecommendation(question)).toBe(true);
+  });
+
   it('keeps the recommendation gate for a direct comparison follow-up', () => {
     const question = recommendationContextQuestion(
       'What about Player B instead?',
@@ -66,7 +76,11 @@ describe('recommendation eligibility', () => {
           practiceParticipation: 'Full',
         }],
       },
-      { toolName: 'searchCurrentNews', output: { result: 'No reported injury.' } },
+      {
+        input: { query: 'Example Player injury' },
+        toolName: 'searchCurrentNews',
+        output: { result: 'Example Player has no reported injury.' },
+      },
       {
         toolName: 'getLeagueOverview',
         output: { league: { scoring_settings: { rec: 1 } } },
@@ -75,7 +89,7 @@ describe('recommendation eligibility', () => {
 
     const evidence = buildRecommendationEvidence({
       analysis,
-      question: 'Should I start Example Player in my league?',
+      question: 'Should I add Example Player in my league?',
       sources,
       toolResults,
     });
@@ -97,7 +111,7 @@ describe('recommendation eligibility', () => {
     const analysis = exampleAnalysis();
     const evidence = buildRecommendationEvidence({
       analysis,
-      question: 'Should I start Example Player in my league?',
+      question: 'Should I add Example Player in my league?',
       sources: [directSource(), firstClassNewsSource()],
       toolResults: [
         {
@@ -219,10 +233,15 @@ describe('recommendation eligibility', () => {
           ],
         },
         {
+          input: { name: 'Alex Smith' },
           toolName: 'resolvePlayerIdentity',
           output: { resolution: { status: 'resolved', identity: { canonicalId: 'one' } } },
         },
-        { toolName: 'searchCurrentNews', output: {} },
+        {
+          input: { query: 'Alex Smith injury' },
+          toolName: 'searchCurrentNews',
+          output: { result: 'Alex Smith is active.' },
+        },
         {
           toolName: 'getLeagueOverview',
           output: { league: { scoring_settings: { rec: 1 } } },
@@ -248,7 +267,11 @@ describe('recommendation eligibility', () => {
             scoring: { usedSettings: ['rec', 'rec_yd'], ignoredSettings: [] },
           },
         },
-        { toolName: 'searchCurrentNews', output: {} },
+        {
+          input: { query: 'Example Player injury' },
+          toolName: 'searchCurrentNews',
+          output: { result: 'Example Player is active.' },
+        },
       ],
     });
 
@@ -266,7 +289,7 @@ describe('recommendation eligibility', () => {
       'waiver',
       'rankWaiverTargets',
       {
-        methodology: { scoringKeysUsed: ['rec', 'rec_yd'] },
+        methodology: { scoringKeysIgnored: [], scoringKeysUsed: ['rec', 'rec_yd'] },
         targets: [{
           player: {
             injuryStatus: null,
@@ -275,6 +298,7 @@ describe('recommendation eligibility', () => {
           },
         }],
       },
+      'Waiver Player',
     ],
     [
       'trade',
@@ -288,11 +312,13 @@ describe('recommendation eligibility', () => {
         },
         scoring: { ignoredSettings: [], usedSettings: ['rec', 'rec_yd'] },
       },
+      'Give Player Receive Player',
     ],
   ])('uses %s analysis as identity, status, and scoring evidence', (
     _label,
     toolName,
     output,
+    newsSubject,
   ) => {
     const evidenceResult = buildRecommendationEvidence({
       analysis: exampleAnalysis(),
@@ -300,7 +326,11 @@ describe('recommendation eligibility', () => {
       sources: [directSource(), webSource()],
       toolResults: [
         { toolName, output },
-        { toolName: 'searchCurrentNews', output: {} },
+        {
+          input: { query: `${newsSubject} injury news` },
+          toolName: 'searchCurrentNews',
+          output: { result: `${newsSubject} status report` },
+        },
       ],
     });
 
@@ -331,6 +361,52 @@ describe('recommendation eligibility', () => {
     expect(stale.currentEvidence).toBe('stale');
   });
 
+  it('rejects evidence for an unrelated player and league', () => {
+    const evidenceResult = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Should I start Patrick Mahomes in league 123456?',
+      sources: [directSource(), firstClassNewsSource()],
+      toolResults: [
+        {
+          input: { query: 'Aaron Rodgers' },
+          output: [{
+            injuryStatus: null,
+            name: 'Aaron Rodgers',
+            playerId: 'rodgers',
+          }],
+          toolName: 'findPlayers',
+        },
+        {
+          input: { query: 'Aaron Rodgers injury' },
+          output: {
+            articles: [{
+              publishedAt: '2026-08-21T12:00:00.000Z',
+              stale: false,
+              title: 'Aaron Rodgers practice report',
+            }],
+          },
+          toolName: 'searchFirstClassNews',
+        },
+        {
+          input: { leagueId: '999999' },
+          output: {
+            league: { league_id: '999999', scoring_settings: { rec: 1 } },
+          },
+          toolName: 'getLeagueOverview',
+        },
+      ],
+    });
+
+    expect(evidenceResult).toMatchObject({
+      identity: 'missing',
+      injury: 'missing',
+      leagueScoring: 'missing',
+      projection: 'ineligible',
+    });
+    expect(enforceRecommendationEligibility(exampleAnalysis(), evidenceResult).eligibility.outcome)
+      .toBe('blocked');
+  });
+
   it('does not accept automatic source refreshes without research tools', () => {
     const result = buildRecommendationEvidence({
       analysis: exampleAnalysis(),
@@ -343,7 +419,7 @@ describe('recommendation eligibility', () => {
     expect(result.identity).toBe('missing');
     expect(result.injury).toBe('missing');
     expect(result.leagueScoring).toBe('missing');
-    expect(result.projection).toBe('not-required');
+    expect(result.projection).toBe('ineligible');
   });
 });
 

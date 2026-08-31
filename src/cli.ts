@@ -19,6 +19,7 @@ import {
   enforceRecommendationEligibility,
   questionRequestsRecommendation,
   type RecommendationEligibility,
+  type RecommendationToolResult,
 } from './analysis/recommendation-eligibility.js';
 import { configureAiDevTools } from './ai/devtools.js';
 import {
@@ -566,7 +567,8 @@ async function streamAnswer(
 ): Promise<void> {
   const decisionRequested = questionRequestsRecommendation(prompt);
   let bufferedText = '';
-  let decisionToolResults: Array<{ output: unknown; toolName: string }> = [];
+  let decisionToolResults: RecommendationToolResult[] = [];
+  let decisionToolInputs = new Map<string, { input: unknown; toolName: string }>();
   let wroteText = false;
   const webSources = new Map<string, { title?: string; url: string }>();
   const directSources = new SourceTracker();
@@ -574,6 +576,7 @@ async function streamAnswer(
   const run = async (model: string): Promise<void> => {
     bufferedText = '';
     decisionToolResults = [];
+    decisionToolInputs = new Map();
     directSources.clear();
     webSources.clear();
     const clients = createDataClients(
@@ -600,12 +603,14 @@ async function streamAnswer(
           streams.stdout.write(part.text);
           wroteText = true;
         }
-      } else if (
-        part.type === 'tool-call' &&
-        progressEnabled &&
-        streams.stderr.isTTY === true
-      ) {
-        streams.stderr.write(`• ${describeTool(part.toolName)}\n`);
+      } else if (part.type === 'tool-call') {
+        decisionToolInputs.set(part.toolCallId, {
+          input: part.input,
+          toolName: part.toolName,
+        });
+        if (progressEnabled && streams.stderr.isTTY === true) {
+          streams.stderr.write(`• ${describeTool(part.toolName)}\n`);
+        }
       } else if (part.type === 'source' && part.sourceType === 'url') {
         const url = normalizeWebUrl(part.url);
         if (url) {
@@ -620,10 +625,13 @@ async function streamAnswer(
           });
         }
       } else if (part.type === 'tool-result') {
+        const call = decisionToolInputs.get(part.toolCallId);
         decisionToolResults.push({
+          ...(call ? { input: call.input } : {}),
           output: part.output,
           toolName: part.toolName,
         });
+        decisionToolInputs.delete(part.toolCallId);
       } else if (part.type === 'error') {
         throw part.error;
       }

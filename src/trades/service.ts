@@ -47,6 +47,8 @@ export class TradeImpactService {
     if (!roster) throw new Error(`Roster ${request.rosterId} does not exist in this league.`);
     const givePlayers = resolvePlayers(players, request.givePlayerNames);
     const receivePlayers = resolvePlayers(players, request.receivePlayerNames);
+    assertUniquePlayers(givePlayers, 'give');
+    assertUniquePlayers(receivePlayers, 'receive');
     const ownPlayerIds = new Set(roster.players ?? []);
     const invalidGive = givePlayers.find((player) => !ownPlayerIds.has(player.player_id));
     if (invalidGive) {
@@ -60,6 +62,15 @@ export class TradeImpactService {
     const freeAgent = receivePlayers.find((player) => !rosteredIds.has(player.player_id));
     if (freeAgent) {
       throw new Error(`${playerName(freeAgent)} is not rostered in this league. Use the waiver assistant.`);
+    }
+    const receivePlayerIds = new Set(receivePlayers.map((player) => player.player_id));
+    const counterparties = rosters.filter((candidate) => {
+      if (candidate.roster_id === request.rosterId) return false;
+      const candidatePlayerIds = new Set(candidate.players ?? []);
+      return [...receivePlayerIds].every((playerId) => candidatePlayerIds.has(playerId));
+    });
+    if (counterparties.length === 0) {
+      throw new Error('Every received player must belong to the same opposing roster.');
     }
     return analyzeTradeImpact({
       analysisSeason: window.analysisSeason,
@@ -82,6 +93,16 @@ export class TradeImpactService {
       seasonType: 'REG',
       throughWeek,
     });
+  }
+}
+
+function assertUniquePlayers(
+  players: readonly SleeperPlayer[],
+  side: 'give' | 'receive',
+): void {
+  const ids = players.map((player) => player.player_id);
+  if (new Set(ids).size !== ids.length) {
+    throw new Error(`Each player on the ${side} side must appear only once.`);
   }
 }
 

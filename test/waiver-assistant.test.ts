@@ -118,6 +118,56 @@ describe('waiver and FAAB assistant', () => {
     );
   });
 
+  it('does not inflate a lone low-production candidate into a large FAAB bid', () => {
+    const selectedRoster: SleeperRoster = {
+      league_id: '123',
+      players: [],
+      roster_id: 4,
+      settings: { waiver_budget_used: 0 },
+      starters: [],
+    };
+    const result = rankWaiverTargets({
+      analysisSeason: 2026,
+      league: {
+        ...league(),
+        roster_positions: ['WR'],
+        scoring_settings: { rec_yd: 0.1 },
+      },
+      lookbackHours: 24,
+      nflverseRows: [1, 2, 3].map((week) => stat(
+        'n-low',
+        'Low Output',
+        'WR',
+        week,
+        { receivingYards: 1, rushingYards: 0 },
+      )),
+      players: {
+        'low-output': {
+          active: true,
+          full_name: 'Low Output',
+          injury_status: null,
+          player_id: 'low-output',
+          position: 'WR',
+          status: 'Active',
+          team: 'SEA',
+        },
+      },
+      resultLimit: 1,
+      rosters: [selectedRoster],
+      selectedRoster,
+      throughWeek: 3,
+      trendingAdds: [{ count: 1, player_id: 'low-output' }],
+    });
+
+    expect(result.targets[0]).toMatchObject({
+      demand: { score: 10.03 },
+      faab: { lower: 0, lowerPercent: 0, upper: 2, upperPercent: 2 },
+      production: { recentAverage: 0.1 },
+      productionScore: 0.63,
+    });
+    expect(result.targets[0]?.rankScore).toBeLessThan(35);
+  });
+
   it('exposes a read-only agent tool that derives the latest completed week', async () => {
     const calls: Array<{ season: number; throughWeek?: number }> = [];
     const sleeper = {

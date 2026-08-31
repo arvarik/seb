@@ -41,7 +41,7 @@ GOOGLE_GENERATIVE_AI_API_KEY=your-key
 Add a contact value to the NWS user agent.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.1.0 (you@example.com)
+NWS_USER_AGENT=seb/0.1.1 (you@example.com)
 ```
 
 The default value identifies the public Seb repository. A direct contact value helps the NWS contact you about request problems.

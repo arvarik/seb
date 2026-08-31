@@ -183,6 +183,42 @@ describe('NewsClient source policy', () => {
     expect(database.getCache('news', discoveryCacheKey(source))).toBeNull();
   });
 
+  it('rejects parser output that exceeds the declared article schema', async () => {
+    const source = newsSource('oversized-categories');
+    const database = createDatabase();
+    const categories = Array.from(
+      { length: 31 },
+      (_value, index) => `<category>Category ${index}</category>`,
+    ).join('');
+    const fetch = routeFetch(new Map([
+      [source.discoveryUrl, xmlResponse(`
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Quarterback practice report</title>
+              <link>/news/report</link>
+              <pubDate>2026-08-29T19:00:00Z</pubDate>
+              ${categories}
+            </item>
+          </channel>
+        </rss>
+      `)],
+    ]));
+    const client = createClient([source], fetch, { database });
+
+    const result = await client.search({
+      limit: 1,
+      query: 'quarterback practice',
+      sourceIds: [source.id],
+    });
+
+    expect(result.articles).toEqual([]);
+    expect(result.coverage.failedSources).toEqual([
+      expect.objectContaining({ id: source.id }),
+    ]);
+    expect(database.getCache('news', discoveryCacheKey(source))).toBeNull();
+  });
+
   it('rejects an unsafe redirect before it requests the target', async () => {
     const source = newsSource('unsafe-redirect');
     const calls: FetchCall[] = [];
@@ -441,6 +477,24 @@ describe('NewsClient article results', () => {
     const result = await client.search({
       limit: 1,
       query: 'Any news on Mahomes?',
+      sourceIds: [source.id],
+    });
+
+    expect(result.articles).toHaveLength(1);
+  });
+
+  it('matches a plural injury query to a singular article term', async () => {
+    const source = newsSource('injury-inflection');
+    const fetch = routeFetch(new Map([
+      [source.discoveryUrl, rssResponse([
+        article('Mahomes injury update', '/news/mahomes-injury'),
+      ])],
+    ]));
+    const client = createClient([source], fetch);
+
+    const result = await client.search({
+      limit: 1,
+      query: 'Mahomes injuries',
       sourceIds: [source.id],
     });
 

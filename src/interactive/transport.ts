@@ -827,7 +827,11 @@ export function decorateResponseStream(
         if (chunk.type === 'tool-output-available') {
           const toolCall = toolCalls.get(chunk.toolCallId);
           if (toolCall) {
-            toolResults.push({ output: chunk.output, toolName: toolCall.toolName });
+            toolResults.push({
+              input: toolCall.input,
+              output: chunk.output,
+              toolName: toolCall.toolName,
+            });
             const confirmed = resolveUserConfirmedToolContext(
               toolCall.toolName,
               toolCall.input,

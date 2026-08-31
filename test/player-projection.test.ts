@@ -105,6 +105,28 @@ describe('scoring-aware player projections', () => {
     }));
   });
 
+  it('blocks a recommendation when an active scoring rule is unsupported', () => {
+    const result = projectPlayer({
+      analysisSeason: 2025,
+      injuryStatus: 'Healthy',
+      leagueId: '123',
+      leagueName: 'Test League',
+      rows: [1, 2, 3].map((week) => stat({
+        position: 'TE',
+        receptions: 10,
+        rushingYards: 0,
+        week,
+      })),
+      scoringSettings: { bonus_rec_te: 100, rec: 1 },
+      throughWeek: 3,
+      week: 4,
+    });
+
+    expect(result.median).toBe(10);
+    expect(result.scoring.ignoredSettings).toEqual(['bonus_rec_te']);
+    expect(result.recommendationEligible).toBe(false);
+  });
+
   it('rejects mixed player identities', () => {
     expect(() => projectPlayer({
       analysisSeason: 2025,

@@ -176,7 +176,8 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/export [NAME] [md|json]` | Exports the transcript. |
 | `/doctor [offline]` | Checks configuration and services. |
 | `/devtools` | Shows local AI SDK DevTools status and commands. |
-| `/usage` | Shows session token counts. |
+| `/usage [session|today|7d|30d|all]` | Shows concise local API usage. |
+| `/stats [session|today|7d|30d|all]` | Shows detailed local usage analytics. |
 | `/next` | Shows contextual next actions. |
 | `/shell-completion SHELL` | Prints a shell completion script. |
 | `/version` | Shows the Seb and Gemini versions. |
@@ -492,7 +493,52 @@ The model does not add interface suggestions to its answer.
 
 Run `/usage` to show model requests and token totals.
 
-The command does not calculate currency cost. Gemini prices can change.
+Run `/stats` to show token classes, latency, models, tool calls, and daily trends.
+
+Both commands default to the current interactive session.
+
+```text
+/usage
+/usage today
+/stats
+/stats 30d
+```
+
+The `today` range starts at local midnight. The `7d` and `30d` ranges use rolling clock time.
+
+The `all` range removes the time filter. Each report reads the 10,000 newest matching runs at most.
+
+The reports include their start time and exclude their end time.
+
+One model call means one AI SDK model step. Provider HTTP retries remain outside local coverage.
+
+Seb keeps missing token metrics unknown. It does not convert a missing metric to zero.
+
+Seb calculates each token ratio only from model calls that report both required fields.
+
+An unfinished run can still be active. It can also come from an earlier process that stopped before the final lifecycle event.
+
+The detailed report shows input, cache-read, cache-write, text, reasoning, tool-use, and total tokens.
+
+It shows average, p50, p90, p95, and maximum latency with the sample count.
+
+It separates client tools from provider tools.
+
+Tool outcomes include returned, error, invalid, cancelled, and unresolved.
+
+A repeated call is each extra call with the same tool name in one run. Seb does not compare tool input.
+
+A returned provider result does not prove a successful domain result.
+
+The commands read only the active local SQLite database.
+
+They do not show Google account quota, credits, billing totals, or currency cost.
+
+Seb stores no prompts, answers, tool inputs, tool results, or raw errors in these analytics tables.
+
+Use `seb stats prune` or `seb stats clear` outside the interface to remove saved telemetry.
+
+Read the [command-line guide](CLI.md#inspect-local-api-usage) for retention commands and JSON output.
 
 Seb removes old tool data before a long model request.
 

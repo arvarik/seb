@@ -35,6 +35,8 @@ You can skip `npm link`. Use `npm run seb` and `npm run ask` instead.
 | `seb cache` | Inspect or clear the SQLite source cache. |
 | `seb snapshots` | List snapshots or inspect snapshot provenance. |
 | `seb replay` | Measure the nflverse PPR baseline. |
+| `seb usage` | Show concise local Gemini API usage. |
+| `seb stats` | Show detailed local model and tool analytics. |
 | `seb completion` | Print a shell completion script. |
 | `seb version` | Print the installed Seb version. |
 
@@ -291,6 +293,151 @@ seb ask --json "Compare these teams." | jq .analysis.confidence.score
 ```
 
 Read the [AI SDK guide](AI_SDK.md) for the complete analysis contract.
+
+## Inspect local API usage
+
+Show a concise report for today.
+
+```bash
+seb usage
+```
+
+Show detailed analytics for the latest seven days.
+
+```bash
+seb stats
+```
+
+Select another saved range.
+
+```bash
+seb usage 7d
+seb usage 30d --json
+seb stats today
+seb stats all --json
+```
+
+`seb usage` defaults to `today`. `seb stats` defaults to `7d`.
+
+The `today` range starts at local midnight. The `7d` and `30d` ranges use rolling clock time.
+
+The `all` range removes the time filter. Each report reads the 10,000 newest matching runs at most.
+
+Each range includes its start time and excludes its end time. Seb filters runs by their start time.
+
+The concise usage report shows these values.
+
+- Agent run outcomes.
+- Logical model calls.
+- Input, cache, output, reasoning, tool-use, and total tokens.
+- Client and provider tool-call counts.
+- Model names and cache-read share when Seb has those values.
+
+The detailed stats report adds these values.
+
+- Model calls and tool calls per run.
+- Average, p50, p90, p95, and maximum latency.
+- Time to first output and complete model-step time.
+- Model, provider, service-tier, and finish-reason groups.
+- Tool names, execution locations, outcomes, durations, and repeated calls.
+- Daily runs, model calls, tool calls, and token totals.
+- Missing, conflicting, or truncated telemetry counts.
+
+Seb uses one logical model call for each AI SDK model step.
+
+The provider can retry an HTTP request inside that step. Seb cannot see those provider HTTP retries.
+
+Token classes include non-cached input, cache-read input, cache-write input, text output, reasoning output, and provider tool use.
+
+Some providers omit a token class. Seb reports that metric as unavailable instead of zero.
+
+The AI SDK total uses the SDK normalized total. The provider total uses the provider's independent total when available.
+
+These totals can differ. Seb keeps both values and never substitutes one for the other.
+
+JSON aggregate metrics include `calls`, `reported`, and `sum`. Model groups, daily totals, and cumulative client duration use the same coverage fields.
+
+An aggregate that exceeds the safe JSON number range uses `sum: null`. The report also sets `dataQuality.overflowedAggregates` to `true`.
+
+Text reports label that value as an overflow. They do not present it as missing provider data.
+
+JSON ratios include `calls`, `reported`, and `value`. Seb calculates each value from calls that report both required token fields.
+
+An unfinished run has no terminal lifecycle event. The run can still be active, or an earlier Seb process can have stopped unexpectedly.
+
+Tool outcomes use these meanings.
+
+| Outcome | Meaning |
+| --- | --- |
+| `returned` | The client or provider returned a tool result. Seb does not verify its domain meaning. |
+| `error` | Tool execution returned an error. |
+| `invalid` | The model produced an invalid tool call. |
+| `cancelled` | The caller stopped the tool call. |
+| `unresolved` | Seb observed a tool call without a final result. |
+
+A repeated call is each extra call with the same tool name in one run. Seb does not compare tool input.
+
+Client duration covers local tool execution. Provider tools do not expose the same local duration.
+
+Cumulative tool duration is not wall time. Parallel calls can make cumulative duration larger than wall time.
+
+The cumulative duration reports coverage. It never treats an unavailable duration as zero.
+
+Use JSON for scripts.
+
+```bash
+seb usage --json
+seb stats --json
+```
+
+Both report objects use `schemaVersion: 1` and `source: "seb-local-telemetry"`.
+
+Seb keeps field names stable within schema version 1. A breaking field change requires a later schema version.
+
+The reports cover only Seb calls in the active local database.
+
+They do not show Google account quota, credits, billing totals, or currency cost.
+
+The analytics tables store identifiers, timestamps, numeric metrics, and bounded categories.
+
+They do not store prompts, answers, tool inputs, tool results, or raw errors.
+
+AI SDK DevTools uses a separate store with different privacy rules.
+
+Remove old local telemetry while you keep recent records.
+
+```bash
+seb stats prune
+seb stats prune --retain-days 30
+seb stats prune --retain-days 30 --json
+seb stats prune --retain-days 30 --include-unfinished
+```
+
+The default prune keeps 90 days. It deletes older finished runs and their child records.
+
+The default command preserves unfinished runs. An unfinished run can still belong to another Seb process.
+
+Stop every other Seb process before you use `--include-unfinished`.
+
+An active recorder can recreate its run after this command deletes the row.
+
+Remove all saved usage telemetry.
+
+```bash
+seb stats clear
+seb stats clear --json
+seb stats clear --include-unfinished
+```
+
+The default clear command preserves unfinished runs. Use `--include-unfinished` to delete the current unfinished rows too.
+
+Stop every other Seb process first. An active recorder can recreate its run after deletion.
+
+An interrupted process can leave an unfinished run. The explicit option removes these stale records.
+
+These retention commands act immediately. They do not delete source caches, snapshots, or identities.
+
+Read the [storage guide](STORAGE.md) for the SQLite schema and deletion rules.
 
 ## Run diagnostics
 

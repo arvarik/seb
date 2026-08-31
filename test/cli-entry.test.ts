@@ -1,4 +1,7 @@
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
@@ -39,11 +42,59 @@ describe('Seb executable', () => {
     expect(result.stdout).toContain('replay:Measure historical baseline accuracy');
     expect(result.stderr).toBe('');
   });
+
+  it('runs usage, stats, prune, and clear through the packaged entry point', () => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'seb-cli-usage-'));
+    try {
+      const usage = runSebIn(directory, 'usage', '--json');
+      expect(usage.status).toBe(0);
+      expect(JSON.parse(usage.stdout)).toMatchObject({
+        schemaVersion: 1,
+        source: 'seb-local-telemetry',
+      });
+
+      const stats = runSebIn(directory, 'stats', 'all', '--json');
+      expect(stats.status).toBe(0);
+      expect(JSON.parse(stats.stdout)).toMatchObject({
+        runs: { total: 0 },
+        schemaVersion: 1,
+        source: 'seb-local-telemetry',
+      });
+
+      const prune = runSebIn(
+        directory,
+        'stats',
+        'prune',
+        '--retain-days',
+        '30',
+        '--json',
+      );
+      expect(prune.status).toBe(0);
+      expect(JSON.parse(prune.stdout)).toMatchObject({
+        removed: 0,
+        retainDays: 30,
+        unfinishedPreserved: 0,
+      });
+
+      const clear = runSebIn(directory, 'stats', 'clear', '--json');
+      expect(clear.status).toBe(0);
+      expect(JSON.parse(clear.stdout)).toEqual({
+        removed: 0,
+        unfinishedPreserved: 0,
+      });
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
 });
 
 function runSeb(...arguments_: string[]) {
-  return spawnSync(process.execPath, ['bin/seb.mjs', ...arguments_], {
-    cwd: projectDirectory,
+  return runSebIn(projectDirectory, ...arguments_);
+}
+
+function runSebIn(directory: string, ...arguments_: string[]) {
+  return spawnSync(process.execPath, [resolve(projectDirectory, 'bin/seb.mjs'), ...arguments_], {
+    cwd: directory,
     encoding: 'utf8',
     input: '',
     timeout: 10_000,

@@ -6,7 +6,9 @@ import {
   DEFAULT_GEMINI_MODEL,
 } from './agent.js';
 import { fantasyAnalysisSchema } from './analysis/output.js';
+import { getSharedSebDatabase } from './data/sqlite-store.js';
 import { isModelCapacityError } from './model-capacity-error.js';
+import { SebUsageTelemetry } from './usage/telemetry.js';
 
 try {
   loadEnvFile();
@@ -19,6 +21,11 @@ const apiKey = requiredApiKey(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
 const primaryModel = process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
 const fallbackModel = process.env.GEMINI_FALLBACK_MODEL?.trim() ||
   DEFAULT_GEMINI_FALLBACK_MODEL;
+const usageTelemetry = new SebUsageTelemetry({
+  agentKind: 'formatter',
+  database: getSharedSebDatabase(),
+  surface: 'contract',
+});
 
 const evidence = {
   question: 'Summarize the supplied player evidence. Do not recommend an action.',
@@ -63,6 +70,8 @@ async function requestAnswer(requestedModel: string) {
   const agent = createFantasyFootballAnalysisAgent({
     apiKey,
     model: requestedModel,
+    telemetryFunctionId: 'seb.contract.formatter',
+    telemetryIntegrations: [usageTelemetry],
   });
   const result = await agent.generate({
     abortSignal: AbortSignal.timeout(45_000),

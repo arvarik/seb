@@ -6,6 +6,18 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `seb usage` and `/usage` now show concise local Gemini API usage.
+- `seb stats` and `/stats` now show detailed token, latency, model, and tool analytics.
+- Usage and stats JSON reports now use stable schema version 1.
+- SQLite schema 6 now stores local agent runs, logical model steps, and tool calls.
+- `seb stats prune` and `seb stats clear` now remove saved usage telemetry. They preserve unfinished runs unless users add `--include-unfinished`.
+
+### Security
+
+- Local usage telemetry now excludes prompts, answers, tool inputs, tool results, and raw errors.
+
 ## [0.1.1] - 2026-08-31
 
 ### Changed

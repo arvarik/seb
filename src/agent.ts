@@ -7,11 +7,13 @@ import {
   wrapLanguageModel,
   type LanguageModel,
   type ModelMessage,
+  type Telemetry,
 } from 'ai';
 
 import { fantasyAnalysisSchema } from './analysis/output.js';
 import { pruneFantasyMessages } from './ai/context.js';
 import { bindToolRequestSignals } from './ai/request-signal.js';
+import { activeAiDevToolsTelemetry } from './ai/devtools.js';
 import { SleeperClient } from './sleeper/client.js';
 import { createSleeperTools } from './sleeper/tools.js';
 import { NflverseClient } from './nflverse/client.js';
@@ -90,6 +92,8 @@ export interface FantasyFootballAgentOptions {
   }) => void;
   now?: () => Date;
   sleeperClient?: SleeperClient;
+  telemetryFunctionId?: string;
+  telemetryIntegrations?: readonly Telemetry[];
   weatherClient?: WeatherClient;
 }
 
@@ -125,6 +129,7 @@ export function createFantasyFootballAgent(
         : {}),
     }),
     onEnd: ({ usage }) => options.onUsage?.(usage),
+    ...agentTelemetry(options, 'seb.research'),
     tools,
     stopWhen: isStepCount(MAX_AGENT_STEPS),
   });
@@ -151,7 +156,36 @@ export function createFantasyFootballAnalysisAgent(
       instructions: analysisRuntimeInstructions(options),
     }),
     onEnd: ({ usage }) => options.onUsage?.(usage),
+    ...agentTelemetry(options, 'seb.formatter'),
   });
+}
+
+function agentTelemetry(
+  options: FantasyFootballAgentOptions,
+  defaultFunctionId: string,
+): { telemetry: {
+  functionId: string;
+  integrations: Telemetry[];
+  isEnabled: true;
+  recordInputs: boolean;
+  recordOutputs: boolean;
+} } | Record<string, never> {
+  const devTools = activeAiDevToolsTelemetry();
+  const integrations = [
+    ...devTools,
+    ...(options.telemetryIntegrations ?? []),
+  ];
+  if (integrations.length === 0) return {};
+  const recordContent = devTools.length > 0;
+  return {
+    telemetry: {
+      functionId: options.telemetryFunctionId ?? defaultFunctionId,
+      integrations,
+      isEnabled: true,
+      recordInputs: recordContent,
+      recordOutputs: recordContent,
+    },
+  };
 }
 
 function createAgentComponents(options: FantasyFootballAgentOptions) {

@@ -162,6 +162,7 @@ export {
   type DatabaseStatus,
   type StoragePruneResult,
   type SnapshotWrite,
+  type UsageDeleteResult,
 } from './data/sqlite-store.js';
 export {
   CircuitOpenError,
@@ -189,3 +190,43 @@ export {
   resolveCurrentNflWeek,
   runFirstRunSetup,
 } from './setup/wizard.js';
+export {
+  analyzeUsage,
+  formatStatsReport,
+  formatUsageReport,
+  summarizeUsage,
+  usageQuery,
+  usageWindow,
+  type DailyUsageTrend,
+  type Distribution,
+  type MetricTotal,
+  type ModelUsageBreakdown,
+  type NamedCount,
+  type RatioMetric,
+  type ToolUsageBreakdown,
+  type UsageAnalyticsReport,
+  type UsageScope,
+  type UsageSummary,
+  type UsageWindow,
+} from './usage/analytics.js';
+export {
+  SebUsageTelemetry,
+  type SebUsageTelemetryOptions,
+} from './usage/telemetry.js';
+export {
+  MAX_USAGE_DURATION_MS,
+  MAX_USAGE_TOKEN_COUNT,
+  type UsageDataset,
+  type UsageQuery,
+  type UsageRunFinalStatus,
+  type UsageRunFinishWrite,
+  type UsageRunRecord,
+  type UsageRunStatus,
+  type UsageRunWrite,
+  type UsageStepRecord,
+  type UsageStepWrite,
+  type UsageToolCallRecord,
+  type UsageToolCallWrite,
+  type UsageToolExecutionLocation,
+  type UsageToolOutcome,
+} from './usage/types.js';

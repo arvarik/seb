@@ -27,6 +27,19 @@ export type CliCommand =
       season: number;
       throughWeek: number;
     }
+  | {
+      name: 'usage';
+      json: boolean;
+      scope: 'today' | '7d' | '30d' | 'all';
+    }
+  | {
+      action: 'clear' | 'prune' | 'report';
+      includeUnfinished?: boolean;
+      json: boolean;
+      name: 'stats';
+      retainDays?: number;
+      scope: 'today' | '7d' | '30d' | 'all';
+    }
   | { name: 'chat'; model?: string }
   | {
       name: 'ask';
@@ -56,6 +69,10 @@ Usage:
   seb cache [status|clear|prune] [--max-size-mb N] [--max-age-days N] [--retain N] [--json]
   seb snapshots [--kind KIND] [--entity KEY] [--id ID] [--limit N] [--json]
   seb replay --season YEAR [--through-week N] [--position POSITIONS] [--output FILE] [--json]
+  seb usage [today|7d|30d|all] [--json]
+  seb stats [today|7d|30d|all] [--json]
+  seb stats clear [--include-unfinished] [--json]
+  seb stats prune [--retain-days N] [--include-unfinished] [--json]
 
 Commands:
   chat       Start an interactive terminal session. This is the default.
@@ -66,6 +83,8 @@ Commands:
   cache      Inspect or clear the local SQLite cache.
   snapshots  List versioned source snapshots.
   replay     Measure historical nflverse baseline accuracy without future leakage.
+  usage      Show concise, locally observed Gemini API usage.
+  stats      Show detailed token, latency, model, and tool analytics.
   help       Show this help.
   version    Show the Seb version.
 
@@ -84,6 +103,8 @@ Examples:
   printf 'Show trending adds' | seb ask
   seb ask --json "Analyze league 123456789."
   seb doctor
+  seb usage
+  seb stats 30d --json
 
 Run without npm link:
   npm run seb
@@ -134,12 +155,102 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
       return parseSnapshotArguments(rest);
     case 'replay':
       return parseReplayArguments(rest);
+    case 'usage':
+    case 'stats':
+      return parseUsageArguments(first, rest);
     default:
       if (first?.startsWith('-')) {
         throw new CliUsageError(`Unknown option: ${first}`);
       }
       return parseAskArguments(arguments_);
   }
+}
+
+function parseUsageArguments(
+  name: 'usage' | 'stats',
+  arguments_: readonly string[],
+): CliCommand {
+  if (name === 'stats' && arguments_[0] === 'clear') {
+    const rest = arguments_.slice(1);
+    if (rest.includes('--help') || rest.includes('-h')) return { name: 'help' };
+    if (rest.some((argument) =>
+      argument !== '--json' && argument !== '--include-unfinished')) {
+      throw new CliUsageError(
+        'Use seb stats clear [--include-unfinished] [--json].',
+      );
+    }
+    return {
+      action: 'clear',
+      includeUnfinished: rest.includes('--include-unfinished'),
+      json: rest.includes('--json'),
+      name,
+      scope: 'all',
+    };
+  }
+  if (name === 'stats' && arguments_[0] === 'prune') {
+    if (arguments_.includes('--help') || arguments_.includes('-h')) {
+      return { name: 'help' };
+    }
+    let includeUnfinished = false;
+    let json = false;
+    let retainDays = 90;
+    for (let index = 1; index < arguments_.length; index += 1) {
+      const argument = arguments_[index];
+      if (argument === '--json') {
+        json = true;
+        continue;
+      }
+      if (argument === '--include-unfinished') {
+        includeUnfinished = true;
+        continue;
+      }
+      if (argument === '--retain-days') {
+        retainDays = Number(readOptionValue(arguments_, index, argument));
+        index += 1;
+        if (!Number.isSafeInteger(retainDays) || retainDays < 1 || retainDays > 36_500) {
+          throw new CliUsageError('--retain-days must be an integer from 1 through 36500.');
+        }
+        continue;
+      }
+      throw new CliUsageError(
+        'Use seb stats prune [--retain-days N] [--include-unfinished] [--json].',
+      );
+    }
+    return {
+      action: 'prune',
+      includeUnfinished,
+      json,
+      name,
+      retainDays,
+      scope: 'all',
+    };
+  }
+  let json = false;
+  let scope: 'today' | '7d' | '30d' | 'all' = name === 'usage' ? 'today' : '7d';
+  let scopeWasSet = false;
+  for (const argument of arguments_) {
+    if (argument === '--help' || argument === '-h') {
+      return { name: 'help' };
+    }
+    if (argument === '--json') {
+      json = true;
+      continue;
+    }
+    if (['today', '7d', '30d', 'all'].includes(argument)) {
+      if (scopeWasSet) {
+        throw new CliUsageError(`Use only one ${name} time range.`);
+      }
+      scope = argument as typeof scope;
+      scopeWasSet = true;
+      continue;
+    }
+    throw new CliUsageError(
+      `Use seb ${name} [today|7d|30d|all] [--json].`,
+    );
+  }
+  return name === 'stats'
+    ? { action: 'report', name, json, scope }
+    : { name, json, scope };
 }
 
 function parseReplayArguments(arguments_: readonly string[]): CliCommand {

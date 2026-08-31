@@ -21,8 +21,15 @@ import {
   recommendationContextQuestion,
   type RecommendationToolResult,
 } from '../analysis/recommendation-eligibility.js';
-import { getSharedSebDatabase } from '../data/sqlite-store.js';
-import { formatDoctorReport, runDoctor } from '../doctor.js';
+import {
+  getSharedSebDatabase,
+  type SebDatabase,
+} from '../data/sqlite-store.js';
+import {
+  formatDoctorReport,
+  runDoctor,
+  type GeminiVerificationTelemetryOptions,
+} from '../doctor.js';
 import {
   formatReplaySummary,
   runNflverseBaselineReplay,
@@ -38,6 +45,15 @@ import {
   type DataSourceRecord,
 } from '../sources.js';
 import { WeatherClient } from '../weather/client.js';
+import {
+  analyzeUsage,
+  formatStatsReport,
+  formatUsageReport,
+  usageQuery,
+  usageWindow,
+  type UsageScope,
+} from '../usage/analytics.js';
+import type { SebUsageTelemetry } from '../usage/telemetry.js';
 import {
   FileSetupProfileStore,
   formatSetupProfile,
@@ -92,6 +108,11 @@ export interface SebInteractiveTransportOptions {
   version: string;
   weather: WeatherClient;
   uiState?: InteractiveUiState;
+  usageDatabase?: Pick<SebDatabase, 'readUsageDataset'>;
+  usageNow?: () => Date;
+  usageSessionId?: string;
+  usageTelemetry?: Pick<SebUsageTelemetry, 'abortUnfinished' | 'closeUnfinished'>;
+  usageTelemetryDatabase?: GeminiVerificationTelemetryOptions['database'];
 }
 
 function cloneSessionState(state: SessionState): SessionState {
@@ -100,7 +121,7 @@ function cloneSessionState(state: SessionState): SessionState {
     leagues: [...state.leagues],
     leagueOptions: [...state.leagueOptions],
     rosterOptions: [...state.rosterOptions],
-    usage: { ...state.usage },
+    usage: state.usage,
   };
 }
 
@@ -127,6 +148,14 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   async sendMessages(
     options: Parameters<ChatTransport<UIMessage>['sendMessages']>[0],
   ): Promise<ReadableStream<UIMessageChunk>> {
+    const usageTelemetry = this.options.usageTelemetry;
+    if (usageTelemetry && options.abortSignal) {
+      const abortUsage = () => {
+        usageTelemetry.abortUnfinished(options.abortSignal?.reason);
+      };
+      if (options.abortSignal.aborted) abortUsage();
+      else options.abortSignal.addEventListener('abort', abortUsage, { once: true });
+    }
     const lastMessage = options.messages.at(-1);
     const text = lastMessage?.role === 'user' ? messageText(lastMessage).trim() : '';
     const parsed = parseInteractiveCommandInput(text);
@@ -152,6 +181,8 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
             invocation.prompt,
             previousUserPrompt(options.messages),
           ),
+          (error) => usageTelemetry?.closeUnfinished(error),
+          (reason) => usageTelemetry?.abortUnfinished(reason),
         );
       }
     }
@@ -177,6 +208,8 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           parsed.argumentText,
           previousUserPrompt(options.messages),
         ),
+        (error) => usageTelemetry?.closeUnfinished(error),
+        (reason) => usageTelemetry?.abortUnfinished(reason),
       );
     }
     if (lastMessage?.role === 'user' && parsed) {
@@ -205,6 +238,8 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       this.uiState,
       text,
       recommendationContextQuestion(text, previousUserPrompt(options.messages)),
+      (error) => usageTelemetry?.closeUnfinished(error),
+      (reason) => usageTelemetry?.abortUnfinished(reason),
     );
   }
 
@@ -537,6 +572,9 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           `- Snapshot provenance: ${formatStorageBytes(status.snapshotProvenanceBytes)}`,
           `- Canonical identities: ${status.identities}`,
           `- Identity source links: ${status.identityLinks}`,
+          `- Usage runs: ${status.usageRuns}`,
+          `- Model calls: ${status.usageSteps}`,
+          `- Tool calls: ${status.usageToolCalls}`,
         ].join('\n');
       }
       case 'snapshots': {
@@ -631,21 +669,41 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         }
         const report = await runDoctor({
           environment: this.options.environment,
+          geminiTelemetry: {
+            agentKind: 'doctor',
+            database: this.options.usageTelemetryDatabase ??
+              getSharedSebDatabase(),
+            ...(this.options.usageSessionId === undefined
+              ? {}
+              : { sessionId: this.options.usageSessionId }),
+            sessionUsage: state.usage,
+            surface: 'interactive',
+          },
           offline: option !== undefined,
         });
         return `\`\`\`text\n${formatDoctorReport(report)}\n\`\`\``;
       }
       case 'usage':
       case 'cost':
-        return [
-          '## Session usage',
-          '',
-          `- Model requests: ${state.usage.requests}`,
-          `- Input tokens: ${state.usage.inputTokens.toLocaleString()}`,
-          `- Output tokens: ${state.usage.outputTokens.toLocaleString()}`,
-          `- Total tokens: ${state.usage.totalTokens.toLocaleString()}`,
-          '- Seb does not estimate currency cost because model prices can change.',
-        ].join('\n');
+      case 'stats': {
+        const scope = parseUsageScope(arguments_[0], 'session');
+        const window = usageWindow(
+          scope,
+          this.options.usageNow?.() ?? new Date(),
+          this.options.usageSessionId ?? 'untracked-session',
+        );
+        const database = this.options.usageDatabase ?? getSharedSebDatabase();
+        const report = analyzeUsage(
+          database.readUsageDataset(usageQuery(window)),
+          window,
+        );
+        const output = name === 'stats'
+          ? formatStatsReport(report)
+          : formatUsageReport(report);
+        return state.usage.storageWarning
+          ? `${output.trimEnd()}\n\nWarning: ${state.usage.storageWarning}`
+          : output.trimEnd();
+      }
       case 'next':
       case 'suggest':
       case 'suggestions':
@@ -795,6 +853,8 @@ export function decorateResponseStream(
   uiState: InteractiveUiState,
   userPrompt: string,
   recommendationQuestion = userPrompt,
+  onStreamError?: (error: unknown) => void,
+  onConsumerCancel?: (reason: unknown) => void,
 ): ReadableStream<UIMessageChunk> {
   const decisionRequested = questionRequestsRecommendation(recommendationQuestion);
   const toolCalls = new Map<string, { input: unknown; toolName: string }>();
@@ -807,9 +867,32 @@ export function decorateResponseStream(
   const requestedTeams = new Set<string>();
   let bufferedText = '';
   let answerId = `answer-${crypto.randomUUID()}`;
-  return stream.pipeThrough(
+  let consumerCancelRecorded = false;
+  let streamErrorRecorded = false;
+  const recordConsumerCancel = (reason: unknown): void => {
+    if (consumerCancelRecorded) return;
+    consumerCancelRecorded = true;
+    try {
+      onConsumerCancel?.(reason);
+    } catch {
+      // Preserve stream cancellation when telemetry fails.
+    }
+  };
+  const recordStreamError = (error: unknown): void => {
+    if (streamErrorRecorded) return;
+    streamErrorRecorded = true;
+    try {
+      onStreamError?.(error);
+    } catch {
+      // Preserve the model stream error when telemetry fails.
+    }
+  };
+  const decorated = stream.pipeThrough(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
       transform(chunk, controller) {
+        if (chunk.type === 'error') {
+          recordStreamError(new Error(chunk.errorText));
+        }
         if (chunk.type === 'start' && chunk.messageId) answerId = chunk.messageId;
         if (chunk.type === 'tool-input-available') {
           toolCalls.set(chunk.toolCallId, {
@@ -923,6 +1006,40 @@ export function decorateResponseStream(
       },
     }),
   );
+  return observeReadableStreamLifecycle(
+    decorated,
+    recordStreamError,
+    recordConsumerCancel,
+  );
+}
+
+function observeReadableStreamLifecycle<T>(
+  stream: ReadableStream<T>,
+  onStreamError: (error: unknown) => void,
+  onConsumerCancel: (reason: unknown) => void,
+): ReadableStream<T> {
+  const reader = stream.getReader();
+  return new ReadableStream<T>({
+    async cancel(reason) {
+      onConsumerCancel(reason);
+      try {
+        await reader.cancel(reason);
+      } catch (error) {
+        onStreamError(error);
+        throw error;
+      }
+    },
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) controller.close();
+        else controller.enqueue(result.value);
+      } catch (error) {
+        onStreamError(error);
+        controller.error(error);
+      }
+    },
+  });
 }
 
 function addStreamSubject(
@@ -1131,6 +1248,22 @@ function markdownTranscript(messages: readonly UIMessage[]): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function parseUsageScope(
+  value: string | undefined,
+  defaultScope: UsageScope,
+): UsageScope {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return defaultScope;
+  if (
+    normalized === 'session' ||
+    normalized === 'today' ||
+    normalized === '7d' ||
+    normalized === '30d' ||
+    normalized === 'all'
+  ) return normalized;
+  throw new Error('Use session, today, 7d, 30d, or all.');
 }
 
 function isCompletionShell(value: string | undefined): value is CompletionShell {

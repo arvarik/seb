@@ -1,6 +1,6 @@
 # Storage, cache, and snapshot guide
 
-Seb uses one local SQLite database for source caches and historical snapshots.
+Seb uses one local SQLite database for source caches, historical snapshots, identities, and usage telemetry.
 
 The default file is `.cache/seb.sqlite` under the current working directory.
 
@@ -14,7 +14,7 @@ seb cache status
 
 The command also shows the schema version, byte sizes, and record counts.
 
-The counts cover caches, snapshots, canonical identities, and source links.
+The counts cover caches, snapshots, canonical identities, source links, usage runs, model steps, and tool calls.
 
 Text output names `Canonical identities` and `Identity source links`.
 
@@ -44,9 +44,19 @@ Seb uses these SQLite settings.
 
 Seb applies numbered schema migrations when it opens the database.
 
-Version `0.0.10` uses database schema `3`.
+The current development version uses database schema `6`.
 
-Schema `3` adds a checksum for each provenance manifest.
+Schema `6` rebuilds the usage tables as strict tables. It validates every saved row and preserves valid schema `5` telemetry.
+
+Seb rejects external links to usage tables and unexpected usage indexes when it opens schema `6`.
+
+Seb also rejects every database trigger because a cross-table trigger can change telemetry.
+
+Schema `5` adds local usage runs, model steps, and tool calls.
+
+Schema `4` added durable cache namespace generations.
+
+Schema `3` added a checksum for each provenance manifest.
 
 Schema `2` added canonical identities and provider source links.
 
@@ -58,7 +68,7 @@ Upgrade Seb before you open a database from a newer release.
 
 ## Database tables
 
-The database contains four primary tables.
+The database contains eight application tables.
 
 | Table | Purpose |
 | --- | --- |
@@ -66,6 +76,10 @@ The database contains four primary tables.
 | `snapshots` | Stores historical source payloads and provenance. |
 | `identities` | Stores canonical player and team records. |
 | `identity_links` | Maps provider source IDs to canonical IDs. |
+| `cache_generations` | Tracks durable cache namespace revisions. |
+| `usage_runs` | Stores one local agent run and its final state. |
+| `usage_steps` | Stores one logical AI SDK model step. |
+| `usage_tool_calls` | Stores one client or provider tool call. |
 
 The identity link table uses a foreign key to its canonical identity.
 
@@ -74,6 +88,54 @@ Deleting a canonical identity also deletes its source links.
 Each identity payload has a SHA-256 checksum and update time.
 
 Read the [identity guide](IDENTITIES.md) for stable canonical ID rules.
+
+## Usage telemetry
+
+Schema `6` stores local analytics in three strict, linked tables.
+
+`usage_runs` stores the run identifier, session identifier, surface, agent kind, timestamps, status, finish reason, and bounded error category.
+
+Terminal status can move from completed to failed or aborted.
+
+It can also move from failed to aborted.
+
+The database rejects a move in the opposite direction.
+
+This rule preserves late AI SDK validation and cancellation callbacks.
+
+The first terminal timestamp does not change during a status correction.
+
+`usage_steps` stores the provider, model, finish state, token classes, latency, service tier, and grounding counts.
+
+`usage_tool_calls` stores the tool identifier, tool name, execution location, outcome, duration, and dynamic flag.
+
+One model step can own many tool-call records.
+
+Foreign keys link model steps to runs and tool calls to model steps.
+
+Deleting a run also deletes its model steps and tool calls.
+
+Seb accepts at most 10,000,000,000 tokens in one stored metric.
+
+Seb accepts at most 365 days for one stored duration.
+
+Seb rejects larger, negative, or nonfinite values before each write.
+
+Usage timestamps use canonical ISO 8601 UTC text. Seb rejects impossible calendar dates.
+
+The database keeps an unavailable provider metric as `NULL`.
+
+This rule preserves the difference between unknown usage and reported zero usage.
+
+One model step represents one logical AI SDK call.
+
+Provider HTTP retries can occur inside that call. Seb cannot count those retries from local events.
+
+The tables store identifiers, timestamps, numeric metrics, and bounded categories.
+
+They do not store prompts, answers, tool inputs, tool results, or raw errors.
+
+AI SDK DevTools stores complete content separately under `.devtools/` when a developer enables it.
 
 ## Cache records
 
@@ -279,6 +341,54 @@ When a shared database closes, Seb removes it from the shared registry.
 
 A later open creates a working database connection for the same file.
 
+### Usage retention
+
+Keep the latest 90 days and remove older usage runs.
+
+```bash
+seb stats prune
+```
+
+Select another retention period.
+
+```bash
+seb stats prune --retain-days 30
+seb stats prune --retain-days 30 --json
+seb stats prune --retain-days 30 --include-unfinished
+```
+
+The prune command deletes finished runs that started before the exclusive cutoff.
+
+SQLite also deletes each matching model-step and tool-call record.
+
+The default prune preserves unfinished runs. Another Seb process can still write to these rows.
+
+Stop every other Seb process before you use `--include-unfinished`.
+
+An active recorder can recreate its run after this command deletes the row.
+
+Remove all saved usage telemetry.
+
+```bash
+seb stats clear
+seb stats clear --json
+seb stats clear --include-unfinished
+```
+
+The default clear command preserves unfinished runs. It deletes all other usage runs and their child records.
+
+Use `--include-unfinished` to delete every usage run that exists during the command.
+
+Stop every other Seb process first. An active recorder can recreate its run after deletion.
+
+This option also removes stale rows from interrupted processes.
+
+These commands act immediately. Back up the database first when you need the records.
+
+The commands preserve source caches, snapshots, canonical identities, and source links.
+
+`seb cache prune` does not delete usage telemetry.
+
 ## Migration from version 0.0.1
 
 Version `0.0.1` stored the Sleeper player catalog in `.cache/sleeper/players-nfl.json`.
@@ -322,6 +432,8 @@ The old JSON files do not affect version `0.0.10` reads.
 Do not delete `.cache/seb.sqlite` when you need the stored snapshots.
 
 Deleting the database also deletes persistent identity mappings.
+
+It also deletes all local usage telemetry.
 
 ## Recovery
 

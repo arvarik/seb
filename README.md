@@ -122,6 +122,19 @@ Return a validated JSON object.
 seb ask --json "Should I start Player A?"
 ```
 
+Inspect locally recorded model activity.
+
+```bash
+seb usage
+seb stats
+```
+
+`seb usage` defaults to today. `seb stats` defaults to the latest seven days.
+
+Run `/usage` or `/stats` inside the interactive interface for the current session.
+
+These reports read local Seb telemetry. They do not query Google billing or calculate currency cost.
+
 Seb also supports Slack, Discord, and Telegram through read-only connectors.
 
 Read the [command-line guide](docs/CLI.md) and [connector guide](docs/CONNECTORS.md) for setup details.

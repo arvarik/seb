@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { loadEnvFile } from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -44,7 +45,6 @@ import {
   createSessionState,
   formatSessionData,
   formatSessionInstructions,
-  recordUsage,
 } from './interactive/session.js';
 import { isModelCapacityError } from './model-capacity-error.js';
 import { NflverseClient } from './nflverse/client.js';
@@ -67,6 +67,18 @@ import {
   refreshAutomaticSession,
   runFirstRunSetup,
 } from './setup/wizard.js';
+import {
+  analyzeUsage,
+  formatStatsReport,
+  formatUsageReport,
+  summarizeUsage,
+  usageQuery,
+  usageWindow,
+} from './usage/analytics.js';
+import {
+  observeUsageStreamErrors,
+  SebUsageTelemetry,
+} from './usage/telemetry.js';
 
 const MAX_STDIN_BYTES = 128 * 1024;
 interface CliInput extends AsyncIterable<string | Buffer | Uint8Array> {
@@ -216,6 +228,54 @@ export async function runCli(
       );
       return report.ok ? 0 : 1;
     }
+    case 'usage':
+    case 'stats': {
+      const database = getSharedSebDatabase();
+      if (command.name === 'stats' && command.action === 'clear') {
+        const output = database.clearUsage(command.includeUnfinished);
+        streams.stdout.write(command.json
+          ? `${JSON.stringify(output)}\n`
+          : formatUsageDeletion(
+            `Seb removed ${output.removed} saved usage runs and their child records.`,
+            output.unfinishedPreserved,
+          ));
+        return 0;
+      }
+      if (command.name === 'stats' && command.action === 'prune') {
+        const retainDays = command.retainDays ?? 90;
+        const beforeExclusive = new Date(
+          Date.now() - retainDays * 24 * 60 * 60 * 1_000,
+        ).toISOString();
+        const result = database.pruneUsage(
+          beforeExclusive,
+          command.includeUnfinished,
+        );
+        const output = { beforeExclusive, ...result, retainDays };
+        streams.stdout.write(command.json
+          ? `${JSON.stringify(output)}\n`
+          : formatUsageDeletion(
+            `Seb removed ${output.removed} usage runs older than ${beforeExclusive}.`,
+            output.unfinishedPreserved,
+          ));
+        return 0;
+      }
+      const window = usageWindow(command.scope);
+      const report = analyzeUsage(
+        database.readUsageDataset(usageQuery(window)),
+        window,
+      );
+      if (command.json) {
+        const output = command.name === 'usage' ? summarizeUsage(report) : report;
+        streams.stdout.write(`${JSON.stringify(output)}\n`);
+      } else {
+        streams.stdout.write(
+          command.name === 'usage'
+            ? formatUsageReport(report)
+            : formatStatsReport(report),
+        );
+      }
+      return 0;
+    }
     case 'chat':
       await startInteractiveChat(command, streams, environment);
       return 0;
@@ -223,6 +283,11 @@ export async function runCli(
       await answerOneQuestion(command, streams, environment);
       return 0;
   }
+}
+
+function formatUsageDeletion(message: string, unfinishedPreserved: number): string {
+  if (unfinishedPreserved === 0) return `${message}\n`;
+  return `${message}\nSeb preserved ${unfinishedPreserved} unfinished usage runs. Use --include-unfinished to remove them.\n`;
 }
 
 function formatSnapshotProvenance(snapshot: {
@@ -271,7 +336,9 @@ async function startInteractiveChat(
   const profileStore = new FileSetupProfileStore({ environment });
   let profile = await profileStore.load();
   if (!profile) {
-    profile = await runSetupWizard(environment, profileStore);
+    profile = await runSetupWizard(environment, profileStore, {
+      surface: 'interactive',
+    });
   }
   const session = createSessionState();
   applySetupProfile(profile, session);
@@ -283,13 +350,21 @@ async function startInteractiveChat(
       ? `Seb could not refresh @${session.user}: ${errorMessage(error)}`
       : `Seb could not refresh the current NFL state: ${errorMessage(error)}`;
   }
+  const database = getSharedSebDatabase();
+  const telemetry = new SebUsageTelemetry({
+    agentKind: 'research',
+    database,
+    sessionUsage: session.usage,
+    surface: 'interactive',
+  });
   const agent = createFantasyFootballAgent({
     apiKey: selection.apiKey,
     model: selection.primaryModel,
     ...clients,
     getRuntimeContext: () => formatSessionData(session),
     getRuntimeInstructions: () => formatSessionInstructions(session),
-    onUsage: (usage) => recordUsage(session, usage),
+    telemetryFunctionId: 'seb.interactive.research',
+    telemetryIntegrations: [telemetry],
   });
   await runSebInteractiveTui({
     transport: new SebInteractiveTransport({
@@ -304,6 +379,10 @@ async function startInteractiveChat(
       weather: clients.weatherClient,
       profileStore,
       uiState,
+      usageDatabase: database,
+      usageSessionId: telemetry.sessionId,
+      usageTelemetry: telemetry,
+      usageTelemetryDatabase: database,
     }),
     environment,
     model: selection.primaryModel,
@@ -323,14 +402,20 @@ async function runSetupCommand(
   username?: string,
 ): Promise<void> {
   const store = new FileSetupProfileStore({ environment });
-  const profile = await runSetupWizard(environment, store, username);
+  const profile = await runSetupWizard(environment, store, {
+    surface: 'cli',
+    ...(username ? { username } : {}),
+  });
   streams.stdout.write(`Seb saved the account preference.\n\n${formatSetupProfile(profile, store.path)}\n`);
 }
 
 async function runSetupWizard(
   environment: NodeJS.ProcessEnv,
   store: FileSetupProfileStore,
-  username?: string,
+  options: {
+    surface: 'cli' | 'interactive';
+    username?: string;
+  },
 ) {
   const primaryModel = environment.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
   const fallbackModel = environment.GEMINI_FALLBACK_MODEL?.trim() ||
@@ -338,9 +423,18 @@ async function runSetupWizard(
   return runFirstRunSetup({
     environment,
     store,
-    ...(username ? { username } : {}),
+    ...(options.username ? { username: options.username } : {}),
     verifyApiKey: async (apiKey) => {
-      await verifyGeminiApi(apiKey, primaryModel, fallbackModel);
+      await verifyGeminiApi(
+        apiKey,
+        primaryModel,
+        fallbackModel,
+        AbortSignal.timeout(30_000),
+        {
+          agentKind: 'setup',
+          surface: options.surface,
+        },
+      );
     },
   });
 }
@@ -356,6 +450,9 @@ function formatCacheStatus(status: {
   snapshotPayloadBytes: number;
   snapshotProvenanceBytes: number;
   snapshots: number;
+  usageRuns: number;
+  usageSteps: number;
+  usageToolCalls: number;
 }): string {
   return [
     `Database: ${status.file}`,
@@ -368,6 +465,9 @@ function formatCacheStatus(status: {
     `Snapshot provenance: ${formatBytes(status.snapshotProvenanceBytes)}`,
     `Canonical identities: ${status.identities}`,
     `Identity source links: ${status.identityLinks}`,
+    `Usage runs: ${status.usageRuns}`,
+    `Model calls: ${status.usageSteps}`,
+    `Tool calls: ${status.usageToolCalls}`,
     '',
   ].join('\n');
 }
@@ -428,6 +528,7 @@ async function generateAnswer(
   stderr: CliOutput,
   environment: NodeJS.ProcessEnv,
 ): Promise<AnswerResult> {
+  const usageSessionId = randomUUID();
   try {
     return await generateWithModel(
       selection,
@@ -435,6 +536,7 @@ async function generateAnswer(
       prompt,
       false,
       environment,
+      usageSessionId,
     );
   } catch (error) {
     if (
@@ -450,6 +552,7 @@ async function generateAnswer(
       prompt,
       true,
       environment,
+      usageSessionId,
     );
   }
 }
@@ -460,6 +563,7 @@ async function generateWithModel(
   prompt: string,
   fallbackUsed: boolean,
   environment: NodeJS.ProcessEnv,
+  usageSessionId = randomUUID(),
 ): Promise<AnswerResult> {
   const sources = new SourceTracker();
   const clients = createDataClients(selection.nwsUserAgent, sources);
@@ -474,6 +578,13 @@ async function generateWithModel(
     ...clients,
     getRuntimeContext: () => automaticContext.data,
     getRuntimeInstructions: () => automaticContext.instructions,
+    telemetryFunctionId: 'seb.cli.research',
+    telemetryIntegrations: [new SebUsageTelemetry({
+      agentKind: 'research',
+      database: getSharedSebDatabase(),
+      sessionId: usageSessionId,
+      surface: 'cli',
+    })],
   });
   const research = await researchAgent.generate({ prompt });
   for (const source of research.sources) {
@@ -482,6 +593,13 @@ async function generateWithModel(
   const analysisAgent = createFantasyFootballAnalysisAgent({
     apiKey: selection.apiKey,
     model,
+    telemetryFunctionId: 'seb.cli.formatter',
+    telemetryIntegrations: [new SebUsageTelemetry({
+      agentKind: 'formatter',
+      database: getSharedSebDatabase(),
+      sessionId: usageSessionId,
+      surface: 'cli',
+    })],
   });
   const result = await analysisAgent.generate({
     prompt: buildAnalysisPrompt(prompt, research.text, sources.list()),
@@ -572,6 +690,13 @@ async function streamAnswer(
   let wroteText = false;
   const webSources = new Map<string, { title?: string; url: string }>();
   const directSources = new SourceTracker();
+  const usageSessionId = randomUUID();
+  const usageTelemetry = new SebUsageTelemetry({
+    agentKind: 'research',
+    database: getSharedSebDatabase(),
+    sessionId: usageSessionId,
+    surface: 'cli',
+  });
 
   const run = async (model: string): Promise<void> => {
     bufferedText = '';
@@ -593,48 +718,51 @@ async function streamAnswer(
       ...clients,
       getRuntimeContext: () => automaticContext.data,
       getRuntimeInstructions: () => automaticContext.instructions,
+      telemetryFunctionId: 'seb.cli.research',
+      telemetryIntegrations: [usageTelemetry],
     });
     const result = await agent.stream({ prompt });
 
-    for await (const part of result.fullStream) {
-      if (part.type === 'text-delta') {
-        if (decisionRequested) bufferedText += part.text;
-        else {
-          streams.stdout.write(part.text);
-          wroteText = true;
-        }
-      } else if (part.type === 'tool-call') {
-        decisionToolInputs.set(part.toolCallId, {
-          input: part.input,
-          toolName: part.toolName,
-        });
-        if (progressEnabled && streams.stderr.isTTY === true) {
-          streams.stderr.write(`• ${describeTool(part.toolName)}\n`);
-        }
-      } else if (part.type === 'source' && part.sourceType === 'url') {
-        const url = normalizeWebUrl(part.url);
-        if (url) {
-          directSources.recordUrlSource({
-            id: part.id,
-            ...(part.title ? { title: part.title } : {}),
-            url,
+    for await (const part of observeUsageStreamErrors(result.fullStream, usageTelemetry)) {
+        if (part.type === 'text-delta') {
+          if (decisionRequested) bufferedText += part.text;
+          else {
+            streams.stdout.write(part.text);
+            wroteText = true;
+          }
+        } else if (part.type === 'tool-call') {
+          decisionToolInputs.set(part.toolCallId, {
+            input: part.input,
+            toolName: part.toolName,
           });
-          webSources.set(url, {
-            title: normalizeSourceLabel(part.title, new URL(url).hostname),
-            url,
+          if (progressEnabled && streams.stderr.isTTY === true) {
+            streams.stderr.write(`• ${describeTool(part.toolName)}\n`);
+          }
+        } else if (part.type === 'source' && part.sourceType === 'url') {
+          const url = normalizeWebUrl(part.url);
+          if (url) {
+            directSources.recordUrlSource({
+              id: part.id,
+              ...(part.title ? { title: part.title } : {}),
+              url,
+            });
+            webSources.set(url, {
+              title: normalizeSourceLabel(part.title, new URL(url).hostname),
+              url,
+            });
+          }
+        } else if (part.type === 'tool-result') {
+          const call = decisionToolInputs.get(part.toolCallId);
+          decisionToolResults.push({
+            ...(call ? { input: call.input } : {}),
+            output: part.output,
+            toolName: part.toolName,
           });
+          decisionToolInputs.delete(part.toolCallId);
+        } else if (part.type === 'error') {
+          usageTelemetry.closeUnfinished(part.error);
+          throw part.error;
         }
-      } else if (part.type === 'tool-result') {
-        const call = decisionToolInputs.get(part.toolCallId);
-        decisionToolResults.push({
-          ...(call ? { input: call.input } : {}),
-          output: part.output,
-          toolName: part.toolName,
-        });
-        decisionToolInputs.delete(part.toolCallId);
-      } else if (part.type === 'error') {
-        throw part.error;
-      }
     }
   };
 

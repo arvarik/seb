@@ -1,5 +1,5 @@
 import { createGoogle } from '@ai-sdk/google';
-import { generateText } from 'ai';
+import { generateText, type TelemetryOptions } from 'ai';
 import { existsSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
@@ -11,12 +11,17 @@ import {
   currentRequestSignal,
   throwIfRequestAborted,
 } from './ai/request-signal.js';
+import { activeAiDevToolsTelemetry } from './ai/devtools.js';
 import { isModelCapacityError } from './model-capacity-error.js';
 import { getSharedSebDatabase } from './data/sqlite-store.js';
 import { NflverseClient } from './nflverse/client.js';
 import { SleeperClient } from './sleeper/client.js';
 import { WeatherClient } from './weather/client.js';
 import { normalizeWebUrl } from './sources.js';
+import {
+  SebUsageTelemetry,
+  type SebUsageTelemetryOptions,
+} from './usage/telemetry.js';
 
 export type DoctorStatus = 'pass' | 'fail' | 'skip';
 
@@ -31,8 +36,17 @@ export interface DoctorReport {
   ok: boolean;
 }
 
+export interface GeminiVerificationTelemetryOptions {
+  agentKind: 'doctor' | 'setup';
+  database?: SebUsageTelemetryOptions['database'];
+  sessionId?: string;
+  sessionUsage?: SebUsageTelemetryOptions['sessionUsage'];
+  surface: 'cli' | 'interactive';
+}
+
 export interface DoctorOptions {
   environment?: NodeJS.ProcessEnv;
+  geminiTelemetry?: GeminiVerificationTelemetryOptions;
   nodeVersion?: string;
   offline: boolean;
   verifyGemini?: (
@@ -121,13 +135,23 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     const verifyNflverse = options.verifyNflverse ?? verifyNflverseData;
     const verifyWeather =
       options.verifyWeather ?? (() => verifyWeatherApi(environment));
+    const verifyGemini = options.verifyGemini ?? (
+      (key, primary, fallback, signal) =>
+        verifyGeminiApi(
+          key,
+          primary,
+          fallback,
+          signal,
+          options.geminiTelemetry,
+        )
+    );
     const geminiSignal = requestSignalWithTimeout(currentRequestSignal(), 30_000);
     const geminiCheck = apiKey
       ? checkGemini(
           apiKey,
           primaryModel,
           fallbackModel,
-          options.verifyGemini ?? verifyGeminiApi,
+          verifyGemini,
           geminiSignal,
         )
       : Promise.resolve<DoctorCheck>({
@@ -366,15 +390,39 @@ export async function verifyGeminiApi(
   primaryModel: string,
   fallbackModel: string,
   signal = AbortSignal.timeout(30_000),
+  telemetryOptions: GeminiVerificationTelemetryOptions = {
+    agentKind: 'doctor',
+    surface: 'cli',
+  },
 ): Promise<{ fallbackUsed: boolean; model: string }> {
+  const usageTelemetry = new SebUsageTelemetry({
+    agentKind: telemetryOptions.agentKind,
+    database: telemetryOptions.database ?? getSharedSebDatabase(),
+    ...(telemetryOptions.sessionId === undefined
+      ? {}
+      : { sessionId: telemetryOptions.sessionId }),
+    ...(telemetryOptions.sessionUsage === undefined
+      ? {}
+      : { sessionUsage: telemetryOptions.sessionUsage }),
+    surface: telemetryOptions.surface,
+  });
+  const devToolsTelemetry = activeAiDevToolsTelemetry();
+  const recordContent = devToolsTelemetry.length > 0;
+  const telemetry = {
+    functionId: `seb.${telemetryOptions.surface}.${telemetryOptions.agentKind}`,
+    integrations: [...devToolsTelemetry, usageTelemetry],
+    isEnabled: true,
+    recordInputs: recordContent,
+    recordOutputs: recordContent,
+  } satisfies TelemetryOptions;
   try {
-    await sendGeminiTest(apiKey, primaryModel, signal);
+    await sendGeminiTest(apiKey, primaryModel, signal, telemetry);
     return { fallbackUsed: false, model: primaryModel };
   } catch (error) {
     if (!isModelCapacityError(error) || fallbackModel === primaryModel) {
       throw error;
     }
-    await sendGeminiTest(apiKey, fallbackModel, signal);
+    await sendGeminiTest(apiKey, fallbackModel, signal, telemetry);
     return { fallbackUsed: true, model: fallbackModel };
   }
 }
@@ -383,6 +431,7 @@ async function sendGeminiTest(
   apiKey: string,
   model: string,
   signal: AbortSignal,
+  telemetry: TelemetryOptions,
 ): Promise<void> {
   const google = createGoogle({ apiKey });
   const result = await generateText({
@@ -399,6 +448,7 @@ async function sendGeminiTest(
     ].join(' '),
     maxOutputTokens: 256,
     abortSignal: signal,
+    telemetry,
   });
   const hasValidWebSource = result.sources.some(
     (source) =>

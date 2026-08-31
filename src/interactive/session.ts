@@ -22,10 +22,33 @@ export interface SessionLeagueContext {
 }
 
 export interface SessionUsage {
+  abortedRuns: number;
+  agentRuns: number;
+  cacheReadInputTokens: number;
+  cacheReadInputTokensReported: number;
+  cacheWriteInputTokens: number;
+  cacheWriteInputTokensReported: number;
+  completedRuns: number;
+  failedRuns: number;
   inputTokens: number;
+  inputTokensReported: number;
+  modelCalls: number;
+  noCacheInputTokens: number;
+  noCacheInputTokensReported: number;
   outputTokens: number;
-  requests: number;
+  outputTokensReported: number;
+  reasoningTokens: number;
+  reasoningTokensReported: number;
+  startedAt: string;
+  storageWarning: string | null;
+  textTokens: number;
+  textTokensReported: number;
+  toolCalls: number;
+  toolFailures: number;
+  toolUseTokens: number;
+  toolUseTokensReported: number;
   totalTokens: number;
+  totalTokensReported: number;
 }
 
 export type DecisionContextResolution = 'ambiguous' | 'resolved' | 'unset';
@@ -83,25 +106,93 @@ export function createSessionState(now = new Date()): SessionState {
     seasonType: null,
     skillId: 'general',
     team: null,
-    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, requests: 0 },
+    usage: createSessionUsage(now),
     user: null,
     userId: null,
     week: null,
   };
 }
 
-export function recordUsage(
-  state: SessionState,
-  usage: {
-    inputTokens: number | undefined;
-    outputTokens: number | undefined;
-    totalTokens: number | undefined;
+export function createSessionUsage(now = new Date()): SessionUsage {
+  return {
+    abortedRuns: 0,
+    agentRuns: 0,
+    cacheReadInputTokens: 0,
+    cacheReadInputTokensReported: 0,
+    cacheWriteInputTokens: 0,
+    cacheWriteInputTokensReported: 0,
+    completedRuns: 0,
+    failedRuns: 0,
+    inputTokens: 0,
+    inputTokensReported: 0,
+    modelCalls: 0,
+    noCacheInputTokens: 0,
+    noCacheInputTokensReported: 0,
+    outputTokens: 0,
+    outputTokensReported: 0,
+    reasoningTokens: 0,
+    reasoningTokensReported: 0,
+    startedAt: now.toISOString(),
+    storageWarning: null,
+    textTokens: 0,
+    textTokensReported: 0,
+    toolCalls: 0,
+    toolFailures: 0,
+    toolUseTokens: 0,
+    toolUseTokensReported: 0,
+    totalTokens: 0,
+    totalTokensReported: 0,
+  };
+}
+
+export function recordSessionModelUsage(
+  usage: SessionUsage,
+  values: {
+    cacheReadInputTokens: number | null;
+    cacheWriteInputTokens: number | null;
+    inputTokens: number | null;
+    noCacheInputTokens: number | null;
+    outputTokens: number | null;
+    reasoningTokens: number | null;
+    textTokens: number | null;
+    toolUseTokens: number | null;
+    totalTokens: number | null;
   },
 ): void {
-  state.usage.inputTokens += usage.inputTokens ?? 0;
-  state.usage.outputTokens += usage.outputTokens ?? 0;
-  state.usage.totalTokens += usage.totalTokens ?? 0;
-  state.usage.requests += 1;
+  addReportedValue(usage, 'inputTokens', 'inputTokensReported', values.inputTokens);
+  addReportedValue(
+    usage,
+    'noCacheInputTokens',
+    'noCacheInputTokensReported',
+    values.noCacheInputTokens,
+  );
+  addReportedValue(
+    usage,
+    'cacheReadInputTokens',
+    'cacheReadInputTokensReported',
+    values.cacheReadInputTokens,
+  );
+  addReportedValue(
+    usage,
+    'cacheWriteInputTokens',
+    'cacheWriteInputTokensReported',
+    values.cacheWriteInputTokens,
+  );
+  addReportedValue(usage, 'outputTokens', 'outputTokensReported', values.outputTokens);
+  addReportedValue(usage, 'textTokens', 'textTokensReported', values.textTokens);
+  addReportedValue(
+    usage,
+    'reasoningTokens',
+    'reasoningTokensReported',
+    values.reasoningTokens,
+  );
+  addReportedValue(
+    usage,
+    'toolUseTokens',
+    'toolUseTokensReported',
+    values.toolUseTokens,
+  );
+  addReportedValue(usage, 'totalTokens', 'totalTokensReported', values.totalTokens);
 }
 
 export function formatSessionContext(state: SessionState): string {
@@ -195,9 +286,41 @@ export function formatSessionStatus(state: SessionState): string {
     ...(state.skillId !== 'general'
       ? [`- Advanced workflow: ${getSkill(state.skillId).title}`]
       : []),
-    `- Model requests: ${state.usage.requests}`,
-    `- Tokens: ${state.usage.totalTokens.toLocaleString()}`,
+    `- Agent turns: ${state.usage.agentRuns}`,
+    `- Observed model calls: ${state.usage.modelCalls}`,
+    `- Tokens: ${formatSessionMetric(
+      state.usage.totalTokens,
+      state.usage.totalTokensReported,
+      state.usage.modelCalls,
+    )}`,
   ].join('\n');
+}
+
+type SessionUsageNumberKey = {
+  [KEY in keyof SessionUsage]: SessionUsage[KEY] extends number ? KEY : never;
+}[keyof SessionUsage];
+
+function addReportedValue(
+  usage: SessionUsage,
+  valueKey: SessionUsageNumberKey,
+  reportedKey: SessionUsageNumberKey,
+  value: number | null,
+): void {
+  if (value === null) return;
+  if (!Number.isSafeInteger(value) || value < 0) return;
+  usage[valueKey] += value;
+  usage[reportedKey] += 1;
+}
+
+function formatSessionMetric(
+  value: number,
+  reported: number,
+  calls: number,
+): string {
+  if (calls === 0) return 'none';
+  if (reported === 0) return 'not reported';
+  const coverage = reported === calls ? '' : ` from ${reported} of ${calls} calls`;
+  return `${value.toLocaleString()}${coverage}`;
 }
 
 export function resolveDecisionContext(

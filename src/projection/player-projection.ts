@@ -171,6 +171,7 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
     recommendationEligible:
       ordered.length >= 3 &&
       scoring.usedSettings.length > 0 &&
+      scoring.ignoredSettings.length === 0 &&
       latest.position !== 'K' &&
       !inactive,
     scoring,

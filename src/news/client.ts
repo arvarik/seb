@@ -532,7 +532,6 @@ export class NewsClient {
         lastModified: fetched.lastModified,
         ...(sourceTimestamp ? { sourceTimestamp } : {}),
         value: parsed,
-        valueValidated: true as const,
       };
     }, signal ? { signal } : {});
     this.recordSource(source, result);
@@ -585,7 +584,6 @@ export class NewsClient {
         lastModified: fetched.lastModified,
         sourceTimestamp: metadata.publishedAt,
         value: metadata,
-        valueValidated: true as const,
       };
     }, signal ? { signal } : {});
     return result;
@@ -1208,6 +1206,11 @@ function searchTokenMatches(
   ];
   if (queryToken.endsWith('y')) {
     variants.push(`${queryToken.slice(0, -1)}ies`);
+  }
+  if (queryToken.endsWith('ies') && queryToken.length > 3) {
+    variants.push(`${queryToken.slice(0, -3)}y`);
+  } else if (queryToken.endsWith('s') && !queryToken.endsWith('ss')) {
+    variants.push(queryToken.slice(0, -1));
   }
   if (queryToken === 'injury') variants.push('injured');
   return variants.some((variant) => articleTokens.has(variant));

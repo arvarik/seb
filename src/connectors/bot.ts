@@ -352,6 +352,7 @@ function guardedRecommendationStream(
 ) {
   return (async function* () {
     let answer = '';
+    const toolCalls = new Map<string, { input: unknown; toolName: string }>();
     const toolResults: RecommendationToolResult[] = [];
     try {
       for await (const part of stream) {
@@ -364,6 +365,7 @@ function guardedRecommendationStream(
           );
         }
         if (isTextDeltaPart(part)) answer += part.text;
+        recordRecommendationToolCall(part, toolCalls);
         if (isUrlSourcePart(part)) {
           const url = normalizeWebUrl(part.url);
           if (url) {
@@ -374,7 +376,7 @@ function guardedRecommendationStream(
             });
           }
         }
-        const toolResult = recommendationToolResult(part);
+        const toolResult = recommendationToolResult(part, toolCalls);
         if (toolResult) toolResults.push(toolResult);
       }
     } catch (error) {
@@ -399,7 +401,28 @@ function sourceAppendix(sources: SourceTracker): string {
   return evidence ? `\n\n${evidence}` : '';
 }
 
-function recommendationToolResult(value: unknown): RecommendationToolResult | null {
+function recordRecommendationToolCall(
+  value: unknown,
+  toolCalls: Map<string, { input: unknown; toolName: string }>,
+): void {
+  if (!value || typeof value !== 'object') return;
+  const record = value as Record<string, unknown>;
+  if (
+    record.type === 'tool-call' &&
+    typeof record.toolCallId === 'string' &&
+    typeof record.toolName === 'string'
+  ) {
+    toolCalls.set(record.toolCallId, {
+      input: record.input,
+      toolName: record.toolName,
+    });
+  }
+}
+
+function recommendationToolResult(
+  value: unknown,
+  toolCalls: Map<string, { input: unknown; toolName: string }>,
+): RecommendationToolResult | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   if (
@@ -407,7 +430,15 @@ function recommendationToolResult(value: unknown): RecommendationToolResult | nu
     typeof record.toolName !== 'string' ||
     !('output' in record)
   ) return null;
-  return { output: record.output, toolName: record.toolName };
+  const call = typeof record.toolCallId === 'string'
+    ? toolCalls.get(record.toolCallId)
+    : undefined;
+  if (typeof record.toolCallId === 'string') toolCalls.delete(record.toolCallId);
+  return {
+    ...(call ? { input: call.input } : {}),
+    output: record.output,
+    toolName: record.toolName,
+  };
 }
 
 function sourcePartId(value: unknown): string {

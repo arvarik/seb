@@ -6,6 +6,24 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-31
+
+### Changed
+
+- Waiver demand now uses one absolute scale instead of the largest candidate in each request.
+- Waiver production now uses position-specific point references instead of the strongest candidate in each request.
+
+### Fixed
+
+- Common start, sit, add, drop, and player comparison questions now enter the recommendation evidence gate.
+- Recommendation evidence now matches the requested player and selected league before it permits an action.
+- Start and sit recommendations now require an eligible scoring-aware projection.
+- Unsupported active scoring rules now make projection, waiver, and trade evidence ineligible for a final action.
+- Trade analysis now rejects duplicate players and received packages from different opposing rosters.
+- A lone low-production waiver candidate no longer receives maximum production, demand, or FAAB scores.
+- News discovery and article metadata now pass their declared schemas before Seb caches them.
+- News queries now match common plural-to-singular forms such as `injuries` and `injury`.
+
 ## [0.1.0] - 2026-08-29
 
 ### Added

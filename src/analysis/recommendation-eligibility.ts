@@ -24,6 +24,7 @@ export interface RecommendationEligibility {
 }
 
 export interface RecommendationToolResult {
+  input?: unknown;
   output: unknown;
   toolName: string;
 }
@@ -51,10 +52,15 @@ const PLAYER_DECISION =
   /\b(?:add|bench|claim|drop|faab|lineup|pick\s*up|player|rest of season|ros|sit|start|trade|waiver)\b/iu;
 const EXPLICIT_DECISION_REQUEST =
   /\b(?:should\s+(?:i|we)|would\s+you|recommend(?:ation|ations)?|what\s+(?:do|would)\s+(?:i|we|you)|start\s+or\s+sit)\b/iu;
+const DIRECT_DECISION_QUESTION =
+  /\b(?:can|could|do|may)\s+(?:i|we)\s+(?:add|bench|claim|drop|pick\s*up|sit|start|trade)\b|\bis\b[^?\n]{0,100}\bworth\s+(?:adding|claiming|dropping|starting|trading)\b|\bwhich\b[^?\n]{0,100}\b(?:add|bench|claim|drop|sit|start)\b/iu;
 const LEADING_FANTASY_ACTION =
   /^(?:please\s+)?(?:add|bench|claim|drop|sit|start)\b/iu;
 const CONTEXTUAL_FANTASY_ACTION =
   /\b(?:accept|decline)\s+(?:a\s+|the\s+|this\s+)?trade\b|\btrade\b[^?\n]{0,120}\bfor\b|\b(?:rank|prioritize)\s+(?:my\s+)?(?:faab|waiver)\b|\b(?:faab|waiver)\s+(?:bid|claim|range|target|targets)\b|\b(?:build|fix|optimize|set)\s+(?:a\s+|my\s+|the\s+)?lineup\b/iu;
+const TIMEBOXED_PLAYER_COMPARISON =
+  /\b(?:or|versus|vs\.?)\b[^?\n]{0,120}\b(?:at\s+flex|in\s+(?:my|the)\s+lineup|rest\s+of\s+season|ros|this\s+week)\b/iu;
+const START_SIT_REQUEST = /\b(?:bench|lineup|sit|start)\b/iu;
 const DECISION_FOLLOW_UP =
   /^(?:and\b|or\b|what\s+about\b|how\s+about\b|which\s+one\b|compare\b|versus\b|vs\.?\b)|\binstead\??$/iu;
 
@@ -87,8 +93,10 @@ const SCORING_TOOLS = new Set([
 
 export function questionRequestsRecommendation(question: string): boolean {
   return EXPLICIT_DECISION_REQUEST.test(question) ||
+    DIRECT_DECISION_QUESTION.test(question) ||
     LEADING_FANTASY_ACTION.test(question.trim()) ||
-    CONTEXTUAL_FANTASY_ACTION.test(question);
+    CONTEXTUAL_FANTASY_ACTION.test(question) ||
+    TIMEBOXED_PLAYER_COMPARISON.test(question);
 }
 
 export function recommendationContextQuestion(
@@ -182,15 +190,15 @@ export function buildRecommendationEvidence(
       ? sourceEvidenceState(input.sources)
       : 'missing',
     identity: needsPlayerIdentity
-      ? identityEvidenceState(input.toolResults)
+      ? identityEvidenceState(input.toolResults, input.question)
       : 'not-required',
     injury: needsPlayerStatus
-      ? playerStatusEvidenceState(input.toolResults, input.sources)
+      ? playerStatusEvidenceState(input.toolResults, input.sources, input.question)
       : 'not-required',
     leagueScoring: needsLeagueScoring
-      ? leagueScoringEvidenceState(input.toolResults)
+      ? leagueScoringEvidenceState(input.toolResults, input.question)
       : 'not-required',
-    projection: projectionEligibilityState(input.toolResults),
+    projection: projectionEligibilityState(input.toolResults, input.question),
   };
 }
 
@@ -300,6 +308,7 @@ function sourceEvidenceState(sources: readonly DataSourceRecord[]): EvidenceStat
 
 function identityEvidenceState(
   toolResults: readonly RecommendationToolResult[],
+  question: string,
 ): IdentityEvidenceState {
   const identityResults = toolResults.filter((result) =>
     PLAYER_IDENTITY_TOOLS.has(result.toolName)
@@ -316,7 +325,10 @@ function identityEvidenceState(
     if (statuses.some((status) => status === 'ambiguous' || status === 'not-found')) {
       return 'ambiguous';
     }
-    return statuses.every((status) => status === 'resolved') ? 'resolved' : 'missing';
+    return statuses.every((status) => status === 'resolved') &&
+        explicitResolutions.every((result) => individualPlayerResultMatchesQuestion(result, question))
+      ? 'resolved'
+      : 'missing';
   }
 
   let resolved = 0;
@@ -324,6 +336,7 @@ function identityEvidenceState(
     if (result.toolName === 'findPlayers') {
       if (!Array.isArray(result.output) || result.output.length === 0) return 'missing';
       if (result.output.length > 1) return 'ambiguous';
+      if (!individualPlayerResultMatchesQuestion(result, question)) return 'missing';
       resolved += 1;
       continue;
     }
@@ -349,6 +362,7 @@ function identityEvidenceState(
       if (!player || typeof player.playerId !== 'string' || !player.playerId) {
         return 'missing';
       }
+      if (!individualPlayerResultMatchesQuestion(result, question)) return 'missing';
       resolved += 1;
       continue;
     }
@@ -367,19 +381,24 @@ function identityEvidenceState(
 function playerStatusEvidenceState(
   toolResults: readonly RecommendationToolResult[],
   sources: readonly DataSourceRecord[],
+  question: string,
 ): RequiredEvidenceState {
+  const subjects = relevantPlayerSubjects(toolResults, question);
   const hasPlayerStatus = toolResults.some((result) =>
     PLAYER_STATUS_TOOLS.has(result.toolName) &&
+    (!isIndividualPlayerTool(result.toolName) ||
+      individualPlayerResultMatchesQuestion(result, question)) &&
     (result.toolName === 'projectPlayer'
       ? hasProjectionPlayerStatus(result.output)
       : hasPlayerStatusFields(result.output))
   );
   const hasGroundedWebNews = toolResults.some(
-    (result) => result.toolName === 'searchCurrentNews',
+    (result) => result.toolName === 'searchCurrentNews' &&
+      evidenceMatchesSubjects([result.input, result.output], subjects),
   ) && sources.some((source) => source.id.startsWith('web:'));
   const hasFirstClassNews = toolResults.some((result) =>
     result.toolName === 'searchFirstClassNews' &&
-    hasUsableFirstClassNews(result.output)
+    hasUsableFirstClassNews(result.output, subjects)
   ) && sources.some((source) =>
     source.id.startsWith('news-article:') &&
     source.cacheOutcome !== 'stale-if-error'
@@ -388,18 +407,24 @@ function playerStatusEvidenceState(
   return hasPlayerStatus && hasCurrentNews ? 'present' : 'missing';
 }
 
-function hasUsableFirstClassNews(value: unknown): boolean {
+function hasUsableFirstClassNews(
+  value: unknown,
+  subjects: readonly string[],
+): boolean {
   const articles = asRecord(value)?.articles;
   return Array.isArray(articles) && articles.some((article) => {
     const record = asRecord(article);
-    return record?.stale === false && typeof record.publishedAt === 'string';
+    return record?.stale === false &&
+      typeof record.publishedAt === 'string' &&
+      evidenceMatchesSubjects([record], subjects);
   });
 }
 
 function leagueScoringEvidenceState(
   toolResults: readonly RecommendationToolResult[],
+  question: string,
 ): RequiredEvidenceState {
-  const hasScoring = toolResults.some((result) =>
+  const scoringResults = toolResults.filter((result) =>
     SCORING_TOOLS.has(result.toolName) &&
     (result.toolName === 'predictMatchup' ||
       (result.toolName === 'projectPlayer' && hasProjectionScoring(result.output)) ||
@@ -407,16 +432,22 @@ function leagueScoringEvidenceState(
       (result.toolName === 'analyzeTradeImpact' && hasTradeScoring(result.output)) ||
       hasScoringSettings(result.output))
   );
-  return hasScoring ? 'present' : 'missing';
+  return scoringResults.length > 0 && leagueIdsAreConsistent(scoringResults, question)
+    ? 'present'
+    : 'missing';
 }
 
 function projectionEligibilityState(
   toolResults: readonly RecommendationToolResult[],
+  question: string,
 ): ProjectionEligibilityState {
   const projections = toolResults.filter((result) => result.toolName === 'projectPlayer');
-  if (projections.length === 0) return 'not-required';
+  if (projections.length === 0) {
+    return START_SIT_REQUEST.test(question) ? 'ineligible' : 'not-required';
+  }
   return projections.every(
-      (result) => asRecord(result.output)?.recommendationEligible === true,
+      (result) => asRecord(result.output)?.recommendationEligible === true &&
+        individualPlayerResultMatchesQuestion(result, question),
     )
     ? 'eligible'
     : 'ineligible';
@@ -472,18 +503,184 @@ function hasProjectionPlayerStatus(value: unknown): boolean {
 }
 
 function hasProjectionScoring(value: unknown): boolean {
-  const usedSettings = asRecord(asRecord(value)?.scoring)?.usedSettings;
-  return Array.isArray(usedSettings) && usedSettings.length > 0;
+  const scoring = asRecord(asRecord(value)?.scoring);
+  return isNonEmptyStringArray(scoring?.usedSettings) &&
+    isEmptyArray(scoring?.ignoredSettings);
 }
 
 function hasWaiverScoring(value: unknown): boolean {
-  const usedSettings = asRecord(asRecord(value)?.methodology)?.scoringKeysUsed;
-  return Array.isArray(usedSettings) && usedSettings.length > 0;
+  const methodology = asRecord(asRecord(value)?.methodology);
+  return isNonEmptyStringArray(methodology?.scoringKeysUsed) &&
+    isEmptyArray(methodology?.scoringKeysIgnored);
 }
 
 function hasTradeScoring(value: unknown): boolean {
-  const usedSettings = asRecord(asRecord(value)?.scoring)?.usedSettings;
-  return Array.isArray(usedSettings) && usedSettings.length > 0;
+  const scoring = asRecord(asRecord(value)?.scoring);
+  return isNonEmptyStringArray(scoring?.usedSettings) &&
+    isEmptyArray(scoring?.ignoredSettings);
+}
+
+function isIndividualPlayerTool(toolName: string): boolean {
+  return toolName === 'findPlayers' ||
+    toolName === 'projectPlayer' ||
+    toolName === 'resolvePlayerIdentity';
+}
+
+function individualPlayerResultMatchesQuestion(
+  result: RecommendationToolResult,
+  question: string,
+): boolean {
+  const subjects = [
+    ...toolInputPlayerSubjects(result),
+    ...playerSubjects([result.output]),
+  ];
+  return subjects.some((subject) => textMentionsSubject(question, subject));
+}
+
+function relevantPlayerSubjects(
+  toolResults: readonly RecommendationToolResult[],
+  question: string,
+): string[] {
+  const subjects = toolResults.flatMap((result) => {
+    if (!PLAYER_IDENTITY_TOOLS.has(result.toolName)) return [];
+    const candidates = [
+      ...toolInputPlayerSubjects(result),
+      ...playerSubjects([result.output]),
+    ];
+    return isIndividualPlayerTool(result.toolName)
+      ? candidates.filter((subject) => textMentionsSubject(question, subject))
+      : candidates;
+  });
+  return [...new Set(subjects.map(normalizeEvidenceText).filter(Boolean))];
+}
+
+function toolInputPlayerSubjects(result: RecommendationToolResult): string[] {
+  const input = asRecord(result.input);
+  if (!input) return [];
+  const keys = result.toolName === 'resolvePlayerIdentity'
+    ? ['name']
+    : result.toolName === 'projectPlayer'
+      ? ['playerName']
+      : result.toolName === 'findPlayers'
+        ? ['query']
+        : ['givePlayerNames', 'receivePlayerNames'];
+  return keys.flatMap((key) => {
+    const value = input[key];
+    if (typeof value === 'string') return [value];
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string')
+      : [];
+  });
+}
+
+function playerSubjects(values: readonly unknown[]): string[] {
+  const output: string[] = [];
+  for (const value of values) collectPlayerSubjects(value, output);
+  return [...new Set(output.map((item) => item.trim()).filter((item) => item.length >= 2))];
+}
+
+function collectPlayerSubjects(value: unknown, output: string[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectPlayerSubjects(item, output);
+    return;
+  }
+  const record = asRecord(value);
+  if (!record) return;
+  const isPlayerRecord = typeof record.playerId === 'string' ||
+    typeof record.player_id === 'string';
+  for (const [key, item] of Object.entries(record)) {
+    if (
+      typeof item === 'string' &&
+      (
+        ['displayName', 'fullName', 'full_name', 'playerDisplayName', 'playerName', 'query']
+          .includes(key) ||
+        (key === 'name' && isPlayerRecord)
+      )
+    ) {
+      output.push(item);
+    } else if (
+      Array.isArray(item) &&
+      ['givePlayerNames', 'receivePlayerNames'].includes(key)
+    ) {
+      output.push(...item.filter((candidate): candidate is string => typeof candidate === 'string'));
+    } else if (typeof item === 'object' && item !== null) {
+      collectPlayerSubjects(item, output);
+    }
+  }
+}
+
+function evidenceMatchesSubjects(
+  values: readonly unknown[],
+  subjects: readonly string[],
+): boolean {
+  if (subjects.length === 0) return false;
+  const evidence = normalizeEvidenceText(values.map(stringifyEvidence).join(' '));
+  return subjects.some((subject) => textMentionsSubject(evidence, subject));
+}
+
+function stringifyEvidence(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function textMentionsSubject(text: string, subject: string): boolean {
+  const normalizedText = normalizeEvidenceText(text);
+  const normalizedSubject = normalizeEvidenceText(subject);
+  if (!normalizedText || !normalizedSubject) return false;
+  if (` ${normalizedText} `.includes(` ${normalizedSubject} `)) return true;
+  const tokens = normalizedSubject.split(' ').filter((token) => token.length >= 3);
+  const lastName = tokens.length >= 2 ? tokens.at(-1) : null;
+  return Boolean(lastName && ` ${normalizedText} `.includes(` ${lastName} `));
+}
+
+function normalizeEvidenceText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/gu, ' ').trim();
+}
+
+function leagueIdsAreConsistent(
+  results: readonly RecommendationToolResult[],
+  question: string,
+): boolean {
+  const ids = new Set(results.flatMap((result) => leagueIds([result.input, result.output])));
+  const questionIds: string[] = question.match(/\b\d{6,}\b/gu) ?? [];
+  if (ids.size > 1) return false;
+  return questionIds.length === 0 ||
+    (ids.size === 1 && [...ids].every((id) => questionIds.includes(id)));
+}
+
+function leagueIds(values: readonly unknown[]): string[] {
+  const output: string[] = [];
+  for (const value of values) collectLeagueIds(value, output);
+  return output;
+}
+
+function collectLeagueIds(value: unknown, output: string[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectLeagueIds(item, output);
+    return;
+  }
+  const record = asRecord(value);
+  if (!record) return;
+  for (const [key, item] of Object.entries(record)) {
+    if ((key === 'leagueId' || key === 'league_id') && typeof item === 'string') {
+      output.push(item);
+    } else if (typeof item === 'object' && item !== null) {
+      collectLeagueIds(item, output);
+    }
+  }
+}
+
+function isNonEmptyStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0 &&
+    value.every((item) => typeof item === 'string');
+}
+
+function isEmptyArray(value: unknown): boolean {
+  return Array.isArray(value) && value.length === 0;
 }
 
 function hasResolvedDecisionPlayers(value: unknown): boolean {

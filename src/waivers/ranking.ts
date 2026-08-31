@@ -164,6 +164,18 @@ const SUPPORTED_SCORING_KEYS = new Set([
   'bonus_rec_yd_100',
   'bonus_rec_yd_200',
 ]);
+const PRODUCTION_REFERENCE_POINTS = new Map([
+  ['QB', 24],
+  ['RB', 16],
+  ['WR', 16],
+  ['TE', 12],
+  ['K', 10],
+  ['DEF', 10],
+  ['DL', 10],
+  ['LB', 10],
+  ['DB', 10],
+]);
+const DEMAND_REFERENCE_ADDS = 1_000;
 
 /** Rank read-only waiver candidates from one league snapshot. */
 export function rankWaiverTargets(
@@ -173,7 +185,6 @@ export function rankWaiverTargets(
   const eligiblePositions = collectEligiblePositions(input.league.roster_positions);
   const rosterPlayers = collectRosterPlayers(input.selectedRoster, input.players);
   const rowsByPlayer = resolveNflverseRows(input.trendingAdds, input.players, input.nflverseRows);
-  const maximumDemand = Math.max(1, ...input.trendingAdds.map((item) => item.count));
   let skippedInactive = 0;
   let skippedRostered = 0;
   let skippedUnsupportedPosition = 0;
@@ -210,7 +221,7 @@ export function rankWaiverTargets(
       demand: {
         adds: trend.count,
         lookbackHours: input.lookbackHours,
-        score: round(trend.count / maximumDemand * 100),
+        score: demandScore(trend.count),
         sourceScope: 'Sleeper platform',
       },
       player,
@@ -264,7 +275,7 @@ export function rankWaiverTargets(
     limitations,
     methodology: {
       candidatePool: 'The pool starts with Sleeper trending adds. It removes every player found on any league roster.',
-      demand: 'Demand equals each add count divided by the largest add count in this candidate request.',
+      demand: 'Demand uses an absolute logarithmic scale. One add scores near 10 and 1,000 adds scores 100.',
       faab: 'Each score tier maps to a percentage of the original league budget. Each range stops at the selected roster remaining budget.',
       production: 'Recent production uses the last three resolved nflverse games and the selected league scoring settings.',
       rankFormula: '45% recent production + 30% roster need + 25% Sleeper demand - 20% risk.',
@@ -441,23 +452,22 @@ function calculateRisk(
 }
 
 function assignProductionScores(candidates: PreparedCandidate[]): void {
-  const maximumByPosition = new Map<string, number>();
-  for (const candidate of candidates) {
-    if (!candidate.production) continue;
-    const position = playerPosition(candidate.player);
-    if (!position) continue;
-    maximumByPosition.set(
-      position,
-      Math.max(maximumByPosition.get(position) ?? 0, candidate.production.recentAverage),
-    );
-  }
   for (const candidate of candidates) {
     const position = playerPosition(candidate.player);
-    const maximum = position ? maximumByPosition.get(position) ?? 0 : 0;
-    candidate.productionScore = candidate.production && maximum > 0
-      ? round(clamp(candidate.production.recentAverage / maximum * 100, 0, 100))
+    const reference = position ? PRODUCTION_REFERENCE_POINTS.get(position) ?? 16 : 16;
+    candidate.productionScore = candidate.production
+      ? round(clamp(candidate.production.recentAverage / reference * 100, 0, 100))
       : 0;
   }
+}
+
+function demandScore(adds: number): number {
+  if (!Number.isFinite(adds) || adds <= 0) return 0;
+  return round(clamp(
+    Math.log10(adds + 1) / Math.log10(DEMAND_REFERENCE_ADDS + 1) * 100,
+    0,
+    100,
+  ));
 }
 
 function finalizeCandidate(

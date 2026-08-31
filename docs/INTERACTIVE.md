@@ -299,6 +299,26 @@ An action with missing values stays in the editor for completion.
 
 Read the [skill guide](SKILLS.md) for all available workflows.
 
+## Decision safeguards
+
+Seb records the input and result for each tool that runs during a decision request.
+
+It uses those records to match the evidence to the requested player and selected league.
+
+A start-sit action needs an eligible scoring-aware projection.
+
+An unsupported active scoring rule blocks that action.
+
+A trade package needs unique players from one opposing roster.
+
+Waiver production and demand use fixed scales that do not depend on the candidate list.
+
+Seb buffers a direct action answer until the evidence gate finishes.
+
+If the evidence is incomplete, Seb shows `Decision unavailable` and lists the missing requirements.
+
+Run `/sources` after the answer to inspect the supporting records.
+
 ## Source commands
 
 Run `/sources` after an answer.

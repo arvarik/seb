@@ -68,9 +68,31 @@ Scoring-aware projections show a median, floor, ceiling, confidence, adjustments
 
 The waiver assistant ranks unrostered targets and shows a transparent FAAB range when the league uses FAAB.
 
+Its production and demand scores use fixed reference scales.
+
+The candidate list cannot change those reference values.
+
 The trade impact tool compares recent scoring value and roster position changes on both sides.
 
-Seb requires current sources, resolved player identity, player status, current news, and league scoring before it displays a recommendation.
+## Decision safeguards
+
+Seb checks each requested player and the selected league against the executed tool inputs and results.
+
+Seb requires current sources, resolved player identity, player status, current news, and league scoring before it displays an action.
+
+A start-sit action also needs an eligible projection.
+
+The projection becomes ineligible when it lacks enough games or finds an unsupported active scoring rule.
+
+It also becomes ineligible for an unavailable player or a kicker.
+
+A trade package must contain unique players on each side.
+
+Every received player must belong to one opposing roster in the selected league.
+
+Seb replaces an unsupported action with a clear list of missing evidence.
+
+The terminal, JSON output, and chat connectors use the same safeguards.
 
 Seb keeps the active player from the previous answer.
 

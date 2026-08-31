@@ -50,6 +50,20 @@ These skills add fantasy advice only when the user requests it.
 | `league-audit` | Ranks every roster. | Sleeper records, scores, consistency, and recent form. |
 | `projection-explainer` | Builds a transparent player range. | Baseline, matchup, weather, and uncertainty. |
 
+## Decision safeguards
+
+Seb matches the executed tool evidence to the requested player and selected league.
+
+The `start-sit` skill needs an eligible projection before it gives an action.
+
+The projection needs at least three completed games and at least one supported active scoring rule.
+
+Every active player scoring rule must have a supported nflverse calculation.
+
+The player must also be available and cannot be a kicker.
+
+Seb lists the missing requirement when the final gate blocks an action.
+
 ## Trade review skill
 
 The `trade-review` skill needs both trade sides.
@@ -62,9 +76,33 @@ Set a league and roster when roster fit affects the decision.
 
 Seb reads an identified Sleeper transaction only when the request refers to that transaction.
 
+Each player can appear only once on each trade side.
+
+Every received player must belong to the same opposing roster.
+
 Seb labels rest-of-season expectations as assumptions.
 
 Seb does not invent a trade-chart value or a market value.
+
+The trade calculation never creates a final accept or decline action by itself.
+
+Current news must support that final action.
+
+## Waiver scout skill
+
+The `waiver-scout` skill starts with Sleeper trending adds.
+
+It removes every player who appears on a roster in the selected league.
+
+Recent production uses fixed reference points for each position.
+
+Sleeper demand uses an absolute logarithmic scale from zero to 1,000 adds.
+
+These scales do not depend on the other candidates in one request.
+
+The final score combines production, roster need, Sleeper demand, and risk.
+
+The result states that Sleeper demand covers the complete Sleeper platform.
 
 ## nflverse skills
 
@@ -121,6 +159,10 @@ It searches the built-in first-class news sources before Google Search.
 It uses Google Search when direct sources return insufficient coverage.
 
 It includes validated publisher links and publication dates.
+
+Seb validates every parsed discovery record and article metadata value before it stores the value.
+
+The live source probe checks all 44 built-in sources.
 
 It uses Sleeper for league facts and nflverse for historical statistics.
 

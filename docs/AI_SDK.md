@@ -54,7 +54,7 @@ Seb has no licensed publisher feed or official injury-report feed.
 
 Read the [data source guide](DATA_SOURCES.md) for every source ID and cache period.
 
-## 2. Typed analysis output
+## 2. Typed analysis and decision safeguards
 
 `seb ask --json` uses AI SDK `Output.object` with a Zod schema.
 
@@ -82,11 +82,23 @@ This rule lets Seb validate each HTTP or HTTPS source before output.
 
 Seb applies a deterministic eligibility gate after schema validation.
 
+The gate compares requested players and leagues with the executed tool inputs and results.
+
 The gate removes a recommendation when required source, identity, player status, current news, league scoring, or projection evidence is missing.
+
+Start-sit output needs an eligible scoring-aware projection.
+
+An active scoring rule that the projection cannot calculate makes that projection ineligible.
 
 The gate limits confidence when a fresh required source has a stale supplemental source.
 
+Interactive, command-line, and connector paths record each tool input with its result.
+
 Interactive and connector answers use the same gate for direct action requests.
+
+These paths buffer a direct action answer until the gate finishes.
+
+This rule prevents an unsupported partial action from reaching the user.
 
 Select useful fields with `jq`.
 

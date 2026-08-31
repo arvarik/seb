@@ -32,7 +32,17 @@ The connector reads up to 20 recent messages for conversation context.
 
 The connector streams each Gemini answer through the platform adapter.
 
+It buffers a direct fantasy action until the deterministic evidence gate finishes.
+
+The gate matches executed tool inputs and results to the requested player and selected league.
+
+The connector posts `Decision unavailable` when the required evidence is incomplete.
+
 The connector uses one queue for overlapping messages in each thread.
+
+One two-minute deadline covers the primary model and its fallback model.
+
+Service shutdown cancels every active model reply.
 
 Every connector can use the Sleeper, nflverse, and NWS tools.
 

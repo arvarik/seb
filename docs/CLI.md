@@ -172,6 +172,20 @@ seb ask --no-progress "Show trending player adds."
 
 Seb hides tool activity automatically when standard error does not connect to a terminal.
 
+## Decision output
+
+Seb records each executed tool input and result for a direct fantasy decision.
+
+The final gate matches those records to the requested player and selected league.
+
+Start-sit output needs an eligible scoring-aware projection.
+
+Seb buffers the answer until this gate finishes.
+
+If the evidence is incomplete, Seb returns `Decision unavailable` with the missing requirements.
+
+JSON mode applies the same gate after schema validation.
+
 ## Read a question from standard input
 
 Seb reads standard input when the command does not contain a question.

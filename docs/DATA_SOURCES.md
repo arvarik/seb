@@ -42,7 +42,7 @@ The tool can infer an NFL team from the question or accept a team code.
 
 The registry is built into Seb.
 
-Version `0.1.1` does not read a custom source file.
+Version `0.1.2` does not read a custom source file.
 
 A tool caller can limit a search with `sourceIds`, `categories`, or `teams`.
 
@@ -355,7 +355,7 @@ The NWS requires a user agent that identifies the application.
 Set `NWS_USER_AGENT` to an application name and contact value.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.1.1 (you@example.com)
+NWS_USER_AGENT=seb/0.1.2 (you@example.com)
 ```
 
 Seb performs three request types.

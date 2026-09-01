@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-01
+
 ### Added
 
 - `seb usage` and `/usage` now show concise local Gemini API usage.

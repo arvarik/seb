@@ -587,7 +587,7 @@ describe('SebInteractiveTransport', () => {
       session: createSessionState(),
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
-      version: '0.1.1',
+      version: '0.1.2',
       weather: clients.weatherClient,
     });
     const messages: UIMessage[] = [];
@@ -652,7 +652,7 @@ describe('SebInteractiveTransport', () => {
       session: createSessionState(),
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
-      version: '0.1.1',
+      version: '0.1.2',
       weather: clients.weatherClient,
     });
 
@@ -701,7 +701,7 @@ describe('SebInteractiveTransport', () => {
       session: createSessionState(),
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
-      version: '0.1.1',
+      version: '0.1.2',
       weather: clients.weatherClient,
     });
 
@@ -750,7 +750,7 @@ describe('SebInteractiveTransport', () => {
       session: createSessionState(),
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
-      version: '0.1.1',
+      version: '0.1.2',
       weather: clients.weatherClient,
     });
     const output = await sendConversation(transport, [
@@ -788,7 +788,7 @@ describe('SebInteractiveTransport', () => {
       session: createSessionState(),
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
-      version: '0.1.1',
+      version: '0.1.2',
       weather: clients.weatherClient,
     });
 
@@ -1037,7 +1037,7 @@ describe('SebInteractiveTransport', () => {
       session: createSessionState(),
       sleeper: clients.sleeperClient,
       sources: new SourceTracker(),
-      version: '0.1.1',
+      version: '0.1.2',
       weather: clients.weatherClient,
     });
     const stream = await transport.sendMessages({

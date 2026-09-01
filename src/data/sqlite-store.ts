@@ -896,6 +896,9 @@ export class SebDatabase {
       'usage error kind',
       128,
     );
+    if (status === 'completed' && errorKind !== null) {
+      throw new RangeError('A completed usage run cannot have an error kind.');
+    }
 
     return this.transaction(() => {
       const row = this.database
@@ -934,7 +937,10 @@ export class SebDatabase {
             finalFinishReason,
             'usage finish reason',
           );
-      const mergedErrorKind = correctsTerminalStatus
+      const refinesErrorKind = current.status === status &&
+        status !== 'completed' &&
+        canRefineUsageErrorKind(current.errorKind, errorKind);
+      const mergedErrorKind = correctsTerminalStatus || refinesErrorKind
         ? errorKind
         : mergeNullableUsageValue(
             current.errorKind,
@@ -3057,6 +3063,14 @@ function mergeNullableUsageValue<T>(
   if (incoming === null) return current;
   if (!equals(current, incoming)) throw new Error(`The ${label} conflicts with its saved value.`);
   return current;
+}
+
+function canRefineUsageErrorKind(
+  current: string | null,
+  incoming: string | null,
+): boolean {
+  if (!incoming || current === incoming) return false;
+  return current === null || current === 'error' || current.startsWith('incomplete-');
 }
 
 function normalizeUsageQueryLimit(value: number | undefined): number {

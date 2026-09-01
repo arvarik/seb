@@ -1013,6 +1013,83 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(uiState.latestAnswer).toBe('Last complete answer');
   });
 
+  it('keeps the last completed answer when the provider stream fails', async () => {
+    const uiState = new InteractiveUiState();
+    uiState.latestAnswer = 'Last complete answer';
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), uiState);
+
+    const response = await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'start', messageId: 'failed-answer' });
+          controller.enqueue({ type: 'text-start', id: 'partial-text' });
+          controller.enqueue({
+            type: 'text-delta',
+            id: 'partial-text',
+            delta: 'Partial current answer',
+          });
+          controller.enqueue({ type: 'text-end', id: 'partial-text' });
+          controller.enqueue({
+            type: 'error',
+            errorText: 'Gemini rejected the request as invalid.',
+          });
+          controller.enqueue({ type: 'finish', finishReason: 'error' });
+          controller.close();
+        },
+      }),
+    });
+
+    expect(response).toBeUndefined();
+    expect(uiState.latestAnswer).toBe('Last complete answer');
+    expect(stripAnsi(terminal.output.text())).toContain(
+      'Gemini rejected the request as invalid.',
+    );
+  });
+
+  it('keeps the last completed answer while tool approval is pending', async () => {
+    const uiState = new InteractiveUiState();
+    uiState.latestAnswer = 'Last complete answer';
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), uiState);
+
+    const response = await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'start', messageId: 'approval-answer' });
+          controller.enqueue({ type: 'start-step' });
+          controller.enqueue({ type: 'text-start', id: 'approval-text' });
+          controller.enqueue({
+            type: 'text-delta',
+            id: 'approval-text',
+            delta: 'I will make this change.',
+          });
+          controller.enqueue({ type: 'text-end', id: 'approval-text' });
+          controller.enqueue({
+            type: 'tool-input-available',
+            dynamic: true,
+            input: { target: 'example' },
+            toolCallId: 'approval-tool',
+            toolName: 'exampleTool',
+          });
+          controller.enqueue({
+            type: 'tool-approval-request',
+            approvalId: 'approval-1',
+            toolCallId: 'approval-tool',
+          });
+          controller.enqueue({ type: 'finish-step' });
+          controller.enqueue({ type: 'finish', finishReason: 'tool-calls' });
+          controller.close();
+        },
+      }),
+    });
+
+    expect(response?.parts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ state: 'approval-requested' }),
+    ]));
+    expect(uiState.latestAnswer).toBe('Last complete answer');
+  });
+
   it('shows an intermediate tool error as a retry and removes it after success', async () => {
     const terminal = createTerminal();
     const renderer = createRenderer(terminal);

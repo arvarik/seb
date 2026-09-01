@@ -253,18 +253,22 @@ export class SebTerminalRenderer {
     };
     this.attachInput();
     let response = result.message;
+    let streamFailed = false;
     const streamErrorId = `stream-error-${++this.streamSequence}`;
     const stream = toReadableStream(result.uiMessageStream);
     try {
       const messages = readUIMessageStream({
         ...(result.message ? { message: result.message } : {}),
         stream,
-        onError: (error) => this.upsert({
-          content: errorMessage(error),
-          id: streamErrorId,
-          kind: 'error',
-          title: 'Error',
-        }),
+        onError: (error) => {
+          streamFailed = true;
+          this.upsert({
+            content: errorMessage(error),
+            id: streamErrorId,
+            kind: 'error',
+            title: 'Error',
+          });
+        },
       });
       for await (const message of messages) {
         response = message;
@@ -274,6 +278,7 @@ export class SebTerminalRenderer {
       }
     } catch (error) {
       if (!this.interrupted) {
+        streamFailed = true;
         this.upsert({ content: errorMessage(error), id: streamErrorId, kind: 'error', title: 'Error' });
       }
     } finally {
@@ -284,9 +289,14 @@ export class SebTerminalRenderer {
       this.activeToolIds.clear();
       this.status = this.interrupted
         ? 'Request stopped'
-        : `Ready · ${formatElapsed(Date.now() - this.streamStartedAt)}`;
+        : streamFailed
+          ? `Request failed · ${formatElapsed(Date.now() - this.streamStartedAt)}`
+          : `Ready · ${formatElapsed(Date.now() - this.streamStartedAt)}`;
       this.options.uiState.sources = this.options.sources.list();
-      if (!this.interrupted) {
+      const awaitsApproval = response?.parts.some(
+        (part) => isToolUIPart(part) && part.state === 'approval-requested',
+      ) === true;
+      if (!this.interrupted && !streamFailed && !awaitsApproval) {
         this.captureAnswer(response);
         this.focusLatestAnswer();
       }
@@ -294,7 +304,7 @@ export class SebTerminalRenderer {
       this.streamStop = undefined;
     }
     if (this.exitRequested) throw new Error('Interrupted');
-    return response;
+    return this.interrupted || streamFailed ? undefined : response;
   }
 
   async readToolApproval(

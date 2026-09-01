@@ -5,16 +5,26 @@ import { resolve } from 'node:path';
 import type { Telemetry, TelemetryOptions } from 'ai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { activeAiDevToolsTelemetryMock, devToolsTelemetry, generateTextMock } =
+const {
+  activeAiDevToolsTelemetryMock,
+  devToolsTelemetry,
+  generateTextMock,
+  streamTextMock,
+} =
 vi.hoisted(() => ({
   activeAiDevToolsTelemetryMock: vi.fn<() => object[]>(() => []),
   devToolsTelemetry: { onStart: vi.fn() },
   generateTextMock: vi.fn(),
+  streamTextMock: vi.fn(),
 }));
 
 vi.mock('ai', async (importOriginal) => {
   const original = await importOriginal<typeof import('ai')>();
-  return { ...original, generateText: generateTextMock };
+  return {
+    ...original,
+    generateText: generateTextMock,
+    streamText: streamTextMock,
+  };
 });
 
 vi.mock('../src/ai/devtools.js', async (importOriginal) => {
@@ -40,6 +50,7 @@ const temporaryDirectories: string[] = [];
 
 afterEach(() => {
   generateTextMock.mockReset();
+  streamTextMock.mockReset();
   activeAiDevToolsTelemetryMock.mockReset();
   activeAiDevToolsTelemetryMock.mockReturnValue([]);
   for (const database of databases.splice(0)) database.close();
@@ -112,7 +123,7 @@ describe('runDoctor', () => {
       '✓ Sleeper API: 2026 regular, week 3.',
     );
     expect(formatDoctorReport(report)).toContain(
-      '✓ Gemini API: primary-test returned a grounded Google Search source.',
+      '✓ Gemini API: primary-test completed a local tool loop and returned a grounded Google Search source.',
     );
     expect(formatDoctorReport(report)).toContain(
       '✓ nflverse data: 100 schedule rows loaded through the 2026 season.',
@@ -124,16 +135,7 @@ describe('runDoctor', () => {
 
   it('checks grounded Google Search and requires a valid web source', async () => {
     const database = createDatabase();
-    generateTextMock.mockResolvedValueOnce({
-      sources: [
-        {
-          id: 'source-1',
-          sourceType: 'url',
-          title: 'NFL report',
-          url: 'https://www.nfl.com/news/',
-        },
-      ],
-    });
+    mockSuccessfulGeminiVerification();
 
     await expect(
       verifyGeminiApi(
@@ -145,20 +147,84 @@ describe('runDoctor', () => {
       ),
     ).resolves.toEqual({ fallbackUsed: false, model: 'primary-test' });
 
-    const request = generateTextMock.mock.calls[0]?.[0];
-    expect(JSON.stringify(request?.tools)).toContain('google.google_search');
-    expect(request?.prompt).toContain('current NFL news report');
-    expect(request?.telemetry).toMatchObject({
+    const localRequest = streamTextMock.mock.calls[0]?.[0];
+    const searchRequest = generateTextMock.mock.calls[0]?.[0];
+    expect(JSON.stringify(localRequest?.tools)).toContain('google.google_search');
+    expect(localRequest?.tools).toHaveProperty('verifyLocalTool');
+    expect(localRequest?.prompt).toContain('SEB_TOOL_LOOP_OK');
+    expect(localRequest?.toolChoice).toEqual({
+      toolName: 'verifyLocalTool',
+      type: 'tool',
+    });
+    expect(localRequest?.prepareStep?.({ stepNumber: 0 } as never)).toEqual({});
+    expect(localRequest?.prepareStep?.({ stepNumber: 1 } as never)).toEqual({
+      activeTools: [],
+      toolChoice: 'none',
+    });
+    expect(JSON.stringify(searchRequest?.tools)).toContain('google.google_search');
+    expect(searchRequest?.prompt).toContain('current NFL news report');
+    expect(localRequest?.telemetry).toMatchObject({
       functionId: 'seb.cli.doctor',
       isEnabled: true,
       recordInputs: false,
       recordOutputs: false,
     });
-    expect(telemetryIntegrations(request)).toEqual([
+    expect(searchRequest?.telemetry).toBe(localRequest?.telemetry);
+    expect(telemetryIntegrations(localRequest)).toEqual([
       expect.any(SebUsageTelemetry),
     ]);
 
-    generateTextMock.mockResolvedValueOnce({ sources: [] });
+    streamTextMock.mockReturnValueOnce(validLocalToolResult());
+    generateTextMock.mockResolvedValueOnce({
+        ...validSearchResult(),
+        sources: [],
+      });
+    await expect(
+      verifyGeminiApi(
+        'test-key',
+        'primary-test',
+        'fallback-test',
+        AbortSignal.timeout(1_000),
+        { agentKind: 'doctor', database, surface: 'cli' },
+      ),
+    ).rejects.toThrow('returned no valid web source');
+
+    streamTextMock.mockReturnValueOnce({
+      ...validLocalToolResult(),
+      toolResults: Promise.resolve([]),
+    });
+    await expect(
+      verifyGeminiApi(
+        'test-key',
+        'primary-test',
+        'fallback-test',
+        AbortSignal.timeout(1_000),
+        { agentKind: 'doctor', database, surface: 'cli' },
+      ),
+    ).rejects.toThrow('did not complete the local tool loop');
+
+    streamTextMock.mockReturnValueOnce({
+      ...validLocalToolResult(),
+      toolResults: Promise.resolve([{
+          output: { marker: 'wrong-marker' },
+          toolName: 'verifyLocalTool',
+        }]),
+    });
+    await expect(
+      verifyGeminiApi(
+        'test-key',
+        'primary-test',
+        'fallback-test',
+        AbortSignal.timeout(1_000),
+        { agentKind: 'doctor', database, surface: 'cli' },
+      ),
+    ).rejects.toThrow('did not complete the local tool loop');
+
+    streamTextMock.mockReturnValueOnce(validLocalToolResult());
+    generateTextMock.mockResolvedValueOnce({
+        ...validSearchResult(),
+        finishReason: 'length',
+      });
     await expect(
       verifyGeminiApi(
         'test-key',
@@ -173,7 +239,7 @@ describe('runDoctor', () => {
   it('keeps DevTools telemetry active for a Gemini verification call', async () => {
     const database = createDatabase();
     activeAiDevToolsTelemetryMock.mockReturnValue([devToolsTelemetry]);
-    generateTextMock.mockResolvedValueOnce(validGeminiResult());
+    mockSuccessfulGeminiVerification();
 
     await verifyGeminiApi(
       'test-key',
@@ -183,12 +249,14 @@ describe('runDoctor', () => {
       { agentKind: 'doctor', database, surface: 'cli' },
     );
 
-    const request = generateTextMock.mock.calls[0]?.[0];
-    expect(request?.telemetry).toMatchObject({
+    const localRequest = streamTextMock.mock.calls[0]?.[0];
+    const searchRequest = generateTextMock.mock.calls[0]?.[0];
+    expect(localRequest?.telemetry).toMatchObject({
       recordInputs: true,
       recordOutputs: true,
     });
-    expect(telemetryIntegrations(request)).toEqual([
+    expect(searchRequest?.telemetry).toBe(localRequest?.telemetry);
+    expect(telemetryIntegrations(localRequest)).toEqual([
       devToolsTelemetry,
       expect.any(SebUsageTelemetry),
     ]);
@@ -203,21 +271,39 @@ describe('runDoctor', () => {
       new Error('The primary model has no capacity.'),
       { statusCode: 503 },
     );
-    generateTextMock.mockImplementationOnce(
-      async (request: TelemetryRequest) => {
-        await emitFailedCall(
+    streamTextMock.mockImplementationOnce(
+      (request: TelemetryRequest) => {
+        const failed = emitFailedCall(
           request,
           'primary-call',
           'primary-test',
           capacityError,
+        ).then(() => {
+          throw capacityError;
+        });
+        return rejectedLocalToolResult(failed);
+      },
+    );
+    streamTextMock.mockImplementationOnce(
+      (request: TelemetryRequest) => {
+        const completed = emitCompletedCall(
+          request,
+          'fallback-local-call',
+          'fallback-test',
+          'verifyLocalTool',
+          false,
         );
-        throw capacityError;
+        return validLocalToolResult(completed);
       },
     );
     generateTextMock.mockImplementationOnce(
       async (request: TelemetryRequest) => {
-        await emitCompletedCall(request, 'fallback-call', 'fallback-test');
-        return validGeminiResult();
+        await emitCompletedCall(
+          request,
+          'fallback-search-call',
+          'fallback-test',
+        );
+        return validSearchResult();
       },
     );
 
@@ -236,10 +322,13 @@ describe('runDoctor', () => {
     )).resolves.toEqual({ fallbackUsed: true, model: 'fallback-test' });
 
     const primaryTelemetry = usageTelemetry(
-      generateTextMock.mock.calls[0]?.[0],
+      streamTextMock.mock.calls[0]?.[0],
     );
-    const fallbackTelemetry = usageTelemetry(
-      generateTextMock.mock.calls[1]?.[0],
+    const fallbackLocalTelemetry = usageTelemetry(
+      streamTextMock.mock.calls[1]?.[0],
+    );
+    const fallbackSearchTelemetry = usageTelemetry(
+      generateTextMock.mock.calls[0]?.[0],
     );
     const dataset = database.readUsageDataset({ sessionId: 'setup-session' });
     const runs = Object.fromEntries(
@@ -249,9 +338,15 @@ describe('runDoctor', () => {
       dataset.steps.map((step) => [step.callId, step]),
     );
 
-    expect(primaryTelemetry).toBe(fallbackTelemetry);
+    expect(primaryTelemetry).toBe(fallbackLocalTelemetry);
+    expect(fallbackSearchTelemetry).toBe(fallbackLocalTelemetry);
     expect(runs).toMatchObject({
-      'fallback-call': {
+      'fallback-local-call': {
+        agentKind: 'setup',
+        status: 'completed',
+        surface: 'cli',
+      },
+      'fallback-search-call': {
         agentKind: 'setup',
         status: 'completed',
         surface: 'cli',
@@ -263,8 +358,15 @@ describe('runDoctor', () => {
       },
     });
     expect(steps).toMatchObject({
-      'fallback-call': {
-        callId: 'fallback-call',
+      'fallback-local-call': {
+        callId: 'fallback-local-call',
+        inputTokens: 12,
+        modelId: 'fallback-test',
+        outputTokens: 6,
+        totalTokens: 18,
+      },
+      'fallback-search-call': {
+        callId: 'fallback-search-call',
         inputTokens: 12,
         modelId: 'fallback-test',
         outputTokens: 6,
@@ -278,21 +380,27 @@ describe('runDoctor', () => {
         totalTokens: null,
       },
     });
-    expect(dataset.toolCalls).toEqual([
+    expect(dataset.toolCalls).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        callId: 'fallback-call',
+        callId: 'fallback-local-call',
+        executionLocation: 'client',
+        outcome: 'returned',
+        toolName: 'verifyLocalTool',
+      }),
+      expect.objectContaining({
+        callId: 'fallback-search-call',
         executionLocation: 'provider',
         outcome: 'returned',
         toolName: 'google_search',
       }),
-    ]);
+    ]));
     expect(sessionUsage).toMatchObject({
-      agentRuns: 2,
-      completedRuns: 1,
+      agentRuns: 3,
+      completedRuns: 2,
       failedRuns: 1,
-      modelCalls: 2,
-      toolCalls: 1,
-      totalTokens: 18,
+      modelCalls: 3,
+      toolCalls: 2,
+      totalTokens: 36,
     });
   });
 
@@ -301,10 +409,22 @@ describe('runDoctor', () => {
     const sessionUsage = createSessionUsage(
       new Date('2026-08-31T13:00:00.000Z'),
     );
+    streamTextMock.mockImplementationOnce(
+      (request: TelemetryRequest) => {
+        const completed = emitCompletedCall(
+          request,
+          'doctor-local-call',
+          'primary-test',
+          'verifyLocalTool',
+          false,
+        );
+        return validLocalToolResult(completed);
+      },
+    );
     generateTextMock.mockImplementationOnce(
       async (request: TelemetryRequest) => {
-        await emitCompletedCall(request, 'doctor-call', 'primary-test');
-        return validGeminiResult();
+        await emitCompletedCall(request, 'doctor-search-call', 'primary-test');
+        return validSearchResult();
       },
     );
 
@@ -341,18 +461,23 @@ describe('runDoctor', () => {
       sessionId: 'interactive-session',
     });
     expect(report.ok).toBe(true);
-    expect(dataset.runs).toEqual([
+    expect(dataset.runs).toEqual(expect.arrayContaining([
       expect.objectContaining({
         agentKind: 'doctor',
-        callId: 'doctor-call',
+        callId: 'doctor-local-call',
         surface: 'interactive',
       }),
-    ]);
+      expect.objectContaining({
+        agentKind: 'doctor',
+        callId: 'doctor-search-call',
+        surface: 'interactive',
+      }),
+    ]));
     expect(sessionUsage).toMatchObject({
-      agentRuns: 1,
-      completedRuns: 1,
-      modelCalls: 1,
-      toolCalls: 1,
+      agentRuns: 2,
+      completedRuns: 2,
+      modelCalls: 2,
+      toolCalls: 2,
     });
   });
 
@@ -482,7 +607,7 @@ describe('runDoctor', () => {
       expect(check).toEqual({
         name: 'Gemini API',
         status: 'fail',
-        detail: 'The Gemini check timed out.',
+        detail: 'Gemini did not finish before the request deadline. Retry the request.',
       });
     } finally {
       timeoutSpy.mockRestore();
@@ -515,8 +640,9 @@ describe('runDoctor', () => {
       '✗ Sleeper API: Sleeper is unavailable.',
     );
     expect(formatDoctorReport(report)).toContain(
-      '✗ Gemini API: The key is invalid.',
+      '✗ Gemini API: Gemini could not complete the request.',
     );
+    expect(formatDoctorReport(report)).not.toContain('The key is invalid.');
   });
 
   it('fails live checks that return empty source data', async () => {
@@ -597,21 +723,24 @@ async function emitCompletedCall(
   request: TelemetryRequest,
   callId: string,
   modelId: string,
+  toolName = 'google_search',
+  providerExecuted = true,
 ): Promise<void> {
   const telemetry = usageTelemetry(request);
+  const toolCallId = `${callId}-${toolName}`;
   const content = [
     {
-      dynamic: true,
+      dynamic: providerExecuted,
       input: { query: 'private current news query' },
-      providerExecuted: true,
-      toolCallId: `${callId}-search`,
-      toolName: 'google_search',
+      providerExecuted,
+      toolCallId,
+      toolName,
       type: 'tool-call',
     },
     {
       output: { private: 'provider search output' },
-      toolCallId: `${callId}-search`,
-      toolName: 'google_search',
+      toolCallId,
+      toolName,
       type: 'tool-result',
     },
   ];
@@ -658,8 +787,35 @@ async function emitCompletedCall(
   await telemetry.onEnd({ callId, finishReason: 'stop' } as never);
 }
 
-function validGeminiResult() {
+function mockSuccessfulGeminiVerification(): void {
+  streamTextMock.mockReturnValueOnce(validLocalToolResult());
+  generateTextMock.mockResolvedValueOnce(validSearchResult());
+}
+
+function validLocalToolResult(ready: Promise<unknown> = Promise.resolve()) {
   return {
+    finishReason: ready.then(() => 'stop'),
+    text: ready.then(() => 'SEB_TOOL_LOOP_OK'),
+    toolResults: ready.then(() => [{
+        output: { marker: 'seb-tool-ok' },
+        toolName: 'verifyLocalTool',
+      }]),
+  };
+}
+
+function rejectedLocalToolResult(rejected: Promise<never>) {
+  return {
+    finishReason: rejected,
+    text: rejected,
+    toolResults: rejected,
+  };
+}
+
+function validSearchResult() {
+  return {
+    finishReason: 'stop',
+    steps: [{ toolResults: [] }],
+    text: 'Current NFL report.',
     sources: [
       {
         id: 'source-1',

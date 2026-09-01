@@ -126,6 +126,8 @@ npm run contract:sources
 
 The answer job sends a fixed evidence object to Gemini.
 
+It also verifies one local tool result, one model continuation, and one grounded Google Search source.
+
 It requires the `GOOGLE_GENERATIVE_AI_API_KEY` repository secret.
 
 The job validates the structured answer schema, player identity, and recommendation limit.
@@ -181,6 +183,9 @@ Track these operational values.
 - Webhook response latency
 - Agent answer latency
 - Gemini error count by status
+- Successful agent-run rate
+- Failed run count after a returned client tool
+- Safe model error count by category
 - Sleeper error count by endpoint
 - nflverse download failures by release file
 - NWS error count by endpoint
@@ -188,6 +193,7 @@ Track these operational values.
 - Cache result count by fresh, updated, not-modified, and stale-if-error outcomes
 - Open request circuit count by source
 - SQLite write errors and database size
+- Structured `seb.telemetry.write_failed` warning count
 - Platform post and edit failures
 - Discord Gateway reconnect count
 - Redis connection failures

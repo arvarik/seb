@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 
 import Database from 'better-sqlite3';
 import { MockLanguageModelV4 } from 'ai/test';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createFantasyFootballAgent,
@@ -967,6 +967,124 @@ describe('SebUsageTelemetry', () => {
     expect(savedUsageText(database)).not.toContain(ERROR_NAME_SECRET);
   });
 
+  it('refines an error finish with the provider error category', () => {
+    const database = createDatabase();
+    const sessionUsage = createSessionUsage(new Date('2026-08-31T11:46:00.000Z'));
+    const telemetry = createTelemetry(database, sessionUsage, '2026-08-31T11:46:00.000Z');
+    const callId = 'run-invalid-request';
+
+    telemetry.onStart(startEvent(callId) as never);
+    telemetry.onEnd(endEvent(callId, 'error') as never);
+    telemetry.onError({
+      callId,
+      error: {
+        code: 'invalid_request',
+        message: 'Request contains an invalid argument.',
+      },
+    } as never);
+
+    expect(database.readUsageDataset().runs).toEqual([
+      expect.objectContaining({
+        errorKind: 'provider-invalid-request',
+        status: 'failed',
+      }),
+    ]);
+  });
+
+  it('records an HTTP 504 as a failed provider timeout', () => {
+    const database = createDatabase();
+    const sessionUsage = createSessionUsage(new Date('2026-08-31T11:46:05.000Z'));
+    const telemetry = createTelemetry(database, sessionUsage, '2026-08-31T11:46:05.000Z');
+    const callId = 'run-provider-timeout';
+
+    telemetry.onStart(startEvent(callId) as never);
+    telemetry.onError({ callId, error: { statusCode: 504 } } as never);
+
+    expect(database.readUsageDataset().runs).toEqual([
+      expect.objectContaining({
+        errorKind: 'provider-timeout',
+        status: 'failed',
+      }),
+    ]);
+    expect(sessionUsage).toMatchObject({ abortedRuns: 0, failedRuns: 1 });
+  });
+
+  it.each(['content-filter', 'length', 'tool-calls'])(
+    'preserves the %s finish reason when a provider error refines it',
+    (finishReason) => {
+      const database = createDatabase();
+      const sessionUsage = createSessionUsage(new Date('2026-08-31T11:46:15.000Z'));
+      const warningSink = vi.fn();
+      const telemetry = new SebUsageTelemetry({
+        agentKind: 'research',
+        database,
+        now: () => new Date('2026-08-31T11:46:15.000Z'),
+        sessionUsage,
+        surface: 'interactive',
+        warningSink,
+      });
+      const callId = `run-refined-${finishReason}`;
+
+      telemetry.onStart(startEvent(callId) as never);
+      telemetry.onEnd(endEvent(callId, finishReason) as never);
+      telemetry.onError({
+        callId,
+        error: { code: 'invalid_request' },
+      } as never);
+
+      expect(database.readUsageDataset().runs).toEqual([
+        expect.objectContaining({
+          errorKind: 'provider-invalid-request',
+          finalFinishReason: finishReason,
+          status: 'failed',
+        }),
+      ]);
+      expect(warningSink).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['content-filter', 'error', 'length', 'tool-calls'])(
+    'marks a terminal %s finish as incomplete',
+    (finishReason) => {
+      const database = createDatabase();
+      const sessionUsage = createSessionUsage(new Date('2026-08-31T11:46:30.000Z'));
+      const telemetry = createTelemetry(
+        database,
+        sessionUsage,
+        '2026-08-31T11:46:30.000Z',
+      );
+      const callId = `run-incomplete-${finishReason}`;
+
+      telemetry.onStart(startEvent(callId) as never);
+      telemetry.onEnd(endEvent(callId, finishReason) as never);
+
+      expect(database.readUsageDataset().runs).toEqual([
+        expect.objectContaining({
+          errorKind: `incomplete-${finishReason}`,
+          status: 'failed',
+        }),
+      ]);
+    },
+  );
+
+  it('records a tool approval pause as a normal terminal state', () => {
+    const database = createDatabase();
+    const sessionUsage = createSessionUsage(new Date('2026-08-31T11:46:45.000Z'));
+    const telemetry = createTelemetry(database, sessionUsage, '2026-08-31T11:46:45.000Z');
+    const callId = 'run-tool-approval';
+
+    telemetry.onStart(startEvent(callId) as never);
+    telemetry.onEnd({
+      callId,
+      content: [{ type: 'tool-approval-request' }],
+      finishReason: 'tool-calls',
+    } as never);
+
+    expect(database.readUsageDataset().runs).toEqual([
+      expect.objectContaining({ errorKind: null, status: 'completed' }),
+    ]);
+  });
+
   it('maps an unknown service tier to a safe stored category', () => {
     const database = createDatabase();
     const sessionUsage = createSessionUsage(new Date('2026-08-31T11:47:00.000Z'));
@@ -1508,6 +1626,41 @@ describe('SebUsageTelemetry', () => {
       totalTokens: 140,
     });
     expect(sessionUsage.storageWarning).not.toContain(RAW_ERROR_SECRET);
+  });
+
+  it('sends one safe warning when telemetry storage fails without a session', () => {
+    const storageError = new Error(RAW_ERROR_SECRET);
+    storageError.name = 'StorageError';
+    const warningSink = vi.fn();
+    const telemetry = new SebUsageTelemetry({
+      agentKind: 'research',
+      database: {
+        finishUsageRun: () => {
+          throw storageError;
+        },
+        putUsageStep: () => {
+          throw storageError;
+        },
+        putUsageToolCall: () => {
+          throw storageError;
+        },
+        startUsageRun: () => {
+          throw storageError;
+        },
+      },
+      surface: 'cli',
+      warningSink,
+    });
+
+    telemetry.onStart(startEvent('warning-run-1') as never);
+    telemetry.onStart(startEvent('warning-run-2') as never);
+
+    expect(warningSink).toHaveBeenCalledOnce();
+    expect(warningSink).toHaveBeenCalledWith({
+      errorKind: 'storage',
+      event: 'seb.telemetry.write_failed',
+    });
+    expect(JSON.stringify(warningSink.mock.calls)).not.toContain(RAW_ERROR_SECRET);
   });
 
   it('retries a transient final-write failure without double counting', () => {

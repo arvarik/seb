@@ -46,7 +46,11 @@ import {
   formatSessionData,
   formatSessionInstructions,
 } from './interactive/session.js';
-import { isModelCapacityError } from './model-capacity-error.js';
+import {
+  classifyModelError,
+  formatModelErrorForUser,
+  isModelCapacityError,
+} from './model-capacity-error.js';
 import { NflverseClient } from './nflverse/client.js';
 import { NewsClient } from './news/client.js';
 import { SleeperClient } from './sleeper/client.js';
@@ -120,7 +124,12 @@ interface AnswerResult {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    const message = (error as Record<string, unknown>).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+  }
+  return String(error);
 }
 
 export async function runCli(
@@ -478,6 +487,16 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
+class CliModelResponseError extends Error {
+  override readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super(formatModelErrorForUser(cause, 'cli'), { cause });
+    this.name = 'CliModelResponseError';
+    this.cause = cause;
+  }
+}
+
 function formatSnapshots(
   snapshots: readonly {
     asOf: string;
@@ -508,18 +527,22 @@ async function answerOneQuestion(
   }
 
   const selection = selectModels(environment, command.model);
-  if (command.json) {
-    const result = await generateAnswer(
-      selection,
-      prompt,
-      streams.stderr,
-      environment,
-    );
-    streams.stdout.write(`${JSON.stringify(result)}\n`);
-    return;
-  }
+  try {
+    if (command.json) {
+      const result = await generateAnswer(
+        selection,
+        prompt,
+        streams.stderr,
+        environment,
+      );
+      streams.stdout.write(`${JSON.stringify(result)}\n`);
+      return;
+    }
 
-  await streamAnswer(selection, prompt, streams, command.progress, environment);
+    await streamAnswer(selection, prompt, streams, command.progress, environment);
+  } catch (error) {
+    throw new CliModelResponseError(error);
+  }
 }
 
 async function generateAnswer(
@@ -991,7 +1014,9 @@ export async function launchCli(
     }
     process.exitCode = await runCli(arguments_);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = error instanceof CliUsageError || !classifyModelError(error)
+      ? errorMessage(error)
+      : formatModelErrorForUser(error, 'cli');
     const prefix = error instanceof CliUsageError ? 'Seb' : 'Seb failed';
     process.stderr.write(`${prefix}: ${message}\n`);
     if (error instanceof CliUsageError) {

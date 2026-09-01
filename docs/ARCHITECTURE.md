@@ -44,6 +44,12 @@ The agent runs AI SDK `pruneMessages` before each model request.
 
 This policy removes reasoning and old tool data from the active context.
 
+The interactive transport also limits model history to 24 recent messages.
+
+It also limits retained context to 120,000 estimated characters.
+
+One submitted prompt can contain at most 32,000 characters.
+
 The last allowed step disables tools and asks the model for the final answer.
 
 The active tool set controls the news instructions.
@@ -200,7 +206,7 @@ Each direct public source has one client class.
 - `WeatherClient` reads NWS GeoJSON endpoints.
 - `NewsClient` reads feeds, news sitemaps, and supported publisher pages.
 
-The production model uses the Gemini Interactions endpoint.
+The production model uses the standard Gemini `generateContent` endpoint.
 
 The model also receives two provider tools.
 
@@ -376,7 +382,7 @@ It reduces confidence when fresh required evidence includes a stale supplemental
 
 Seb uses the AI SDK telemetry integration interface for local usage records.
 
-The production model uses the Google Interactions API.
+The production model uses the standard Google `generateContent` API.
 
 AI SDK supplies normalized model-step usage, performance values, and tool lifecycle events.
 
@@ -402,7 +408,13 @@ Tool records separate client execution from provider execution.
 
 Tool outcomes include returned, error, invalid, cancelled, and unresolved.
 
-Analytics calculate totals, matched-call weighted token ratios, distributions, model groups, tool groups, repeated calls, and daily trends.
+Analytics calculate totals, token ratios, distributions, model groups, tool groups, repeated calls, and daily trends.
+
+They also calculate the successful run rate and failures after a returned client tool.
+
+The successful run rate measures agent runs, not complete user answers.
+
+Reports group failures by a bounded error category.
 
 Each ratio reports its matched-call count. A missing token class never becomes zero in a ratio.
 
@@ -478,7 +490,7 @@ Chat SDK test adapters check connector behavior without platform credentials.
 
 `npm run data:smoke` checks live nflverse and NWS data without Gemini.
 
-`npm run doctor` checks every source and one small Gemini request.
+`npm run doctor` checks every source, Google Search, and one streaming local Gemini tool continuation.
 
 Run the full local gate before each commit.
 

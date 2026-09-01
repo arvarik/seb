@@ -14,6 +14,7 @@ import { fantasyAnalysisSchema } from './analysis/output.js';
 import { pruneFantasyMessages } from './ai/context.js';
 import { bindToolRequestSignals } from './ai/request-signal.js';
 import { activeAiDevToolsTelemetry } from './ai/devtools.js';
+import { createGeminiLanguageModel } from './gemini-model.js';
 import { SleeperClient } from './sleeper/client.js';
 import { createSleeperTools } from './sleeper/tools.js';
 import { NflverseClient } from './nflverse/client.js';
@@ -230,7 +231,8 @@ function createLanguageModel(options: FantasyFootballAgentOptions) {
       throw new Error('The Google Generative AI API key is empty.');
     }
     googleProvider = createGoogle({ apiKey });
-    languageModel = googleProvider.interactions(
+    languageModel = createGeminiLanguageModel(
+      googleProvider,
       options.model ?? DEFAULT_GEMINI_MODEL,
     );
   }

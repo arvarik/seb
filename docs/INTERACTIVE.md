@@ -150,7 +150,7 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/week NUMBER|current|clear` | Sets or clears the active week. |
 | `/user NAME|clear` | Runs the legacy account connection command. |
 | `/leagues [SLEEPER_USER] [YEAR]` | Refreshes current or historical fantasy context. |
-| `/league ID|all` | Focuses one discovered league or all leagues. |
+| `/league [ID|all]` | Shows My Fantasy, or focuses one discovered league or all leagues. |
 | `/rosters [LEAGUE_ID]` | Lists every roster in a Sleeper league. |
 | `/roster ID|clear` | Sets or clears the Sleeper roster. |
 | `/team CODE|clear` | Sets or clears the NFL team. |
@@ -217,6 +217,7 @@ Use these advanced commands only when a question needs a different scope.
 | `/leagues [USER] [YEAR]` | Refreshes current or historical leagues. |
 | `/league ID` | Focuses one discovered Sleeper league. |
 | `/league all` | Returns My Fantasy to all discovered leagues. |
+| `/league` | Shows the current fantasy dashboard and discovered leagues. |
 | `/rosters [LEAGUE_ID]` | Lists every roster in the selected league. |
 | `/roster ID` | Sets the Sleeper roster ID. |
 | `/team CODE` | Sets an NFL team code, such as `SEA`. |
@@ -334,6 +335,10 @@ The section labels each source as `LIVE`, `CACHED`, or `STALE` and shows retriev
 
 Seb keeps an immutable source set for each answer during the session.
 
+Seb keeps at most 100 sources in one answer snapshot and 50 answer snapshots in one session.
+
+The live source tracker keeps at most 200 records.
+
 Seb accepts only HTTP and HTTPS web source links.
 
 Run `/new` to clear the source list and start a new model context.
@@ -353,6 +358,10 @@ The editor supports cursor movement, word movement, deletion, and multiline prom
 Press `Alt+Enter` to insert a new line.
 
 Bracketed paste keeps a multiline paste inside one prompt.
+
+One submitted prompt can contain at most 32,000 characters.
+
+Seb keeps at most 24 recent model messages and 120,000 estimated context characters.
 
 Use `Up` and `Down` to read prior prompts.
 
@@ -495,6 +504,10 @@ Run `/usage` to show model requests and token totals.
 
 Run `/stats` to show token classes, latency, models, tool calls, and daily trends.
 
+Both reports show the successful run rate and safe error categories.
+
+They count failures that occur after a client tool returns.
+
 Both commands default to the current interactive session.
 
 ```text
@@ -622,7 +635,9 @@ Run only local checks when the network is unavailable.
 /doctor offline
 ```
 
-The full doctor sends one small Gemini request.
+The full doctor sends two small Gemini requests.
+
+The first request tests a streaming local tool continuation. The second request tests grounded Google Search.
 
 ## Session boundaries
 

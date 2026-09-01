@@ -72,7 +72,7 @@ describe('SebConversationRunner', () => {
     });
   });
 
-  it('closes the renderer when transport setup fails', async () => {
+  it('shows a transport setup failure and keeps the conversation available', async () => {
     const close = vi.fn();
     const renderer = {
       ...rendererFor(['Question'], []),
@@ -87,15 +87,76 @@ describe('SebConversationRunner', () => {
       renderer,
       title: 'Seb test',
       transport,
-    }).run()).rejects.toThrow('Transport setup failed');
+    }).run()).resolves.toBeUndefined();
 
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('does not send a failed turn with the next prompt', async () => {
+    const sent: UIMessage[][] = [];
+    const renderer = rendererFor(
+      ['Failed question', 'Next question', undefined],
+      [undefined, assistant('answer-2', 'Second answer')],
+    );
+    const transport = transportFor((messages) => {
+      sent.push(structuredClone(messages));
+      return emptyStream();
+    });
+
+    await new SebConversationRunner({
+      renderer,
+      title: 'Seb test',
+      transport,
+    }).run();
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.map((message) => message.role)).toEqual(['user']);
+    expect(textOf(sent[1]?.[0])).toBe('Next question');
+  });
+
+  it('removes a failed approval continuation before the next prompt', async () => {
+    const approvalMessage = {
+      id: 'approval-message',
+      role: 'assistant',
+      parts: [{
+        approval: { id: 'approval-1', isAutomatic: false },
+        input: { target: 'example' },
+        state: 'approval-requested',
+        toolCallId: 'tool-1',
+        toolName: 'exampleTool',
+        type: 'dynamic-tool',
+      }],
+    } as UIMessage;
+    const sent: UIMessage[][] = [];
+    const renderer = rendererFor(
+      ['Run the tool', 'Next question', undefined],
+      [approvalMessage, undefined, assistant('answer-2', 'Second answer')],
+    );
+    const transport = transportFor((messages) => {
+      sent.push(structuredClone(messages));
+      return emptyStream();
+    });
+
+    await new SebConversationRunner({
+      chatId: 'failed-approval-chat',
+      renderer,
+      title: 'Seb test',
+      transport,
+    }).run();
+
+    expect(sent).toHaveLength(3);
+    expect(sent[1]?.map((message) => message.role)).toEqual([
+      'user',
+      'assistant',
+    ]);
+    expect(sent[2]?.map((message) => message.role)).toEqual(['user']);
+    expect(textOf(sent[2]?.[0])).toBe('Next question');
   });
 });
 
 function rendererFor(
   prompts: Array<string | undefined>,
-  responses: UIMessage[],
+  responses: Array<UIMessage | undefined>,
 ): SebConversationRenderer & { approvals: string[] } {
   let promptIndex = 0;
   let responseIndex = 0;

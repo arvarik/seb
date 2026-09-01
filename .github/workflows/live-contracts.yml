@@ -50,6 +50,8 @@ jobs:
         if: env.GOOGLE_GENERATIVE_AI_API_KEY != ''
         run: npm run contract:answer
 
-      - name: Report a missing answer-contract secret
+      - name: Reject a missing answer-contract secret
         if: env.GOOGLE_GENERATIVE_AI_API_KEY == ''
-        run: echo 'The GOOGLE_GENERATIVE_AI_API_KEY secret is not set. The answer contract did not run.'
+        run: |
+          echo 'The GOOGLE_GENERATIVE_AI_API_KEY secret is not set. The answer contract did not run.'
+          exit 1

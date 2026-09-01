@@ -421,6 +421,31 @@ describe('recommendation eligibility', () => {
     expect(result.leagueScoring).toBe('missing');
     expect(result.projection).toBe('ineligible');
   });
+
+  it('rejects cyclic and deeply nested tool output without recursion failure', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    let deep: Record<string, unknown> = {};
+    for (let depth = 0; depth < 200; depth += 1) deep = { next: deep };
+    cyclic.deep = deep;
+
+    const result = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Should I start Example Player in league 123456?',
+      sources: [directSource()],
+      toolResults: [
+        { toolName: 'findPlayers', output: cyclic },
+        { toolName: 'getLeagueOverview', output: cyclic },
+        { toolName: 'resolvePlayerIdentity', output: cyclic },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      identity: 'missing',
+      injury: 'missing',
+      leagueScoring: 'missing',
+    });
+  });
 });
 
 function evidence(

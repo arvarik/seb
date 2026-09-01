@@ -1,7 +1,14 @@
 import { createGoogle } from '@ai-sdk/google';
-import { generateText, type TelemetryOptions } from 'ai';
+import {
+  generateText,
+  stepCountIs,
+  streamText,
+  tool,
+  type TelemetryOptions,
+} from 'ai';
 import { existsSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { z } from 'zod';
 
 import {
   DEFAULT_GEMINI_FALLBACK_MODEL,
@@ -12,7 +19,12 @@ import {
   throwIfRequestAborted,
 } from './ai/request-signal.js';
 import { activeAiDevToolsTelemetry } from './ai/devtools.js';
-import { isModelCapacityError } from './model-capacity-error.js';
+import { createGeminiLanguageModel } from './gemini-model.js';
+import {
+  classifyModelError,
+  formatModelErrorForUser,
+  isModelCapacityError,
+} from './model-capacity-error.js';
 import { getSharedSebDatabase } from './data/sqlite-store.js';
 import { NflverseClient } from './nflverse/client.js';
 import { SleeperClient } from './sleeper/client.js';
@@ -37,11 +49,11 @@ export interface DoctorReport {
 }
 
 export interface GeminiVerificationTelemetryOptions {
-  agentKind: 'doctor' | 'setup';
+  agentKind: 'contract' | 'doctor' | 'setup';
   database?: SebUsageTelemetryOptions['database'];
   sessionId?: string;
   sessionUsage?: SebUsageTelemetryOptions['sessionUsage'];
-  surface: 'cli' | 'interactive';
+  surface: 'cli' | 'contract' | 'interactive';
 }
 
 export interface DoctorOptions {
@@ -77,6 +89,13 @@ export interface DoctorOptions {
     timeZone: string | null;
   }>;
   verifyPermissions?: () => DoctorCheck;
+}
+
+class GeminiVerificationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GeminiVerificationError';
+  }
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
@@ -266,13 +285,15 @@ async function checkGemini(
     return {
       name: 'Gemini API',
       status: 'pass',
-      detail: `${result.model} returned a grounded Google Search source.${suffix}`,
+      detail: `${result.model} completed a local tool loop and returned a grounded Google Search source.${suffix}`,
     };
   } catch (error) {
     return {
       name: 'Gemini API',
       status: 'fail',
-      detail: errorMessage(error),
+      detail: error instanceof GeminiVerificationError
+        ? error.message
+        : formatModelErrorForUser(error, 'cli'),
     };
   }
 }
@@ -434,28 +455,82 @@ async function sendGeminiTest(
   telemetry: TelemetryOptions,
 ): Promise<void> {
   const google = createGoogle({ apiKey });
-  const result = await generateText({
-    model: google(model),
+  const localResult = streamText({
+    model: createGeminiLanguageModel(google, model),
+    tools: {
+      searchCurrentNews: google.tools.googleSearch({
+        searchTypes: { webSearch: {} },
+      }),
+      verifyLocalTool: tool({
+        description: 'Returns a fixed marker for the Seb local tool-loop check.',
+        inputSchema: z.object({ marker: z.literal('seb') }),
+        execute: ({ marker }) => ({ marker: `${marker}-tool-ok` }),
+      }),
+    },
+    prompt: [
+      'Call verifyLocalTool once with the marker seb.',
+      'After the tool returns, write only SEB_TOOL_LOOP_OK.',
+    ].join(' '),
+    maxOutputTokens: 1_024,
+    prepareStep: ({ stepNumber }) =>
+      stepNumber === 0
+        ? {}
+        : { activeTools: [], toolChoice: 'none' },
+    stopWhen: stepCountIs(3),
+    abortSignal: signal,
+    telemetry,
+    toolChoice: { toolName: 'verifyLocalTool', type: 'tool' },
+  });
+  const [localFinishReason, localText, localToolResults] = await Promise.all([
+    localResult.finishReason,
+    localResult.text,
+    localResult.toolResults,
+  ]);
+  const completedLocalTool = localToolResults.some((toolResult) => {
+    if (toolResult.toolName !== 'verifyLocalTool') return false;
+    const output = toolResult.output;
+    return output !== null &&
+      typeof output === 'object' &&
+      (output as Record<string, unknown>).marker === 'seb-tool-ok';
+  });
+  if (
+    !completedLocalTool ||
+    localFinishReason !== 'stop' ||
+    localText.trim() !== 'SEB_TOOL_LOOP_OK'
+  ) {
+    throw new GeminiVerificationError(
+      'Gemini did not complete the local tool loop.',
+    );
+  }
+
+  const searchResult = await generateText({
+    model: createGeminiLanguageModel(google, model),
     tools: {
       searchCurrentNews: google.tools.googleSearch({
         searchTypes: { webSearch: {} },
       }),
     },
     prompt: [
-      'You must use the searchCurrentNews tool to find one current NFL news report.',
+      'You must use searchCurrentNews to find one current NFL news report.',
       'Do not answer from model memory.',
       'Give the publisher, publication date, headline, and source link.',
     ].join(' '),
-    maxOutputTokens: 256,
+    maxOutputTokens: 1_024,
     abortSignal: signal,
     telemetry,
   });
-  const hasValidWebSource = result.sources.some(
+  const hasValidWebSource = searchResult.sources.some(
     (source) =>
       source.sourceType === 'url' && normalizeWebUrl(source.url) !== null,
   );
-  if (!hasValidWebSource) {
-    throw new Error('Gemini Google Search returned no valid web source.');
+  if (
+    searchResult.finishReason !== 'stop' ||
+    !searchResult.text.trim() ||
+    !hasValidWebSource
+  ) {
+    throw new GeminiVerificationError(
+      'Gemini Google Search returned no valid web source.',
+    );
   }
 }
 
@@ -468,5 +543,11 @@ function requestSignalWithTimeout(
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (classifyModelError(error)) return formatModelErrorForUser(error);
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    const message = (error as Record<string, unknown>).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+  }
+  return String(error);
 }

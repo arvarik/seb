@@ -7,6 +7,7 @@ import {
 } from './agent.js';
 import { fantasyAnalysisSchema } from './analysis/output.js';
 import { getSharedSebDatabase } from './data/sqlite-store.js';
+import { verifyGeminiApi } from './doctor.js';
 import { isModelCapacityError } from './model-capacity-error.js';
 import { SebUsageTelemetry } from './usage/telemetry.js';
 
@@ -57,6 +58,17 @@ if (parsed.recommendation !== null) {
 if (!parsed.summary.includes('Contract Test Player')) {
   throw new Error('The live answer contract lost the supplied player identity.');
 }
+const toolLoop = await verifyGeminiApi(
+  apiKey,
+  model,
+  fallbackModel,
+  AbortSignal.timeout(45_000),
+  {
+    agentKind: 'contract',
+    database: getSharedSebDatabase(),
+    surface: 'contract',
+  },
+);
 
 process.stdout.write(`${JSON.stringify({
   confidence: parsed.confidence,
@@ -64,6 +76,7 @@ process.stdout.write(`${JSON.stringify({
   model,
   schemaVersion: parsed.schemaVersion,
   subject: parsed.subject,
+  toolLoopModel: toolLoop.model,
 }, null, 2)}\n`);
 
 async function requestAnswer(requestedModel: string) {

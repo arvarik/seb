@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import {
   createUIMessageStream,
   DirectChatTransport,
+  getToolName,
+  isToolUIPart,
   type ChatTransport,
   type UIMessage,
   type UIMessageChunk,
@@ -30,6 +32,7 @@ import {
   runDoctor,
   type GeminiVerificationTelemetryOptions,
 } from '../doctor.js';
+import { formatModelErrorForUser } from '../model-capacity-error.js';
 import {
   formatReplaySummary,
   runNflverseBaselineReplay,
@@ -95,6 +98,19 @@ import { InteractiveUiState } from './ui-state.js';
 type SebAgent = ReturnType<typeof createFantasyFootballAgent>;
 
 const VISIBLE_WEB_SOURCE_LIMIT = 3;
+const INTERACTIVE_PROMPT_CHARACTER_LIMIT = 32_000;
+const MODEL_CONTEXT_CHARACTER_LIMIT = 120_000;
+const MODEL_MESSAGE_LIMIT = 24;
+const TRACKED_MESSAGE_LIMIT = 96;
+
+type RecommendationStreamToolState = {
+  input: unknown;
+  toolCallId: string;
+  toolName: string;
+} & (
+  | { state: 'pending' }
+  | { output: unknown; state: 'completed' }
+);
 
 export interface SebInteractiveTransportOptions {
   agent: SebAgent;
@@ -126,7 +142,7 @@ function cloneSessionState(state: SessionState): SessionState {
 }
 
 export class SebInteractiveTransport implements ChatTransport<UIMessage> {
-  private readonly commandMessageIds = new Set<string>();
+  private readonly localOnlyMessageIds = new Set<string>();
   private readonly delegate: ChatTransport<UIMessage>;
   private readonly options: SebInteractiveTransportOptions;
   private readonly profileStore: SetupProfileStore;
@@ -141,6 +157,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     });
     this.delegate = new DirectChatTransport({
       agent: options.agent,
+      onError: (error) => formatModelErrorForUser(error, 'interactive'),
       sendSources: true,
     }) as unknown as ChatTransport<UIMessage>;
   }
@@ -157,7 +174,33 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       else options.abortSignal.addEventListener('abort', abortUsage, { once: true });
     }
     const lastMessage = options.messages.at(-1);
-    const text = lastMessage?.role === 'user' ? messageText(lastMessage).trim() : '';
+    const rawText = lastMessage?.role === 'user' ? messageText(lastMessage) : '';
+    if (rawText.length > INTERACTIVE_PROMPT_CHARACTER_LIMIT) {
+      if (lastMessage) this.markLocalOnlyMessage(lastMessage.id);
+      return localTextStream(
+        `Input error: The prompt exceeds ${INTERACTIVE_PROMPT_CHARACTER_LIMIT.toLocaleString('en-US')} characters. Shorten it, then retry.`,
+      );
+    }
+    const approvalContinuation = lastMessage?.role === 'assistant' &&
+      hasRespondedApproval(lastMessage);
+    const latestUser = latestUserMessage(options.messages);
+    if (
+      approvalContinuation &&
+      estimateMessages(currentConversationTurn(options.messages)) >
+        MODEL_CONTEXT_CHARACTER_LIMIT
+    ) {
+      if (latestUser) this.markLocalOnlyMessage(latestUser.id);
+      if (lastMessage) this.markLocalOnlyMessage(lastMessage.id);
+      return localTextStream(
+        'Context error: The approval turn is too large to continue safely. Start a shorter request.',
+      );
+    }
+    const text = lastMessage?.role === 'user'
+      ? rawText.trim()
+      : approvalContinuation && latestUser
+      ? this.skillPromptByMessageId.get(latestUser.id) ??
+        messageText(latestUser).trim()
+      : '';
     const parsed = parseInteractiveCommandInput(text);
     if (lastMessage?.role === 'user' && parsed?.command?.name === 'skill') {
       const invocation = parseSkillInvocation(parsed.argumentText);
@@ -213,7 +256,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       );
     }
     if (lastMessage?.role === 'user' && parsed) {
-      this.commandMessageIds.add(lastMessage.id);
+      this.markLocalOnlyMessage(lastMessage.id);
       let response: string;
       try {
         response = await runWithRequestSignal(
@@ -226,7 +269,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       return localTextStream(recordSuggestions(response, this.options.session, this.uiState));
     }
 
-    this.options.sources.clear();
+    if (!approvalContinuation) this.options.sources.clear();
     const stream = await this.delegate.sendMessages({
       ...options,
       messages: this.modelMessages(options.messages),
@@ -240,11 +283,24 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       recommendationContextQuestion(text, previousUserPrompt(options.messages)),
       (error) => usageTelemetry?.closeUnfinished(error),
       (reason) => usageTelemetry?.abortUnfinished(reason),
+      approvalContinuation
+        ? recommendationToolState(options.messages)
+        : [],
     );
   }
 
   reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {
     return Promise.resolve(null);
+  }
+
+  private markLocalOnlyMessage(messageId: string): void {
+    this.localOnlyMessageIds.delete(messageId);
+    this.localOnlyMessageIds.add(messageId);
+    while (this.localOnlyMessageIds.size > TRACKED_MESSAGE_LIMIT) {
+      const oldestMessageId = this.localOnlyMessageIds.keys().next().value;
+      if (typeof oldestMessageId !== 'string') break;
+      this.localOnlyMessageIds.delete(oldestMessageId);
+    }
   }
 
   private modelMessages(messages: UIMessage[]): UIMessage[] {
@@ -256,7 +312,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     const filtered: UIMessage[] = [];
     let skipNextAssistant = false;
     for (const message of active) {
-      if (this.commandMessageIds.has(message.id)) {
+      if (this.localOnlyMessageIds.has(message.id)) {
         skipNextAssistant = true;
         continue;
       }
@@ -269,7 +325,37 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       const modelMessage = skillPrompt ? replaceMessageText(message, skillPrompt) : message;
       if (modelMessage.parts.length > 0) filtered.push(modelMessage);
     }
-    return filtered;
+    const retainedIds = new Set(
+      messages.slice(-TRACKED_MESSAGE_LIMIT).map((message) => message.id),
+    );
+    for (const messageId of this.localOnlyMessageIds) {
+      if (!retainedIds.has(messageId)) this.localOnlyMessageIds.delete(messageId);
+    }
+    for (const messageId of this.skillPromptByMessageId.keys()) {
+      if (!retainedIds.has(messageId)) this.skillPromptByMessageId.delete(messageId);
+    }
+    const countBounded = filtered.slice(-MODEL_MESSAGE_LIMIT);
+    const firstUserIndex = countBounded.findIndex(
+      (message) => message.role === 'user',
+    );
+    const normalized = firstUserIndex < 0
+      ? []
+      : countBounded.slice(firstUserIndex);
+    const turns: UIMessage[][] = [];
+    for (const message of normalized) {
+      if (message.role === 'user' || turns.length === 0) turns.push([message]);
+      else turns.at(-1)?.push(message);
+    }
+    const selected: UIMessage[][] = [];
+    let remaining = MODEL_CONTEXT_CHARACTER_LIMIT;
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const turn = turns[index] ?? [];
+      const size = estimateMessages(turn, remaining + 1);
+      if (size > remaining) break;
+      selected.unshift(turn);
+      remaining -= size;
+    }
+    return selected.flat();
   }
 
   private async runCommand(
@@ -458,6 +544,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'league': {
         state.mode = 'fantasy';
         const value = arguments_[0];
+        if (!value) return formatFantasyDashboard(state);
         const leagueId = value?.toLowerCase() === 'clear' || value?.toLowerCase() === 'all'
           ? null
           : optionalIdentifier(value, /^\d+$/, 'Sleeper league ID');
@@ -525,7 +612,9 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           return 'The latest answer has no recorded evidence.';
         }
         return [
-          '## Evidence for the latest answer',
+          evidence
+            ? '## Evidence for the latest answer'
+            : '## Sources not attached to a completed answer',
           '',
           ...(evidence ? [`Answer: \`${evidence.answerId}\` · captured ${evidence.capturedAt}`, ''] : []),
           ...sources.map(
@@ -855,8 +944,10 @@ export function decorateResponseStream(
   recommendationQuestion = userPrompt,
   onStreamError?: (error: unknown) => void,
   onConsumerCancel?: (reason: unknown) => void,
+  initialToolState: readonly RecommendationStreamToolState[] = [],
 ): ReadableStream<UIMessageChunk> {
   const decisionRequested = questionRequestsRecommendation(recommendationQuestion);
+  const pendingApprovals = new Map<string, string>();
   const toolCalls = new Map<string, { input: unknown; toolName: string }>();
   const toolResults: RecommendationToolResult[] = [];
   const initialPlayer = state.player;
@@ -865,9 +956,41 @@ export function decorateResponseStream(
   const requestedPlayers = new Set<string>();
   const teamCandidates = new Set<string>();
   const requestedTeams = new Set<string>();
+  const completedToolCallIds = new Set<string>();
+  for (const item of initialToolState) {
+    const requested = resolveUserRequestedToolContext(
+      item.toolName,
+      item.input,
+      userPrompt,
+    );
+    addStreamSubject(requested.player, requestedPlayers);
+    addStreamSubject(requested.team, requestedTeams);
+    if (item.state === 'pending') {
+      toolCalls.set(item.toolCallId, {
+        input: item.input,
+        toolName: item.toolName,
+      });
+      continue;
+    }
+    completedToolCallIds.add(item.toolCallId);
+    toolResults.push({
+      input: item.input,
+      output: item.output,
+      toolName: item.toolName,
+    });
+    const confirmed = resolveUserConfirmedToolContext(
+      item.toolName,
+      item.input,
+      item.output,
+      userPrompt,
+    );
+    addStreamSubject(confirmed.player, playerCandidates);
+    addStreamSubject(confirmed.team, teamCandidates);
+  }
   let bufferedText = '';
   let answerId = `answer-${crypto.randomUUID()}`;
   let consumerCancelRecorded = false;
+  let streamFailed = false;
   let streamErrorRecorded = false;
   const recordConsumerCancel = (reason: unknown): void => {
     if (consumerCancelRecorded) return;
@@ -891,14 +1014,17 @@ export function decorateResponseStream(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
       transform(chunk, controller) {
         if (chunk.type === 'error') {
+          streamFailed = true;
           recordStreamError(new Error(chunk.errorText));
         }
         if (chunk.type === 'start' && chunk.messageId) answerId = chunk.messageId;
         if (chunk.type === 'tool-input-available') {
-          toolCalls.set(chunk.toolCallId, {
-            input: chunk.input,
-            toolName: chunk.toolName,
-          });
+          if (!completedToolCallIds.has(chunk.toolCallId)) {
+            toolCalls.set(chunk.toolCallId, {
+              input: chunk.input,
+              toolName: chunk.toolName,
+            });
+          }
           const requested = resolveUserRequestedToolContext(
             chunk.toolName,
             chunk.input,
@@ -907,9 +1033,19 @@ export function decorateResponseStream(
           addStreamSubject(requested.player, requestedPlayers);
           addStreamSubject(requested.team, requestedTeams);
         }
+        if (chunk.type === 'tool-approval-request') {
+          pendingApprovals.set(chunk.approvalId, chunk.toolCallId);
+        }
+        if (chunk.type === 'tool-approval-response') {
+          pendingApprovals.delete(chunk.approvalId);
+        }
         if (chunk.type === 'tool-output-available') {
-          const toolCall = toolCalls.get(chunk.toolCallId);
+          deletePendingApproval(pendingApprovals, chunk.toolCallId);
+          const toolCall = completedToolCallIds.has(chunk.toolCallId)
+            ? undefined
+            : toolCalls.get(chunk.toolCallId);
           if (toolCall) {
+            completedToolCallIds.add(chunk.toolCallId);
             toolResults.push({
               input: toolCall.input,
               output: chunk.output,
@@ -927,6 +1063,7 @@ export function decorateResponseStream(
           }
         }
         if (chunk.type === 'tool-output-error') {
+          deletePendingApproval(pendingApprovals, chunk.toolCallId);
           toolCalls.delete(chunk.toolCallId);
         }
         if (chunk.type === 'source-url') {
@@ -939,29 +1076,44 @@ export function decorateResponseStream(
           if (url) sources.recordUrlSource(source);
         }
         if (chunk.type === 'finish') {
-          commitStreamSubject(
-            state,
-            playerCandidates,
-            requestedPlayers,
-            initialPlayer,
-            'player',
-          );
-          commitStreamSubject(
-            state,
-            teamCandidates,
-            requestedTeams,
-            initialTeam,
-            'team',
-          );
-          const evidence = sources.snapshot(answerId);
-          uiState.recordAnswerEvidence(evidence);
-          if (decisionRequested) {
-            const answer = chunk.finishReason === 'stop'
+          const awaitsApproval = chunk.finishReason === 'tool-calls' &&
+            pendingApprovals.size > 0;
+          if (!streamFailed && chunk.finishReason !== 'stop' && !awaitsApproval) {
+            streamFailed = true;
+            controller.enqueue({
+              type: 'error',
+              errorText: incompleteFinishMessage(chunk.finishReason),
+            });
+          }
+          const completed = !streamFailed && chunk.finishReason === 'stop';
+          const evidence = completed ? sources.snapshot(answerId) : undefined;
+          if (completed && evidence) {
+            commitStreamSubject(
+              state,
+              playerCandidates,
+              requestedPlayers,
+              initialPlayer,
+              'player',
+            );
+            commitStreamSubject(
+              state,
+              teamCandidates,
+              requestedTeams,
+              initialTeam,
+              'team',
+            );
+            uiState.recordAnswerEvidence(evidence);
+          }
+          if (
+            decisionRequested &&
+            (completed || chunk.finishReason !== 'tool-calls')
+          ) {
+            const answer = completed
               ? enforceFreeformRecommendation(
                 bufferedText,
                 buildFreeformRecommendationEvidence({
                   question: recommendationQuestion,
-                  sources: evidence.sources,
+                  sources: evidence?.sources ?? [],
                   toolResults,
                 }),
               ).answer
@@ -977,9 +1129,11 @@ export function decorateResponseStream(
             controller.enqueue({ type: 'text-end', id: decisionId });
             controller.enqueue({ type: 'finish-step' });
           }
-          const evidenceText = formatEvidenceMarkdown(evidence.sources, {
-            limit: VISIBLE_WEB_SOURCE_LIMIT,
-          });
+          const evidenceText = evidence
+            ? formatEvidenceMarkdown(evidence.sources, {
+              limit: VISIBLE_WEB_SOURCE_LIMIT,
+            })
+            : '';
           if (evidenceText) {
             const sourceId = `sources-${crypto.randomUUID()}`;
             controller.enqueue({ type: 'start-step' });
@@ -992,8 +1146,10 @@ export function decorateResponseStream(
             controller.enqueue({ type: 'text-end', id: sourceId });
             controller.enqueue({ type: 'finish-step' });
           }
-          const suggestions = getContextualSuggestions(state).slice(0, 3);
-          uiState.suggestions = suggestions;
+          if (completed) {
+            const suggestions = getContextualSuggestions(state).slice(0, 3);
+            uiState.suggestions = suggestions;
+          }
         }
         if (
           decisionRequested &&
@@ -1076,11 +1232,130 @@ function incompleteRecommendationMessage(): string {
 }
 
 function previousUserPrompt(messages: readonly UIMessage[]): string | undefined {
-  for (let index = messages.length - 2; index >= 0; index -= 1) {
+  let skippedCurrent = false;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.role === 'user') return messageText(message).trim() || undefined;
+    if (message?.role !== 'user') continue;
+    if (!skippedCurrent) {
+      skippedCurrent = true;
+      continue;
+    }
+    return messageText(message).trim() || undefined;
   }
   return undefined;
+}
+
+function latestUserMessage(messages: readonly UIMessage[]): UIMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === 'user') return message;
+  }
+  return undefined;
+}
+
+function hasRespondedApproval(message: UIMessage): boolean {
+  return message.parts.some(
+    (part) => isToolUIPart(part) && part.state === 'approval-responded',
+  );
+}
+
+function recommendationToolState(
+  messages: readonly UIMessage[],
+): RecommendationStreamToolState[] {
+  const latestUserIndex = messages.findLastIndex(
+    (message) => message.role === 'user',
+  );
+  const records = new Map<string, RecommendationStreamToolState>();
+  for (const message of messages.slice(latestUserIndex + 1)) {
+    if (message.role !== 'assistant') continue;
+    for (const part of message.parts) {
+      if (!isToolUIPart(part) || !('input' in part)) continue;
+      const toolName = getToolName(part);
+      if (part.state === 'output-available') {
+        records.set(part.toolCallId, {
+          input: part.input,
+          output: part.output,
+          state: 'completed',
+          toolCallId: part.toolCallId,
+          toolName,
+        });
+      } else if (
+        part.state === 'input-available' ||
+        part.state === 'approval-requested' ||
+        part.state === 'approval-responded'
+      ) {
+        if (records.get(part.toolCallId)?.state === 'completed') continue;
+        records.set(part.toolCallId, {
+          input: part.input,
+          state: 'pending',
+          toolCallId: part.toolCallId,
+          toolName,
+        });
+      }
+    }
+  }
+  return [...records.values()];
+}
+
+function currentConversationTurn(messages: readonly UIMessage[]): UIMessage[] {
+  const latestUserIndex = messages.findLastIndex(
+    (message) => message.role === 'user',
+  );
+  return latestUserIndex < 0 ? [] : messages.slice(latestUserIndex);
+}
+
+function estimateMessages(
+  messages: readonly UIMessage[],
+  limit = MODEL_CONTEXT_CHARACTER_LIMIT + 1,
+): number {
+  return estimateValueCharacters(messages, limit, new WeakSet(), 0);
+}
+
+function estimateValueCharacters(
+  value: unknown,
+  limit: number,
+  seen: WeakSet<object>,
+  depth: number,
+): number {
+  if (limit <= 0) return 1;
+  if (typeof value === 'string') return Math.min(limit, value.length + 2);
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'number' ||
+    typeof value === 'bigint'
+  ) return Math.min(limit, String(value).length);
+  if (typeof value !== 'object' || depth >= 24) return 1;
+  if (seen.has(value)) return 1;
+  seen.add(value);
+  let total = 2;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      total += 1;
+      if (total >= limit) break;
+      total += estimateValueCharacters(
+        item,
+        limit - total,
+        seen,
+        depth + 1,
+      );
+      if (total >= limit) break;
+    }
+  } else {
+    for (const key in value) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+      total += key.length + 3;
+      if (total >= limit) break;
+      total += estimateValueCharacters(
+        (value as Record<string, unknown>)[key],
+        limit - total,
+        seen,
+        depth + 1,
+      );
+      if (total >= limit) break;
+    }
+  }
+  return Math.min(total, limit);
 }
 
 function recordSuggestions(
@@ -1248,6 +1523,25 @@ function markdownTranscript(messages: readonly UIMessage[]): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function incompleteFinishMessage(finishReason: string | undefined): string {
+  if (finishReason === 'length') {
+    return 'Gemini reached the output limit before it completed the answer. Ask a narrower question, then retry.';
+  }
+  if (finishReason === 'content-filter') {
+    return 'Gemini stopped the answer because a safety filter blocked the response.';
+  }
+  return 'Gemini stopped before it completed the answer. Run `/doctor` and `/stats session`, then retry.';
+}
+
+function deletePendingApproval(
+  approvals: Map<string, string>,
+  toolCallId: string,
+): void {
+  for (const [approvalId, pendingToolCallId] of approvals) {
+    if (pendingToolCallId === toolCallId) approvals.delete(approvalId);
+  }
 }
 
 function parseUsageScope(

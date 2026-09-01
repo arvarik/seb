@@ -96,8 +96,11 @@ export interface UsageAnalyticsReport {
     aborted: number;
     agentKinds: NamedCount[];
     completed: number;
+    successfulRunRatePercent: number | null;
     durationMs: Distribution | null;
+    errorKinds: NamedCount[];
     failed: number;
+    failedAfterReturnedToolRuns: number;
     modelCallsPerRun: Distribution | null;
     noModelCallRuns: number;
     noToolRuns: number;
@@ -268,6 +271,19 @@ export function analyzeUsage(
   const toolOutcomes = emptyOutcomes();
   for (const tool of dataset.toolCalls) toolOutcomes[tool.outcome] += 1;
   const repeated = repeatedToolCalls(dataset.toolCalls);
+  const completedRuns = countRuns(dataset.runs, 'completed');
+  const successfulRuns = dataset.runs.filter(
+    (run) => run.status === 'completed' && run.finalFinishReason === 'stop',
+  ).length;
+  const failedRuns = countRuns(dataset.runs, 'failed');
+  const measuredRuns = successfulRuns + failedRuns;
+  const failedAfterReturnedToolRuns = dataset.runs.filter((run) =>
+    run.status === 'failed' &&
+    toolsByRun.get(run.callId)?.some(
+      (tool) =>
+        tool.executionLocation === 'client' && tool.outcome === 'returned',
+    )
+  ).length;
   const inconsistentModelCalls = dataset.steps.filter(isInconsistentStep).length;
   const missingTokenUsageCalls = dataset.steps.filter(
     (step) => !hasAnyTokenUsage(step),
@@ -282,6 +298,9 @@ export function analyzeUsage(
   }
   if (inconsistentModelCalls > 0) {
     notes.push('Some token fields conflict. Seb kept the original values.');
+  }
+  if (failedAfterReturnedToolRuns > 0) {
+    notes.push('One or more runs failed after a client tool returned.');
   }
   const report: UsageAnalyticsReport = {
     dataQuality: {
@@ -307,9 +326,17 @@ export function analyzeUsage(
     runs: {
       aborted: countRuns(dataset.runs, 'aborted'),
       agentKinds: countNames(dataset.runs, (run) => run.agentKind),
-      completed: countRuns(dataset.runs, 'completed'),
+      completed: completedRuns,
+      successfulRunRatePercent: measuredRuns === 0
+        ? null
+        : round(successfulRuns / measuredRuns * 100),
       durationMs: distribution(runDurations(dataset.runs)),
-      failed: countRuns(dataset.runs, 'failed'),
+      errorKinds: countNames(
+        dataset.runs.filter((run) => run.errorKind !== null),
+        (run) => run.errorKind ?? 'unknown',
+      ),
+      failed: failedRuns,
+      failedAfterReturnedToolRuns,
       modelCallsPerRun: distribution(callsPerRun),
       noModelCallRuns: callsPerRun.filter((count) => count === 0).length,
       noToolRuns: toolsPerRun.filter((count) => count === 0).length,
@@ -444,6 +471,7 @@ export function formatUsageReport(report: UsageAnalyticsReport): string {
     '',
     `- Range: ${formatWindow(report.scope)}`,
     `- Agent runs: ${report.runs.total} (${report.runs.completed} completed, ${report.runs.failed} failed, ${report.runs.aborted} cancelled, ${report.runs.unfinished} unfinished)`,
+    `- Successful run rate: ${report.runs.successfulRunRatePercent === null ? 'not available' : formatPercent(report.runs.successfulRunRatePercent)}`,
     `- Model calls: ${report.steps.total}`,
     `- Input tokens: ${formatMetric(report.tokens.input)}`,
     `- Non-cached input tokens: ${formatMetric(report.tokens.noCacheInput)}`,
@@ -456,6 +484,14 @@ export function formatUsageReport(report: UsageAnalyticsReport): string {
     `- Provider total tokens: ${formatMetric(report.tokens.providerTotal)}`,
     `- Tool calls: ${report.tools.total} (${report.tools.clientCalls} client, ${report.tools.providerCalls} provider)`,
   ];
+  if (report.runs.failedAfterReturnedToolRuns > 0) {
+    lines.push(
+      `- Runs that failed after a client tool returned: ${report.runs.failedAfterReturnedToolRuns}`,
+    );
+  }
+  if (report.runs.errorKinds.length > 0) {
+    lines.push(`- Error categories: ${formatNamedCounts(report.runs.errorKinds)}`);
+  }
   if (report.tokens.ratios.cacheReadInputPercent.value !== null) {
     lines.push(
       `- Cache-read share: ${formatPercentMetric(report.tokens.ratios.cacheReadInputPercent)}`,
@@ -491,6 +527,9 @@ export function formatStatsReport(report: UsageAnalyticsReport): string {
     '',
     `- Agent runs: ${report.runs.total}`,
     `- Run outcomes: ${report.runs.completed} completed, ${report.runs.failed} failed, ${report.runs.aborted} cancelled, ${report.runs.unfinished} unfinished`,
+    `- Successful run rate: ${report.runs.successfulRunRatePercent === null ? 'not available' : formatPercent(report.runs.successfulRunRatePercent)}`,
+    `- Error categories: ${formatNamedCounts(report.runs.errorKinds)}`,
+    `- Runs that failed after a client tool returned: ${report.runs.failedAfterReturnedToolRuns}`,
     `- Model calls: ${report.steps.total}`,
     `- Model calls per run: ${formatDistribution(report.runs.modelCallsPerRun)}`,
     `- Agent run duration: ${formatDurationDistribution(report.runs.durationMs)}`,

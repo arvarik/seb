@@ -20,7 +20,7 @@ This design lets AI SDK package updates stay independent from the terminal inter
 
 ## 1. Direct and grounded current news
 
-The production Gemini agent uses the Gemini Interactions API.
+The production Gemini agent uses the standard Gemini `generateContent` API.
 
 The agent includes a direct news tool, Google Search, and URL Context.
 
@@ -119,6 +119,8 @@ The policy also removes empty messages.
 
 Recent user and assistant text remains available.
 
+The interactive transport keeps at most 24 recent model messages.
+
 This policy reduces token use during long interactive and connector sessions.
 
 ## 4. Tool input examples
@@ -135,9 +137,9 @@ This feature improves tool selection without changing the tool input schema.
 
 ## 5. Local usage telemetry
 
-The production Gemini model uses the Google Interactions API.
+The production Gemini model uses the standard Google `generateContent` API.
 
-Google returns interaction usage for input, output, thought, cached, tool-use, and total tokens when those values exist.
+Google returns input, output, thought, cached, tool-use, and total token values when those values exist.
 
 AI SDK normalizes model usage and performance for each logical model step.
 
@@ -186,6 +188,14 @@ The local analytics integration ignores content in both configurations.
 The analytics tables do not contain prompts, answers, tool inputs, tool results, or raw errors.
 
 The `/usage` and `/stats` commands read these local records without a Gemini request.
+
+The reports group safe error categories and calculate the successful run rate.
+
+They also count failed runs that follow a returned client tool.
+
+The successful run rate counts runs that end with `stop` against those runs plus failed runs.
+
+It excludes approval pauses, cancellations, and unfinished runs. It does not measure completed user answers.
 
 The JSON reports use stable schema version 1.
 
@@ -241,6 +251,14 @@ seb ask --json "Find current official NFL news and cite the publisher and date."
 
 Confirm that the result includes web source links.
 
+Run the doctor to verify Google Search and one streaming local tool continuation.
+
+The local check registers Google Search beside the local tool. This shape matches the production tool catalog.
+
+```bash
+npm run doctor
+```
+
 Run the live first-class source probe without Gemini.
 
 ```bash
@@ -253,7 +271,8 @@ These official sources define the current telemetry and usage basis.
 
 - [AI SDK telemetry](https://ai-sdk.dev/docs/ai-sdk-core/telemetry)
 - [AI SDK tool calling](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling)
-- [Gemini Interactions API](https://ai.google.dev/api/interactions-api)
+- [Gemini generateContent API](https://ai.google.dev/api/generate-content)
+- [Gemini function calling](https://ai.google.dev/gemini-api/docs/function-calling)
 - [Gemini token guidance](https://ai.google.dev/gemini-api/docs/tokens)
 - [Gemini rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)
 - [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/)

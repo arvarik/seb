@@ -28,7 +28,10 @@ import {
   type RecommendationToolResult,
 } from '../analysis/recommendation-eligibility.js';
 import { getSharedSebDatabase } from '../data/sqlite-store.js';
-import { isModelCapacityError } from '../model-capacity-error.js';
+import {
+  formatModelErrorForUser,
+  isModelCapacityError,
+} from '../model-capacity-error.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { NewsClient } from '../news/client.js';
 import { SleeperClient } from '../sleeper/client.js';
@@ -60,7 +63,7 @@ export class ModelResponseError extends Error {
   override readonly cause: unknown;
 
   constructor(cause: unknown, emittedOutput: boolean) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    super(formatModelErrorForUser(cause, 'connector'), { cause });
     this.name = 'ModelResponseError';
     this.cause = cause;
     this.emittedOutput = emittedOutput;

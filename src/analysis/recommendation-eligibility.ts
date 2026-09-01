@@ -63,6 +63,13 @@ const TIMEBOXED_PLAYER_COMPARISON =
 const START_SIT_REQUEST = /\b(?:bench|lineup|sit|start)\b/iu;
 const DECISION_FOLLOW_UP =
   /^(?:and\b|or\b|what\s+about\b|how\s+about\b|which\s+one\b|compare\b|versus\b|vs\.?\b)|\binstead\??$/iu;
+const MAX_EVIDENCE_TRAVERSAL_DEPTH = 24;
+const MAX_EVIDENCE_TRAVERSAL_NODES = 10_000;
+
+interface EvidenceTraversal {
+  remaining: number;
+  seen: WeakSet<object>;
+}
 
 const PLAYER_IDENTITY_TOOLS = new Set([
   'findPlayers',
@@ -453,24 +460,38 @@ function projectionEligibilityState(
     : 'ineligible';
 }
 
-function findIdentityStatus(value: unknown): string | null {
-  if (!value || typeof value !== 'object') return null;
+function findIdentityStatus(
+  value: unknown,
+  traversal = createEvidenceTraversal(),
+  depth = 0,
+): string | null {
+  if (!enterEvidenceNode(value, traversal, depth)) return null;
   if (Array.isArray(value)) {
     for (const item of value) {
-      const status = findIdentityStatus(item);
+      const status = findIdentityStatus(item, traversal, depth + 1);
       if (status) return status;
     }
     return null;
   }
   const record = value as Record<string, unknown>;
   if (typeof record.status === 'string') return record.status;
-  if (record.resolution) return findIdentityStatus(record.resolution);
+  if (record.resolution) {
+    return findIdentityStatus(record.resolution, traversal, depth + 1);
+  }
   return null;
 }
 
-function hasPlayerStatusFields(value: unknown): boolean {
-  if (!value || typeof value !== 'object') return false;
-  if (Array.isArray(value)) return value.some(hasPlayerStatusFields);
+function hasPlayerStatusFields(
+  value: unknown,
+  traversal = createEvidenceTraversal(),
+  depth = 0,
+): boolean {
+  if (!enterEvidenceNode(value, traversal, depth)) return false;
+  if (Array.isArray(value)) {
+    return value.some((item) =>
+      hasPlayerStatusFields(item, traversal, depth + 1)
+    );
+  }
   const record = value as Record<string, unknown>;
   if (
     'injuryStatus' in record ||
@@ -478,12 +499,20 @@ function hasPlayerStatusFields(value: unknown): boolean {
   ) {
     return true;
   }
-  return Object.values(record).some(hasPlayerStatusFields);
+  return Object.values(record).some((item) =>
+    hasPlayerStatusFields(item, traversal, depth + 1)
+  );
 }
 
-function hasScoringSettings(value: unknown): boolean {
-  if (!value || typeof value !== 'object') return false;
-  if (Array.isArray(value)) return value.some(hasScoringSettings);
+function hasScoringSettings(
+  value: unknown,
+  traversal = createEvidenceTraversal(),
+  depth = 0,
+): boolean {
+  if (!enterEvidenceNode(value, traversal, depth)) return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => hasScoringSettings(item, traversal, depth + 1));
+  }
   const record = value as Record<string, unknown>;
   if (
     ('scoringSettings' in record && isNonEmptyRecord(record.scoringSettings)) ||
@@ -491,7 +520,9 @@ function hasScoringSettings(value: unknown): boolean {
   ) {
     return true;
   }
-  return Object.values(record).some(hasScoringSettings);
+  return Object.values(record).some((item) =>
+    hasScoringSettings(item, traversal, depth + 1)
+  );
 }
 
 function hasProjectionPlayerStatus(value: unknown): boolean {
@@ -575,13 +606,24 @@ function toolInputPlayerSubjects(result: RecommendationToolResult): string[] {
 
 function playerSubjects(values: readonly unknown[]): string[] {
   const output: string[] = [];
-  for (const value of values) collectPlayerSubjects(value, output);
+  const traversal = createEvidenceTraversal();
+  for (const value of values) {
+    collectPlayerSubjects(value, output, traversal);
+  }
   return [...new Set(output.map((item) => item.trim()).filter((item) => item.length >= 2))];
 }
 
-function collectPlayerSubjects(value: unknown, output: string[]): void {
+function collectPlayerSubjects(
+  value: unknown,
+  output: string[],
+  traversal: EvidenceTraversal,
+  depth = 0,
+): void {
+  if (!enterEvidenceNode(value, traversal, depth)) return;
   if (Array.isArray(value)) {
-    for (const item of value) collectPlayerSubjects(item, output);
+    for (const item of value) {
+      collectPlayerSubjects(item, output, traversal, depth + 1);
+    }
     return;
   }
   const record = asRecord(value);
@@ -604,7 +646,7 @@ function collectPlayerSubjects(value: unknown, output: string[]): void {
     ) {
       output.push(...item.filter((candidate): candidate is string => typeof candidate === 'string'));
     } else if (typeof item === 'object' && item !== null) {
-      collectPlayerSubjects(item, output);
+      collectPlayerSubjects(item, output, traversal, depth + 1);
     }
   }
 }
@@ -654,13 +696,22 @@ function leagueIdsAreConsistent(
 
 function leagueIds(values: readonly unknown[]): string[] {
   const output: string[] = [];
-  for (const value of values) collectLeagueIds(value, output);
+  const traversal = createEvidenceTraversal();
+  for (const value of values) collectLeagueIds(value, output, traversal);
   return output;
 }
 
-function collectLeagueIds(value: unknown, output: string[]): void {
+function collectLeagueIds(
+  value: unknown,
+  output: string[],
+  traversal: EvidenceTraversal,
+  depth = 0,
+): void {
+  if (!enterEvidenceNode(value, traversal, depth)) return;
   if (Array.isArray(value)) {
-    for (const item of value) collectLeagueIds(item, output);
+    for (const item of value) {
+      collectLeagueIds(item, output, traversal, depth + 1);
+    }
     return;
   }
   const record = asRecord(value);
@@ -669,7 +720,7 @@ function collectLeagueIds(value: unknown, output: string[]): void {
     if ((key === 'leagueId' || key === 'league_id') && typeof item === 'string') {
       output.push(item);
     } else if (typeof item === 'object' && item !== null) {
-      collectLeagueIds(item, output);
+      collectLeagueIds(item, output, traversal, depth + 1);
     }
   }
 }
@@ -717,6 +768,32 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function createEvidenceTraversal(): EvidenceTraversal {
+  return {
+    remaining: MAX_EVIDENCE_TRAVERSAL_NODES,
+    seen: new WeakSet(),
+  };
+}
+
+function enterEvidenceNode(
+  value: unknown,
+  traversal: EvidenceTraversal,
+  depth: number,
+): value is object {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    depth > MAX_EVIDENCE_TRAVERSAL_DEPTH ||
+    traversal.remaining <= 0 ||
+    traversal.seen.has(value)
+  ) {
+    return false;
+  }
+  traversal.seen.add(value);
+  traversal.remaining -= 1;
+  return true;
 }
 
 function appendUnique(values: readonly string[], value: string): string[] {

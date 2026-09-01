@@ -2,7 +2,10 @@ import type {
   DataSourceRecord,
   SourceEvidenceSnapshot,
 } from '../sources.js';
+import { createSourceEvidenceSnapshot } from '../sources.js';
 import type { SebIconMode, SebThemeName } from './theme.js';
+
+const MAX_RECORDED_ANSWER_EVIDENCE = 50;
 
 export class InteractiveUiState {
   private readonly evidenceByAnswerId = new Map<string, SourceEvidenceSnapshot>();
@@ -19,9 +22,21 @@ export class InteractiveUiState {
   theme: SebThemeName = 'default';
 
   recordAnswerEvidence(snapshot: SourceEvidenceSnapshot): void {
-    this.evidenceByAnswerId.set(snapshot.answerId, snapshot);
-    this.latestAnswerId = snapshot.answerId;
-    this.sources = snapshot.sources.map((source) => ({
+    const capturedAt = new Date(snapshot.capturedAt);
+    const boundedSnapshot = createSourceEvidenceSnapshot(
+      snapshot.answerId,
+      snapshot.sources,
+      Number.isFinite(capturedAt.getTime()) ? capturedAt : new Date(),
+    );
+    this.evidenceByAnswerId.delete(boundedSnapshot.answerId);
+    this.evidenceByAnswerId.set(boundedSnapshot.answerId, boundedSnapshot);
+    while (this.evidenceByAnswerId.size > MAX_RECORDED_ANSWER_EVIDENCE) {
+      const oldestAnswerId = this.evidenceByAnswerId.keys().next().value;
+      if (typeof oldestAnswerId !== 'string') break;
+      this.evidenceByAnswerId.delete(oldestAnswerId);
+    }
+    this.latestAnswerId = boundedSnapshot.answerId;
+    this.sources = boundedSnapshot.sources.map((source) => ({
       ...source,
       ...(source.warnings ? { warnings: [...source.warnings] } : {}),
     }));

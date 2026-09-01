@@ -68,6 +68,29 @@ describe('connector configuration', () => {
   });
 });
 
+describe('connector model errors', () => {
+  it('formats a plain provider object without exposing its message', () => {
+    const error = new ModelResponseError({
+      code: 'invalid_request',
+      message: 'Request contains private prompt data.',
+    }, false);
+
+    expect(error.message).toContain('rejected the request as invalid');
+    expect(error.message).not.toContain('private prompt data');
+    expect(error.message).not.toContain('[object Object]');
+  });
+
+  it('hides an unclassified model error message', () => {
+    const error = new ModelResponseError(
+      new Error('private prompt token'),
+      false,
+    );
+
+    expect(error.message).toContain('connector service logs');
+    expect(error.message).not.toContain('private prompt token');
+  });
+});
+
 describe('connector handlers', () => {
   it('subscribes after a new mention and invokes the shared reply', async () => {
     const adapter = createMockAdapter('slack');

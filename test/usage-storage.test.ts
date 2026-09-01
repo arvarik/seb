@@ -792,6 +792,55 @@ describe('usage storage', () => {
     });
   });
 
+  it('refines a generic terminal error with a safe provider category', () => {
+    const database = createDatabase();
+    database.startUsageRun({
+      agentKind: 'research',
+      callId: 'call-error-refinement',
+      sessionId: 'session-error-refinement',
+      startedAt: '2026-08-31T11:30:00.000Z',
+      surface: 'interactive',
+    });
+    database.finishUsageRun('call-error-refinement', {
+      errorKind: 'incomplete-error',
+      finalFinishReason: 'error',
+      status: 'failed',
+    });
+
+    const refined = database.finishUsageRun('call-error-refinement', {
+      errorKind: 'provider-invalid-request',
+      finalFinishReason: 'error',
+      status: 'failed',
+    });
+
+    expect(refined).toMatchObject({
+      errorKind: 'provider-invalid-request',
+      finalFinishReason: 'error',
+      status: 'failed',
+    });
+    expect(() => database.finishUsageRun('call-error-refinement', {
+      errorKind: 'provider-authentication',
+      status: 'failed',
+    })).toThrow(/conflicts with its saved value/u);
+
+    database.startUsageRun({
+      agentKind: 'research',
+      callId: 'call-completed-refinement',
+      sessionId: 'session-error-refinement',
+      startedAt: '2026-08-31T11:31:00.000Z',
+      surface: 'interactive',
+    });
+    database.finishUsageRun('call-completed-refinement', {
+      finalFinishReason: 'stop',
+      status: 'completed',
+    });
+    expect(() => database.finishUsageRun('call-completed-refinement', {
+      errorKind: 'provider-invalid-request',
+      finalFinishReason: 'stop',
+      status: 'completed',
+    })).toThrow(/completed usage run cannot have an error kind/u);
+  });
+
   it('rejects invalid metrics, timestamps, metadata, and missing parents', () => {
     const database = createDatabase();
     database.startUsageRun({

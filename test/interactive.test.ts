@@ -448,6 +448,10 @@ describe('SebInteractiveTransport', () => {
       weather: clients.weatherClient,
     });
 
+    const dashboard = await sendCommand(transport, '/league', 'league-dashboard');
+    expect(dashboard).toContain('## My Fantasy');
+    expect(dashboard).not.toContain('Command error');
+
     const invalidLeague = await sendCommand(transport, '/league 999', 'league-1');
     expect(invalidLeague).toContain('not one of the discovered leagues');
     expect(session.leagueId).toBeNull();
@@ -546,6 +550,257 @@ describe('SebInteractiveTransport', () => {
     expect(followUpPrompt).toContain('Derrick Henry');
     expect(followUpPrompt).toContain('Player profile.');
     expect(followUpPrompt).not.toContain('/skill player-info');
+  });
+
+  it('bounds long interactive history before the model request', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'Current answer.' },
+            { type: 'text-end', id: 'text-1' },
+            {
+              type: 'finish',
+              finishReason: { raw: undefined, unified: 'stop' },
+              usage: {
+                inputTokens: {
+                  cacheRead: undefined,
+                  cacheWrite: undefined,
+                  noCache: 10,
+                  total: 10,
+                },
+                outputTokens: { reasoning: undefined, text: 2, total: 2 },
+              },
+            },
+          ],
+        }),
+      }),
+    });
+    const clients = dataClients();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      version: '0.1.1',
+      weather: clients.weatherClient,
+    });
+    const messages: UIMessage[] = [];
+    for (let index = 0; index < 30; index += 1) {
+      messages.push({
+        id: `user-${index}`,
+        parts: [{ text: `${index === 0 ? 'old' : 'recent'}-user-${index}`, type: 'text' }],
+        role: 'user',
+      });
+      messages.push({
+        id: `assistant-${index}`,
+        parts: [{ text: `assistant-${index}`, type: 'text' }],
+        role: 'assistant',
+      });
+    }
+    messages.push({
+      id: 'current-user',
+      parts: [{ text: 'current-user-question', type: 'text' }],
+      role: 'user',
+    });
+
+    await sendConversation(transport, messages);
+
+    const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt);
+    expect(prompt).not.toContain('old-user-0');
+    expect(prompt).toContain('recent-user-29');
+    expect(prompt).toContain('current-user-question');
+  });
+
+  it('bounds interactive history by character count', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'Current answer.' },
+            { type: 'text-end', id: 'text-1' },
+            {
+              type: 'finish',
+              finishReason: { raw: undefined, unified: 'stop' },
+              usage: {
+                inputTokens: {
+                  cacheRead: undefined,
+                  cacheWrite: undefined,
+                  noCache: 1,
+                  total: 1,
+                },
+                outputTokens: { reasoning: undefined, text: 1, total: 1 },
+              },
+            },
+          ],
+        }),
+      }),
+    });
+    const clients = dataClients();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      version: '0.1.1',
+      weather: clients.weatherClient,
+    });
+
+    await sendConversation(transport, [
+      {
+        id: 'old-user',
+        parts: [{ text: `old-marker-${'o'.repeat(70_000)}`, type: 'text' }],
+        role: 'user',
+      },
+      {
+        id: 'old-assistant',
+        parts: [{ text: 'old answer', type: 'text' }],
+        role: 'assistant',
+      },
+      {
+        id: 'recent-user',
+        parts: [{ text: `recent-marker-${'r'.repeat(70_000)}`, type: 'text' }],
+        role: 'user',
+      },
+      {
+        id: 'recent-assistant',
+        parts: [{ text: 'recent answer', type: 'text' }],
+        role: 'assistant',
+      },
+      {
+        id: 'current-user',
+        parts: [{ text: 'current question', type: 'text' }],
+        role: 'user',
+      },
+    ]);
+
+    const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt);
+    expect(prompt).not.toContain('old-marker');
+    expect(prompt).toContain('recent-marker');
+    expect(prompt).toContain('current question');
+  });
+
+  it('rejects one oversized prompt before a model call', async () => {
+    const model = new MockLanguageModelV4({});
+    const clients = dataClients();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      version: '0.1.1',
+      weather: clients.weatherClient,
+    });
+
+    const output = await sendCommand(
+      transport,
+      'x'.repeat(32_001),
+      'oversized-prompt',
+    );
+
+    expect(output).toContain('prompt exceeds 32,000 characters');
+    expect(model.doStreamCalls).toHaveLength(0);
+
+    await sendConversation(transport, [
+      {
+        id: 'oversized-prompt',
+        parts: [{ text: 'x'.repeat(32_001), type: 'text' }],
+        role: 'user',
+      },
+      {
+        id: 'local-input-error',
+        parts: [{ text: output, type: 'text' }],
+        role: 'assistant',
+      },
+      {
+        id: 'valid-follow-up',
+        parts: [{ text: 'Show the current NFL state.', type: 'text' }],
+        role: 'user',
+      },
+    ]);
+
+    expect(model.doStreamCalls).toHaveLength(1);
+    const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt);
+    expect(prompt).not.toContain('x'.repeat(1_000));
+    expect(prompt).not.toContain('prompt exceeds 32,000 characters');
+    expect(prompt).toContain('Show the current NFL state.');
+  });
+
+  it('rejects an oversized approval turn before a model call', async () => {
+    const model = new MockLanguageModelV4({});
+    const clients = dataClients();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      version: '0.1.1',
+      weather: clients.weatherClient,
+    });
+    const output = await sendConversation(transport, [
+      {
+        id: 'approval-user',
+        parts: [{ text: 'Use the requested tool.', type: 'text' }],
+        role: 'user',
+      },
+      {
+        id: 'approval-response',
+        parts: [{
+          approval: { approved: true, id: 'approval-1' },
+          input: { payload: 'x'.repeat(120_001) },
+          state: 'approval-responded',
+          toolCallId: 'tool-1',
+          toolName: 'exampleTool',
+          type: 'dynamic-tool',
+        }],
+        role: 'assistant',
+      },
+    ]);
+
+    expect(output).toContain('approval turn is too large');
+    expect(model.doStreamCalls).toHaveLength(0);
+  });
+
+  it('bounds local-only message tracking during command-only sessions', async () => {
+    const model = new MockLanguageModelV4({});
+    const clients = dataClients();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      version: '0.1.1',
+      weather: clients.weatherClient,
+    });
+
+    for (let index = 0; index < 100; index += 1) {
+      await sendCommand(transport, '/help', `command-${index}`);
+    }
+
+    const localOnlyIds = (
+      transport as unknown as { localOnlyMessageIds: Set<string> }
+    ).localOnlyMessageIds;
+    expect(localOnlyIds.size).toBe(96);
+    expect(model.doStreamCalls).toHaveLength(0);
   });
 
   it('answers help and context commands without calling the model', async () => {
@@ -681,6 +936,130 @@ describe('SebInteractiveTransport', () => {
 
     expect(output).toContain('Decision unavailable');
     expect(output).not.toContain('Start Example Player with high confidence');
+  });
+
+  it('uses earlier approval-stage evidence for the final decision', async () => {
+    const sources = new SourceTracker();
+    sources.record({
+      cacheOutcome: 'source-updated',
+      id: 'sleeper-player',
+      label: 'Sleeper player data',
+      url: 'https://api.sleeper.app/v1/players/nfl',
+    });
+    sources.record({
+      id: 'web:example-news',
+      label: 'Example Player injury report',
+      url: 'https://example.com/example-player-injury',
+    });
+    const sourceStream = new ReadableStream<UIMessageChunk>({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'approved-answer' });
+        controller.enqueue({ type: 'text-start', id: 'approved-text' });
+        controller.enqueue({
+          type: 'text-delta',
+          id: 'approved-text',
+          delta: 'Add Example Player.',
+        });
+        controller.enqueue({ type: 'text-end', id: 'approved-text' });
+        controller.enqueue({ type: 'finish', finishReason: 'stop' });
+        controller.close();
+      },
+    });
+
+    const output = await streamText(decorateResponseStream(
+      sourceStream,
+      createSessionState(),
+      sources,
+      new InteractiveUiState(),
+      'Should I add Example Player in my league?',
+      'Should I add Example Player in my league?',
+      undefined,
+      undefined,
+      [
+        {
+          input: { query: 'Example Player' },
+          output: [{
+            injuryStatus: null,
+            name: 'Example Player',
+            playerId: 'player-1',
+            practiceParticipation: 'Full',
+          }],
+          state: 'completed',
+          toolCallId: 'player-call',
+          toolName: 'findPlayers',
+        },
+        {
+          input: { query: 'Example Player injury' },
+          output: { result: 'Example Player has no reported injury.' },
+          state: 'completed',
+          toolCallId: 'news-call',
+          toolName: 'searchCurrentNews',
+        },
+        {
+          input: { leagueId: 'league-1' },
+          output: { league: { scoring_settings: { rec: 1 } } },
+          state: 'completed',
+          toolCallId: 'league-call',
+          toolName: 'getLeagueOverview',
+        },
+      ],
+    ));
+
+    expect(output).toContain('Add Example Player.');
+    expect(output).toContain('## Evidence');
+    expect(output).not.toContain('Decision unavailable');
+  });
+
+  it('shows a safe provider error instead of the generic SDK message', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({
+              error: {
+                code: 'invalid_request',
+                message: 'Request contains an invalid argument with private data.',
+              },
+              type: 'error',
+            });
+            controller.close();
+          },
+        }),
+      }),
+    });
+    const clients = dataClients();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      version: '0.1.1',
+      weather: clients.weatherClient,
+    });
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: 'safe-error-chat',
+      messageId: undefined,
+      messages: [{
+        id: 'safe-error-message',
+        parts: [{ text: 'Show my leagues.', type: 'text' }],
+        role: 'user',
+      }],
+      trigger: 'submit-message',
+    });
+    const chunks: UIMessageChunk[] = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    const error = chunks.find((chunk) => chunk.type === 'error');
+
+    expect(error).toMatchObject({
+      errorText: expect.stringContaining('rejected the request as invalid'),
+    });
+    expect(JSON.stringify(error)).not.toContain('private data');
+    expect(JSON.stringify(error)).not.toContain('An error occurred');
   });
 
   it('does not update session context after a tool error', async () => {
@@ -853,19 +1232,23 @@ describe('SebInteractiveTransport', () => {
       label: 'Sleeper NFL state',
       url: 'https://api.sleeper.app/v1/state/nfl',
     });
+    const session = createSessionState();
+    session.player = 'Christian McCaffrey';
+    const uiState = new InteractiveUiState();
+    uiState.recordAnswerEvidence(sources.snapshot('prior-answer'));
     const sourceStream = new ReadableStream<UIMessageChunk>({
       start(controller) {
         controller.enqueue({ type: 'start', messageId: 'failed-decision' });
         controller.enqueue({
           type: 'tool-input-available',
-          toolCallId: 'state-call',
-          toolName: 'getNflState',
-          input: {},
+          toolCallId: 'player-call',
+          toolName: 'getPlayerWeeklyStats',
+          input: { playerName: 'Derrick Henry', season: 2025 },
         });
         controller.enqueue({
           type: 'tool-output-available',
-          toolCallId: 'state-call',
-          output: { season: 2026, week: 2 },
+          toolCallId: 'player-call',
+          output: { stats: [{ playerId: 'henry-1' }] },
         });
         controller.enqueue({ type: 'text-start', id: 'partial-text' });
         controller.enqueue({
@@ -881,14 +1264,17 @@ describe('SebInteractiveTransport', () => {
 
     const output = await streamText(decorateResponseStream(
       sourceStream,
-      createSessionState(),
+      session,
       sources,
-      new InteractiveUiState(),
-      'Would you recommend this check?',
+      uiState,
+      'Would you recommend Derrick Henry?',
     ));
 
     expect(output).toContain('model did not complete the response');
     expect(output).not.toContain('I recommend the incomplete action');
+    expect(output).not.toContain('## Evidence');
+    expect(session.player).toBe('Christian McCaffrey');
+    expect(uiState.latestEvidence()?.answerId).toBe('prior-answer');
   });
 
   it('closes unfinished telemetry when the UI stream reports an error', async () => {

@@ -5,8 +5,13 @@ import {
   isToolUIPart,
   type ChatTransport,
   type UIMessage,
+  type UIMessageChunk,
 } from 'ai';
 
+import {
+  classifyModelError,
+  formatModelErrorForUser,
+} from '../model-capacity-error.js';
 import { SourceTracker } from '../sources.js';
 import { FilePromptHistory, type PromptHistory } from './history.js';
 import {
@@ -76,6 +81,7 @@ export class SebConversationRunner {
     let nextMessageIndex = 0;
     let prompt: string | undefined;
     let streamWithoutPrompt = false;
+    let turnStartIndex = 0;
 
     while (true) {
       if (!streamWithoutPrompt) {
@@ -86,21 +92,29 @@ export class SebConversationRunner {
           throw error;
         }
         if (prompt === undefined) return;
+        turnStartIndex = messages.length;
         messages.push(createUserMessage(`message-${++nextMessageIndex}`, prompt));
       }
 
       const abortController = new AbortController();
       const previousAssistant = lastAssistantMessage(messages);
-      const result: SebRendererStreamResult = {
-        abort: () => abortController.abort(),
-        ...(previousAssistant ? { message: previousAssistant } : {}),
-        uiMessageStream: await this.transport.sendMessages({
+      let uiMessageStream: ReadableStream<UIMessageChunk>;
+      try {
+        uiMessageStream = await this.transport.sendMessages({
           abortSignal: abortController.signal,
           chatId: this.chatId,
           messageId: undefined,
           messages: [...messages],
           trigger: 'submit-message',
-        }),
+        });
+      } catch (error) {
+        if (isInterruptedError(error)) return;
+        uiMessageStream = requestSetupErrorStream(error);
+      }
+      const result: SebRendererStreamResult = {
+        abort: () => abortController.abort(),
+        ...(previousAssistant ? { message: previousAssistant } : {}),
+        uiMessageStream,
       };
 
       let response: UIMessage | undefined;
@@ -113,6 +127,13 @@ export class SebConversationRunner {
       } catch (error) {
         if (isInterruptedError(error)) return;
         throw error;
+      }
+
+      if (!response) {
+        messages.splice(turnStartIndex);
+        streamWithoutPrompt = false;
+        prompt = undefined;
+        continue;
       }
 
       if (response && response.parts.length > 0) {
@@ -244,4 +265,20 @@ function applyToolApprovalResponse(
 
 function isInterruptedError(error: unknown): boolean {
   return error instanceof Error && error.message === 'Interrupted';
+}
+
+function requestSetupErrorStream(
+  error: unknown,
+): ReadableStream<UIMessageChunk> {
+  const errorText = classifyModelError(error)
+    ? formatModelErrorForUser(error)
+    : 'Seb could not start this request. Retry the request.';
+  return new ReadableStream<UIMessageChunk>({
+    start(controller) {
+      controller.enqueue({ type: 'start' });
+      controller.enqueue({ type: 'error', errorText });
+      controller.enqueue({ type: 'finish', finishReason: 'error' });
+      controller.close();
+    },
+  });
 }

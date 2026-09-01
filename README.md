@@ -133,6 +133,8 @@ seb stats
 
 Run `/usage` or `/stats` inside the interactive interface for the current session.
 
+The reports show the successful run rate, safe error categories, and failures after a returned client tool.
+
 These reports read local Seb telemetry. They do not query Google billing or calculate currency cost.
 
 Seb also supports Slack, Discord, and Telegram through read-only connectors.

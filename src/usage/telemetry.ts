@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Telemetry } from 'ai';
 
 import type { SebDatabase } from '../data/sqlite-store.js';
+import { classifyModelError } from '../model-capacity-error.js';
 import {
   recordSessionModelUsage,
   type SessionUsage,
@@ -74,6 +75,12 @@ export interface SebUsageTelemetryOptions {
   sessionId?: string;
   sessionUsage?: SessionUsage;
   surface: string;
+  warningSink?: (warning: UsageTelemetryWarning) => void;
+}
+
+export interface UsageTelemetryWarning {
+  errorKind: string;
+  event: 'seb.telemetry.write_failed';
 }
 
 export class SebUsageTelemetry implements Telemetry {
@@ -102,6 +109,8 @@ export class SebUsageTelemetry implements Telemetry {
   private readonly toolErrors = new Map<string, unknown>();
   private readonly toolRecords = new Map<string, UsageToolCallWrite>();
   private readonly toolSteps = new Map<string, ToolStepLocator>();
+  private readonly warnedKinds = new Set<string>();
+  private readonly warningSink: ((warning: UsageTelemetryWarning) => void) | undefined;
 
   constructor(options: SebUsageTelemetryOptions) {
     this.agentKind = options.agentKind;
@@ -110,6 +119,11 @@ export class SebUsageTelemetry implements Telemetry {
     this.sessionId = options.sessionId ?? randomUUID();
     this.sessionUsage = options.sessionUsage;
     this.surface = options.surface;
+    this.warningSink = options.warningSink ?? (
+      options.sessionUsage
+        ? undefined
+        : (warning) => process.stderr.write(`${JSON.stringify(warning)}\n`)
+    );
   }
 
   onStart: NonNullable<Telemetry['onStart']> = (event) => {
@@ -251,10 +265,12 @@ export class SebUsageTelemetry implements Telemetry {
     const callId = eventCallId(event);
     if (!callId || !('finishReason' in event)) return;
     this.flushToolErrors(callId);
+    const completed = event.finishReason === 'stop' || isToolApprovalPause(event);
     this.finishRun(
       callId,
-      event.finishReason === 'error' ? 'failed' : 'completed',
+      completed ? 'completed' : 'failed',
       event.finishReason,
+      completed ? null : `incomplete-${normalizedLabel(event.finishReason) ?? 'unknown'}`,
     );
   };
 
@@ -288,7 +304,13 @@ export class SebUsageTelemetry implements Telemetry {
     const status = cancelled ? 'aborted' : 'failed';
     const terminal = this.terminalRuns.get(callId);
     if (!this.startedRuns.has(callId) && !terminal) return;
-    if (terminal && terminalStatusRank(status) <= terminalStatusRank(terminal.status)) {
+    const refinesTerminal = terminal?.status === status &&
+      shouldRefineErrorKind(terminal.errorKind ?? null, kind);
+    if (
+      terminal &&
+      terminalStatusRank(status) <= terminalStatusRank(terminal.status) &&
+      !refinesTerminal
+    ) {
       return;
     }
     if (cancelled) {
@@ -299,7 +321,11 @@ export class SebUsageTelemetry implements Telemetry {
     this.finishRun(
       callId,
       status,
-      cancelled ? null : 'error',
+      cancelled
+        ? null
+        : terminal?.status === status
+        ? terminal.finalFinishReason ?? 'error'
+        : 'error',
       kind,
     );
   };
@@ -372,12 +398,25 @@ export class SebUsageTelemetry implements Telemetry {
   ): void {
     const terminal = this.terminalRuns.get(callId);
     if (!terminal && !this.startedRuns.has(callId)) return;
-    if (terminal && terminalStatusRank(status) <= terminalStatusRank(terminal.status)) {
+    const refinesTerminal = terminal?.status === status &&
+      shouldRefineErrorKind(terminal.errorKind ?? null, errorType);
+    if (
+      terminal &&
+      terminalStatusRank(status) <= terminalStatusRank(terminal.status) &&
+      !refinesTerminal
+    ) {
       return;
     }
     let finish = this.pendingRunFinishes.get(callId);
-    if (finish && terminalStatusRank(status) > terminalStatusRank(finish.status)) {
-      this.updateSessionRunStatus(finish.status, status);
+    const refinesPending = finish?.status === status &&
+      shouldRefineErrorKind(finish.errorKind ?? null, errorType);
+    if (
+      finish &&
+      (terminalStatusRank(status) > terminalStatusRank(finish.status) || refinesPending)
+    ) {
+      if (terminalStatusRank(status) > terminalStatusRank(finish.status)) {
+        this.updateSessionRunStatus(finish.status, status);
+      }
       const endedAt = finish.endedAt;
       finish = {
         ...(endedAt === undefined ? {} : { endedAt }),
@@ -705,6 +744,16 @@ export class SebUsageTelemetry implements Telemetry {
       this.sessionUsage.storageWarning =
         `Seb could not save usage telemetry (${kind}).`;
     }
+    if (this.warnedKinds.has(kind)) return;
+    this.warnedKinds.add(kind);
+    try {
+      this.warningSink?.({
+        errorKind: kind,
+        event: 'seb.telemetry.write_failed',
+      });
+    } catch {
+      // Preserve the application path when the secondary warning sink fails.
+    }
   }
 }
 
@@ -887,13 +936,6 @@ function errorKind(value: unknown): string {
   if (name === 'aborterror') return 'aborterror';
   if (name === 'connectorshutdownerror') return 'aborterror';
   if (name === 'storageerror' || name === 'sqliteerror') return 'storage';
-  if (name === 'timeouterror') return 'timeout';
-  if (
-    name === 'apicallerror' ||
-    name === 'ai_apicallerror' ||
-    name === 'retryerror' ||
-    name === 'ai_retryerror'
-  ) return 'provider';
   if (
     name === 'rangeerror' ||
     name === 'noobjectgeneratederror' ||
@@ -904,7 +946,39 @@ function errorKind(value: unknown): string {
     name === 'typeerror' ||
     name === 'zoderror'
   ) return 'validation';
-  return 'error';
+  switch (classifyModelError(value)) {
+    case 'authentication':
+      return 'provider-authentication';
+    case 'cancelled':
+      return 'aborterror';
+    case 'capacity':
+      return 'provider-capacity';
+    case 'invalid-request':
+      return 'provider-invalid-request';
+    case 'provider':
+      return 'provider';
+    case 'provider-timeout':
+      return 'provider-timeout';
+    case 'timeout':
+      return 'timeout';
+    default:
+      return 'error';
+  }
+}
+
+function shouldRefineErrorKind(
+  existing: string | null,
+  next: string | null,
+): boolean {
+  if (!next || existing === next) return false;
+  return existing === null || existing === 'error' || existing.startsWith('incomplete-');
+}
+
+function isToolApprovalPause(value: unknown): boolean {
+  const content = objectValue(value)?.content;
+  return Array.isArray(content) && content.some((part) =>
+    objectValue(part)?.type === 'tool-approval-request'
+  );
 }
 
 function errorCause(value: unknown): unknown {

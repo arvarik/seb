@@ -24,7 +24,19 @@ export type SourceObserver = (
   source: Omit<DataSourceRecord, 'accessedAt'>,
 ) => void;
 
+const MAX_EVIDENCE_SOURCES = 100;
+const MAX_ANSWER_ID_CHARACTERS = 512;
+const MAX_SOURCE_ERROR_CHARACTERS = 500;
+const MAX_SOURCE_ID_CHARACTERS = 512;
+const MAX_SOURCE_RECORDS = 200;
+const MAX_SOURCE_URL_CHARACTERS = 4_096;
+const MAX_SOURCE_WARNING_CHARACTERS = 300;
+const MAX_SOURCE_WARNINGS = 10;
+
 export function normalizeWebUrl(value: string): string | null {
+  if (typeof value !== 'string' || value.length > MAX_SOURCE_URL_CHARACTERS) {
+    return null;
+  }
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
@@ -46,14 +58,18 @@ export class SourceTracker {
   private readonly records = new Map<string, DataSourceRecord>();
 
   readonly record: SourceObserver = (source) => {
-    const url = normalizeWebUrl(source.url);
-    if (!url) return;
-    this.records.set(source.id, {
+    const record = normalizeSourceRecord({
       ...source,
       accessedAt: new Date().toISOString(),
-      url,
-      ...(source.warnings ? { warnings: [...source.warnings] } : {}),
     });
+    if (!record) return;
+    this.records.delete(record.id);
+    this.records.set(record.id, record);
+    while (this.records.size > MAX_SOURCE_RECORDS) {
+      const oldestId = this.records.keys().next().value;
+      if (typeof oldestId !== 'string') break;
+      this.records.delete(oldestId);
+    }
   };
 
   list(): DataSourceRecord[] {
@@ -96,12 +112,58 @@ export function createSourceEvidenceSnapshot(
   sources: readonly DataSourceRecord[],
   capturedAt = new Date(),
 ): SourceEvidenceSnapshot {
-  const records = sources.map(freezeSourceRecord);
+  const records = sources
+    .slice(-MAX_EVIDENCE_SOURCES)
+    .map(normalizeSourceRecord)
+    .filter((source): source is DataSourceRecord => source !== null)
+    .map(freezeSourceRecord);
   return Object.freeze({
-    answerId,
+    answerId: answerId.slice(0, MAX_ANSWER_ID_CHARACTERS),
     capturedAt: capturedAt.toISOString(),
     sources: Object.freeze(records),
   });
+}
+
+function normalizeSourceRecord(
+  source: DataSourceRecord,
+): DataSourceRecord | null {
+  const url = normalizeWebUrl(source.url);
+  if (!url) return null;
+  const id = typeof source.id === 'string'
+    ? source.id.trim().slice(0, MAX_SOURCE_ID_CHARACTERS)
+    : '';
+  if (!id) return null;
+  const cacheOutcome = source.cacheOutcome;
+  const validCacheOutcome =
+    cacheOutcome === 'cache-fresh' ||
+    cacheOutcome === 'source-updated' ||
+    cacheOutcome === 'source-not-modified' ||
+    cacheOutcome === 'stale-if-error';
+  const warnings = Array.isArray(source.warnings)
+    ? source.warnings
+      .filter((warning): warning is string => typeof warning === 'string')
+      .slice(0, MAX_SOURCE_WARNINGS)
+      .map((warning) => warning.slice(0, MAX_SOURCE_WARNING_CHARACTERS))
+    : [];
+  return {
+    ...(validCacheOutcome ? { cacheOutcome } : {}),
+    ...(typeof source.error === 'string' && source.error
+      ? { error: source.error.slice(0, MAX_SOURCE_ERROR_CHARACTERS) }
+      : {}),
+    id,
+    label: normalizeSourceLabel(
+      typeof source.label === 'string' ? source.label : undefined,
+      new URL(url).hostname,
+    ),
+    ...(typeof source.retrievedAt === 'string' && source.retrievedAt
+      ? { retrievedAt: source.retrievedAt.slice(0, 64) }
+      : {}),
+    accessedAt: typeof source.accessedAt === 'string'
+      ? source.accessedAt.slice(0, 64)
+      : '',
+    url,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }
 
 export function sourceEvidenceBadge(

@@ -328,6 +328,8 @@ Each range includes its start time and excludes its end time. Seb filters runs b
 The concise usage report shows these values.
 
 - Agent run outcomes.
+- The successful run rate and safe error categories.
+- Failures that occur after a client tool returns.
 - Logical model calls.
 - Input, cache, output, reasoning, tool-use, and total tokens.
 - Client and provider tool-call counts.
@@ -344,6 +346,10 @@ The detailed stats report adds these values.
 - Missing, conflicting, or truncated telemetry counts.
 
 Seb uses one logical model call for each AI SDK model step.
+
+The successful run rate counts agent runs that end with `stop` against those runs plus failed runs.
+
+It excludes approval pauses, cancellations, and unfinished runs. It does not measure completed user answers.
 
 The provider can retry an HTTP request inside that step. Seb cannot see those provider HTTP retries.
 

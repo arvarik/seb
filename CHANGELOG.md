@@ -13,6 +13,27 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Usage and stats JSON reports now use stable schema version 1.
 - SQLite schema 6 now stores local agent runs, logical model steps, and tool calls.
 - `seb stats prune` and `seb stats clear` now remove saved usage telemetry. They preserve unfinished runs unless users add `--include-unfinished`.
+- Usage reports now show the successful run rate, safe error categories, and failures after a returned client tool.
+
+### Changed
+
+- The production agent now uses the standard Gemini `generateContent` endpoint.
+- The doctor and live answer contract now verify a streaming local tool result before final model text.
+- Interactive model history now has message, character, and prompt limits.
+- Source tracking now limits live records, per-answer sources, and saved answer snapshots.
+
+### Fixed
+
+- Gemini tool loops no longer fail after a successful local tool result.
+- Interactive provider failures now show a safe action instead of `An error occurred.`
+- Failed answers no longer replace the last complete answer, update the active subject, or append a normal Evidence section.
+- Failed prompts and partial assistant output no longer enter the next model request.
+- Tool approvals now preserve the original question, evidence, and tool results through continuation.
+- A pending tool approval no longer replaces the last complete answer.
+- Provider HTTP timeouts now remain failed provider calls instead of cancellations.
+- A transport setup failure no longer closes the interactive session.
+- `/league` without an argument now opens the current fantasy dashboard.
+- Recursive evidence checks now reject cyclic or deeply nested tool output safely.
 
 ### Security
 

@@ -563,6 +563,52 @@ describe('usage analytics', () => {
     ]);
   });
 
+  it('reports failures that occur after a tool returns', () => {
+    const report = analyzeUsage(dataset({
+      runs: [
+        run(),
+        run({
+          callId: 'run-2',
+          errorKind: 'provider-invalid-request',
+          finalFinishReason: 'error',
+          status: 'failed',
+        }),
+      ],
+      toolCalls: [tool({ callId: 'run-2' })],
+    }), TEST_WINDOW, GENERATED_AT);
+
+    expect(report.runs).toMatchObject({
+      successfulRunRatePercent: 50,
+      errorKinds: [{ count: 1, name: 'provider-invalid-request' }],
+      failedAfterReturnedToolRuns: 1,
+    });
+    expect(report.dataQuality.notes).toContain(
+      'One or more runs failed after a client tool returned.',
+    );
+    expect(formatUsageReport(report)).toContain(
+      'Runs that failed after a client tool returned: 1',
+    );
+    expect(formatStatsReport(report)).toContain(
+      'Error categories: provider-invalid-request 1',
+    );
+  });
+
+  it('does not count a returned provider tool as a returned client tool', () => {
+    const report = analyzeUsage(dataset({
+      runs: [run({
+        errorKind: 'provider-timeout',
+        finalFinishReason: 'error',
+        status: 'failed',
+      })],
+      toolCalls: [tool({ executionLocation: 'provider' })],
+    }), TEST_WINDOW, GENERATED_AT);
+
+    expect(report.runs.failedAfterReturnedToolRuns).toBe(0);
+    expect(report.dataQuality.notes).not.toContain(
+      'One or more runs failed after a client tool returned.',
+    );
+  });
+
   it('counts repeated calls within each run and tool pair', () => {
     const toolCalls = [
       tool(),

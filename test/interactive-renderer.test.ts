@@ -34,6 +34,54 @@ describe('SebTerminalRenderer prompt input', () => {
     await expect(recalled).resolves.toBe('older prompt');
   });
 
+  it('rejects a likely API key before transcript or history storage', async () => {
+    const history = new MemoryPromptHistory();
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal, history);
+    const prompt = renderer.readPrompt();
+    const privateKeys = [
+      'sk-ant-0123456789abcdef0123456789abcdef',
+      'local-token-0123456789abcdef',
+      'Bearer unknown-private-value',
+    ];
+
+    for (const privateKey of privateKeys) {
+      terminal.input.type(`/model ${privateKey}\r`);
+
+      await expect.poll(() => {
+        const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+        return frame.includes('Seb does not accept API keys in slash commands') &&
+          !frame.includes(privateKey);
+      }).toBe(true);
+      expect(history.list()).toEqual([]);
+      expect(terminal.output.text().split('\x1b[H').at(-1)).not.toContain(
+        privateKey,
+      );
+    }
+
+    terminal.input.type('/model claude-sonnet-test\r');
+    await expect(prompt).resolves.toBe('/model claude-sonnet-test');
+    expect(history.list()).toEqual(['/model']);
+    expect(terminal.output.text().split('\x1b[H').at(-1)).not.toContain(
+      'claude-sonnet-test',
+    );
+  });
+
+  it('keeps provider arguments out of the transcript and prompt history', async () => {
+    const history = new MemoryPromptHistory();
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal, history);
+    const prompt = renderer.readPrompt();
+
+    terminal.input.type('/provider openai\r');
+
+    await expect(prompt).resolves.toBe('/provider openai');
+    expect(history.list()).toEqual(['/provider']);
+    expect(terminal.output.text().split('\x1b[H').at(-1)).not.toContain(
+      '/provider openai',
+    );
+  });
+
   it('selects a numbered suggestion on the first prompt', async () => {
     const uiState = new InteractiveUiState();
     uiState.suggestions = ['Compare these players'];
@@ -614,6 +662,39 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(output).toContain('SOURCE NO SOURCE YET');
     expect(output).not.toContain('LEAGUE —');
     expect(output).not.toContain('ROSTER —');
+    terminal.input.type('\u0003');
+    await expect(prompt).rejects.toThrow('Interrupted');
+  });
+
+  it('shows provider-neutral model state and updates it after a switch', async () => {
+    const uiState = new InteractiveUiState();
+    uiState.setActiveModel({
+      model: 'gpt-test',
+      provider: 'openai',
+      providerLabel: 'OpenAI',
+    });
+    const terminal = createTerminal();
+    const renderer = createRenderer(
+      terminal,
+      new MemoryPromptHistory(),
+      uiState,
+    );
+    const prompt = renderer.readPrompt();
+
+    expect(stripAnsi(
+      terminal.output.text().split('\x1b[H').at(-1) ?? '',
+    )).toContain('MODEL OPENAI · gpt-test');
+
+    uiState.setActiveModel({
+      model: 'claude-test',
+      provider: 'anthropic',
+      providerLabel: 'Anthropic',
+    });
+    terminal.output.emit('resize');
+
+    await expect.poll(() => stripAnsi(
+      terminal.output.text().split('\x1b[H').at(-1) ?? '',
+    )).toContain('MODEL ANTHROPIC · claude-test');
     terminal.input.type('\u0003');
     await expect(prompt).rejects.toThrow('Interrupted');
   });

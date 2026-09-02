@@ -36,11 +36,13 @@ vi.mock('../src/ai/devtools.js', async (importOriginal) => {
 });
 
 import { runWithRequestSignal } from '../src/ai/request-signal.js';
+import type { ResolvedModelProvider } from '../src/ai/model-provider.js';
 import { SebDatabase } from '../src/data/sqlite-store.js';
 import {
   formatDoctorReport,
   runDoctor,
   verifyGeminiApi,
+  verifyModelProviderApi,
 } from '../src/doctor.js';
 import { createSessionUsage } from '../src/interactive/session.js';
 import { SebUsageTelemetry } from '../src/usage/telemetry.js';
@@ -89,10 +91,27 @@ describe('runDoctor', () => {
     ]);
   });
 
+  it('accepts GEMINI_API_KEY in the legacy offline check', async () => {
+    const report = await runDoctor({
+      environment: { GEMINI_API_KEY: 'alias-key' },
+      nodeVersion: '22.12.0',
+      offline: true,
+      verifyPermissions: passingPermissions,
+      verifyDatabase: passingDatabase,
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.checks).toContainEqual({
+      detail: 'GEMINI_API_KEY is set.',
+      name: 'Gemini key',
+      status: 'pass',
+    });
+  });
+
   it('checks Sleeper and Gemini with injected test services', async () => {
     const report = await runDoctor({
       environment: {
-        GOOGLE_GENERATIVE_AI_API_KEY: 'test-key',
+        GEMINI_API_KEY: 'test-key',
         GEMINI_MODEL: 'primary-test',
         GEMINI_FALLBACK_MODEL: 'fallback-test',
       },
@@ -131,6 +150,106 @@ describe('runDoctor', () => {
     expect(formatDoctorReport(report)).toContain(
       '✓ National Weather Service API: 156 hourly periods loaded',
     );
+  });
+
+  it('uses provider-neutral checks for the active model provider', async () => {
+    const modelProvider: ResolvedModelProvider = {
+      apiKey: 'anthropic-key',
+      fallbackModel: 'claude-fallback',
+      model: 'claude-primary',
+      provider: 'anthropic',
+    };
+    const report = await runDoctor({
+      environment: {},
+      modelProvider,
+      nodeVersion: '26.0.0',
+      offline: false,
+      verifyDatabase: passingDatabase,
+      verifyModelProvider: async (selection, signal) => {
+        expect(selection).toBe(modelProvider);
+        expect(signal).toBeInstanceOf(AbortSignal);
+        return { fallbackUsed: false, model: selection.model };
+      },
+      verifyNflverse: async () => ({ games: 100, latestSeason: 2026 }),
+      verifyPermissions: passingPermissions,
+      verifySleeper: async () => ({
+        season: '2026',
+        seasonType: 'regular',
+        week: 3,
+      }),
+      verifyWeather: async () => ({
+        periods: 156,
+        timeZone: 'America/Los_Angeles',
+      }),
+    });
+
+    const output = formatDoctorReport(report);
+    expect(report.ok).toBe(true);
+    expect(output).toContain(
+      '✓ Model provider key: Anthropic has a configured ANTHROPIC_API_KEY.',
+    );
+    expect(output).toContain(
+      '✓ Model provider API: Anthropic model claude-primary completed a local tool loop.',
+    );
+    expect(output).not.toContain('Gemini key');
+    expect(output).not.toContain('Gemini API');
+  });
+
+  it('accepts a keyless OpenAI-compatible endpoint configuration', async () => {
+    const report = await runDoctor({
+      environment: {},
+      modelProvider: {
+        baseURL: 'http://localhost:11434/v1',
+        fallbackModel: 'local-model',
+        model: 'local-model',
+        provider: 'openai-compatible',
+      },
+      nodeVersion: '22.12.0',
+      offline: true,
+      verifyDatabase: passingDatabase,
+      verifyPermissions: passingPermissions,
+    });
+
+    expect(report.ok).toBe(true);
+    expect(formatDoctorReport(report)).toContain(
+      '✓ Model provider key: OpenAI-compatible endpoint will connect without an API key.',
+    );
+    expect(formatDoctorReport(report)).toContain(
+      '– Model provider API: The offline check skipped this request.',
+    );
+  });
+
+  it('does not send a legacy Gemini request after configuration loading fails', async () => {
+    const verifyGemini = vi.fn();
+    const verifyModelProvider = vi.fn();
+    const report = await runDoctor({
+      environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'google-key' },
+      nodeVersion: '22.12.0',
+      offline: false,
+      skipModelProviderCheck: true,
+      verifyDatabase: passingDatabase,
+      verifyGemini,
+      verifyModelProvider,
+      verifyNflverse: async () => ({ games: 100, latestSeason: 2026 }),
+      verifyPermissions: passingPermissions,
+      verifySleeper: async () => ({
+        season: '2026',
+        seasonType: 'regular',
+        week: 3,
+      }),
+      verifyWeather: async () => ({
+        periods: 156,
+        timeZone: 'America/Los_Angeles',
+      }),
+    });
+
+    expect(verifyGemini).not.toHaveBeenCalled();
+    expect(verifyModelProvider).not.toHaveBeenCalled();
+    expect(report.checks).toContainEqual({
+      name: 'Model provider API',
+      status: 'skip',
+      detail: 'Seb skipped this request because the model configuration is invalid.',
+    });
   });
 
   it('checks grounded Google Search and requires a valid web source', async () => {
@@ -234,6 +353,122 @@ describe('runDoctor', () => {
         { agentKind: 'doctor', database, surface: 'cli' },
       ),
     ).rejects.toThrow('returned no valid web source');
+  });
+
+  it.each([
+    [
+      'Google',
+      {
+        apiKey: 'google-key',
+        fallbackModel: 'gemini-fallback',
+        model: 'gemini-primary',
+        provider: 'google',
+      },
+      'google.generative-ai',
+      true,
+    ],
+    [
+      'Anthropic',
+      {
+        apiKey: 'anthropic-key',
+        fallbackModel: 'claude-fallback',
+        model: 'claude-primary',
+        provider: 'anthropic',
+      },
+      'anthropic.messages',
+      false,
+    ],
+    [
+      'OpenAI',
+      {
+        apiKey: 'openai-key',
+        fallbackModel: 'gpt-fallback',
+        model: 'gpt-primary',
+        provider: 'openai',
+      },
+      'openai.responses',
+      false,
+    ],
+    [
+      'OpenAI-compatible',
+      {
+        baseURL: 'http://localhost:11434/v1',
+        fallbackModel: 'local-fallback',
+        model: 'local-primary',
+        provider: 'openai-compatible',
+      },
+      'openai-compatible.chat',
+      false,
+    ],
+  ] satisfies readonly (readonly [
+    string,
+    ResolvedModelProvider,
+    string,
+    boolean,
+  ])[])('verifies the %s local tool loop', async (
+    _label,
+    modelProvider,
+    expectedProvider,
+    expectsGoogleSearch,
+  ) => {
+    const database = createDatabase();
+    streamTextMock.mockReturnValueOnce(validLocalToolResult());
+    if (expectsGoogleSearch) {
+      generateTextMock.mockResolvedValueOnce(validSearchResult());
+    }
+
+    await expect(verifyModelProviderApi(
+      modelProvider,
+      AbortSignal.timeout(1_000),
+      { agentKind: 'doctor', database, surface: 'cli' },
+    )).resolves.toEqual({
+      fallbackUsed: false,
+      model: modelProvider.model,
+    });
+
+    const localRequest = streamTextMock.mock.calls[0]?.[0];
+    expect(localRequest?.model.provider).toBe(expectedProvider);
+    expect(localRequest?.tools).toHaveProperty('verifyLocalTool');
+    expect(localRequest?.toolChoice).toEqual({
+      toolName: 'verifyLocalTool',
+      type: 'tool',
+    });
+    expect(JSON.stringify(localRequest?.tools).includes('google.google_search'))
+      .toBe(expectsGoogleSearch);
+    expect(generateTextMock).toHaveBeenCalledTimes(expectsGoogleSearch ? 1 : 0);
+  });
+
+  it('uses a non-Google fallback only after a capacity error', async () => {
+    const database = createDatabase();
+    const capacityError = Object.assign(
+      new Error('The primary model has no capacity.'),
+      { statusCode: 503 },
+    );
+    streamTextMock.mockImplementationOnce(() => {
+      const failed = Promise.reject(capacityError);
+      return rejectedLocalToolResult(failed);
+    });
+    streamTextMock.mockReturnValueOnce(validLocalToolResult());
+    const modelProvider: ResolvedModelProvider = {
+      apiKey: 'anthropic-key',
+      fallbackModel: 'claude-fallback',
+      model: 'claude-primary',
+      provider: 'anthropic',
+    };
+
+    await expect(verifyModelProviderApi(
+      modelProvider,
+      AbortSignal.timeout(1_000),
+      { agentKind: 'doctor', database, surface: 'cli' },
+    )).resolves.toEqual({
+      fallbackUsed: true,
+      model: 'claude-fallback',
+    });
+
+    expect(streamTextMock.mock.calls.map(
+      ([request]) => request.model.modelId,
+    )).toEqual(['claude-primary', 'claude-fallback']);
+    expect(generateTextMock).not.toHaveBeenCalled();
   });
 
   it('keeps DevTools telemetry active for a Gemini verification call', async () => {

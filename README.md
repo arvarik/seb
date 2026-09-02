@@ -20,7 +20,7 @@ Seb keeps the active subject between questions. You do not need to repeat the pl
 
 | Need | What Seb gives you |
 | --- | --- |
-| **Current news** | Direct reporting from 44 built-in NFL sources, with Google Search as secondary coverage. |
+| **Current news** | Direct reporting from 44 built-in NFL sources. Google adds Search as secondary coverage. |
 | **Player research** | Profiles, game logs, usage, production, news, and injury context. |
 | **Team research** | Schedules, results, offensive trends, defensive matchups, and game conditions. |
 | **My Fantasy** | Automatic discovery of your current Sleeper leagues, rosters, settings, and weekly needs. |
@@ -32,7 +32,7 @@ Seb only reads data. It never changes a lineup, waiver claim, trade, or league s
 
 ## Quick start
 
-Seb requires Node.js 22 or newer and a [Gemini API key](https://aistudio.google.com/app/apikey).
+Seb requires Node.js 22 or newer and one configured model provider.
 
 ```bash
 git clone https://github.com/arvarik/seb.git
@@ -41,11 +41,35 @@ npm install
 cp .env.example .env
 ```
 
-Add the Gemini key to `.env`.
+Run the private configuration flow.
+
+```bash
+npm run seb -- configure
+```
+
+Choose Google Gemini, Anthropic, OpenAI, or an OpenAI-compatible endpoint.
+
+Seb masks typed keys and tests the selected model before it saves the configuration.
+
+The compatible flow accepts a local loopback endpoint or a remote HTTPS endpoint.
+
+Run the flow again when you want to add another provider or change a saved model.
+
+You can also add a provider key to `.env`. This example uses a [Gemini API key](https://aistudio.google.com/app/apikey).
 
 ```dotenv
 GOOGLE_GENERATIVE_AI_API_KEY=your-key
 ```
+
+Hosted Anthropic and OpenAI configurations use `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`.
+
+An OpenAI-compatible configuration needs a base URL and model. Its API key is optional.
+
+Environment values take priority over saved values.
+
+Seb ignores provider selection, custom endpoints, and private storage paths from a current-directory `.env` file.
+
+Use `seb configure` or an explicit shell environment for a compatible endpoint.
 
 Verify the installation and start Seb.
 
@@ -96,6 +120,12 @@ Review this trade for my selected league.
 
 Use `/explore`, `/fantasy`, or `/analyze` when you want to select an experience directly.
 
+Run `/provider` or `/model` to inspect the active model.
+
+Run `/provider NAME` or `/model MODEL` to switch it for the current session.
+
+`/provider` keeps that provider's configured fallback. `/model` uses one model without a separate fallback.
+
 ## Use Seb your way
 
 Install the short `seb` command in the active Node.js environment.
@@ -115,6 +145,15 @@ Ask one question from a script.
 ```bash
 seb ask "Show the current NFL state."
 ```
+
+Select a configured provider or model for one run.
+
+```bash
+seb ask --provider anthropic "Show the current NFL state."
+seb chat --provider openai --model gpt-5.6-luna
+```
+
+`--provider` keeps the configured fallback. An explicit `--model` uses that model as its own fallback.
 
 Return a validated JSON object.
 
@@ -165,8 +204,8 @@ Seb separates source facts from model explanation.
 | --- | --- |
 | Sleeper | NFL state, fantasy leagues, rosters, settings, matchups, transactions, and player records. |
 | nflverse | Schedules, results, weekly production, usage, and team performance. |
-| First-class news registry | Official NFL, independent, fantasy-impact, and all 32 official team sources. |
-| Gemini Google Search | Secondary public coverage when direct sources do not give enough evidence. |
+| First-class news registry | Official NFL, independent, fantasy-impact, and all 32 official team sources for every model provider. |
+| Google Search and URL Context | Secondary public coverage and user-supplied web pages when Google is the active provider. |
 | National Weather Service | United States forecasts and active weather alerts. |
 
 Seb checks news dates, publisher crawl rules, redirects, content types, and parsed values before it stores news data.
@@ -175,9 +214,21 @@ Seb records source freshness and stale-data warnings. It never presents model me
 
 Each answer keeps a numbered Evidence section with live, cached, or stale retrieval details.
 
+Seb stores saved API keys in a private credential file. The non-secret model settings file contains no keys.
+
+Remote compatible endpoints must use HTTPS. Local HTTP endpoints must use a loopback host.
+
+Compatible model and discovery requests reject redirects.
+
+Local usage telemetry stores metadata only. It excludes prompts, answers, tool inputs, tool results, and raw errors.
+
+It also excludes API keys, authorization headers, and compatible endpoint URLs.
+
 ## Honest limits
 
 Seb has no licensed publisher feed, official injury feed, or official projection feed.
+
+An OpenAI-compatible endpoint must support model streaming and tool calls for the full Seb agent flow.
 
 Public reporting can conflict or change. nflverse releases can lag the latest completed game.
 

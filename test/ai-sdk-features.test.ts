@@ -11,6 +11,7 @@ import {
   configureAiDevTools,
   devToolsRequested,
 } from '../src/ai/devtools.js';
+import type { ResolvedModelProvider } from '../src/ai/model-provider.js';
 import {
   formatFantasyAnalysis,
   type FantasyAnalysis,
@@ -40,6 +41,12 @@ describe('AI SDK feature integration', () => {
     const agent = createFantasyFootballAgent({
       enableWebTools: true,
       languageModel: model,
+      modelProvider: {
+        apiKey: 'google-key',
+        fallbackModel: 'gemini-fallback',
+        model: 'gemini-model',
+        provider: 'google',
+      },
       now: () => new Date('2026-08-20T12:00:00Z'),
     });
 
@@ -59,6 +66,62 @@ describe('AI SDK feature integration', () => {
       'Do not call searchCurrentNews before searchFirstClassNews',
     );
   });
+
+  it.each([
+    [
+      'Anthropic',
+      {
+        apiKey: 'anthropic-key',
+        fallbackModel: 'claude-fallback',
+        model: 'claude-model',
+        provider: 'anthropic',
+      },
+    ],
+    [
+      'OpenAI',
+      {
+        apiKey: 'openai-key',
+        fallbackModel: 'gpt-fallback',
+        model: 'gpt-model',
+        provider: 'openai',
+      },
+    ],
+    [
+      'an OpenAI-compatible endpoint',
+      {
+        baseURL: 'http://localhost:11434/v1',
+        fallbackModel: 'local-model',
+        model: 'local-model',
+        provider: 'openai-compatible',
+      },
+    ],
+  ] satisfies readonly (readonly [string, ResolvedModelProvider])[])(
+    'gives %s direct news without Google-native tools',
+    async (_label, modelProvider) => {
+      const model = textModel('Direct news answer.');
+      const agent = createFantasyFootballAgent({
+        getRuntimeInstructions: () =>
+          'Use searchFirstClassNews. Use searchCurrentNews. Use readNewsUrl. Google Search and URL Context are available. Keep Sleeper evidence authoritative.',
+        languageModel: model,
+        modelProvider,
+      });
+
+      await agent.generate({ prompt: 'Find current NFL news.' });
+
+      const tools = JSON.stringify(model.doGenerateCalls[0]?.tools);
+      const prompt = JSON.stringify(model.doGenerateCalls[0]?.prompt);
+      expect(tools).toContain('searchFirstClassNews');
+      expect(tools).not.toContain('google.google_search');
+      expect(tools).not.toContain('google.url_context');
+      expect(tools).not.toContain('Google Search');
+      expect(prompt).toContain('Use searchFirstClassNews');
+      expect(prompt).toContain('Keep Sleeper evidence authoritative.');
+      expect(prompt).not.toContain('searchCurrentNews');
+      expect(prompt).not.toContain('readNewsUrl');
+      expect(prompt).not.toContain('Google Search');
+      expect(prompt).not.toContain('URL Context');
+    },
+  );
 
   it('uses unavailable-news instructions when web tools are disabled', async () => {
     const model = textModel('News is unavailable.');

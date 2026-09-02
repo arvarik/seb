@@ -14,6 +14,7 @@ import {
   completeInteractiveInput,
   findInteractiveCommand,
   interactiveCommandArgumentError,
+  interactiveCommandPrivacyError,
   NFL_TEAM_CODES,
   parseInteractiveCommandInput,
 } from './commands.js';
@@ -95,6 +96,8 @@ export interface SebRendererOptions {
   input: SebTerminalInput;
   model: string;
   output: SebTerminalOutput;
+  provider?: string;
+  providerLabel?: string;
   session: SessionState;
   sources: SourceTracker;
   uiState: InteractiveUiState;
@@ -210,6 +213,13 @@ export class SebTerminalRenderer {
 
   constructor(options: SebRendererOptions) {
     this.options = options;
+    if (!options.uiState.activeModel) {
+      options.uiState.setActiveModel({
+        model: options.model,
+        provider: options.provider ?? 'configured',
+        providerLabel: options.providerLabel ?? options.provider ?? 'Configured provider',
+      });
+    }
     options.uiState.theme = parseThemeName(options.environment.SEB_THEME);
     options.uiState.iconMode = parseIconMode(options.environment.SEB_ICONS);
     this.theme = createTheme(options.environment, options.uiState);
@@ -485,8 +495,14 @@ export class SebTerminalRenderer {
     if (!prompt) return;
     const parsed = parseInteractiveCommandInput(prompt);
     const localCommand = parsed?.command ?? null;
-    if (localCommand) this.options.uiState.recordCommand(localCommand.name);
     if (parsed) {
+      const privacyError = interactiveCommandPrivacyError(parsed);
+      if (privacyError) {
+        this.editor.set('');
+        this.status = privacyError;
+        this.paint();
+        return;
+      }
       const argumentError = interactiveCommandArgumentError(parsed);
       if (argumentError) {
         this.status = argumentError;
@@ -494,6 +510,7 @@ export class SebTerminalRenderer {
         return;
       }
     }
+    if (localCommand) this.options.uiState.recordCommand(localCommand.name);
     if (localCommand?.name === 'exit') {
       this.editor.set('');
       this.stop();
@@ -730,19 +747,25 @@ export class SebTerminalRenderer {
     prompt: string,
     resolve: (value: string | undefined) => void,
   ): Promise<void> {
+    const storedPrompt = promptWithoutModelConfigurationArguments(prompt);
     this.answerFocus = null;
     this.scrollOffset = 0;
     this.options.uiState.showSuggestions = false;
     if (!prompt.startsWith('/')) {
       this.options.uiState.latestPrompt = prompt;
     }
-    this.upsert({ content: prompt, id: `user-${Date.now()}`, kind: 'user', title: 'You' });
+    this.upsert({
+      content: storedPrompt,
+      id: `user-${Date.now()}`,
+      kind: 'user',
+      title: 'You',
+    });
     this.editor.set('');
     this.detachInput();
     this.status = 'Thinking';
     this.paint();
     try {
-      await this.options.history.add(prompt);
+      await this.options.history.add(storedPrompt);
     } catch (error) {
       this.options.uiState.notification = errorMessage(error);
     }
@@ -871,8 +894,12 @@ export class SebTerminalRenderer {
   }
 
   private menuCompletions() {
+    const activeModel = this.options.uiState.activeModel;
     return completeInteractiveInput(this.editor.text(), {
       ...this.options.session,
+      ...(activeModel
+        ? { model: activeModel.model, provider: activeModel.provider }
+        : {}),
       recentCommands: this.options.uiState.recentCommands,
     }, 8);
   }
@@ -1289,6 +1316,7 @@ export class SebTerminalRenderer {
 
   private renderHeader(width: number): string[] {
     const session = this.options.session;
+    const activeModel = this.options.uiState.activeModel;
     const recentSource = this.options.sources.list()[0];
     const source = recentSource ? sourceBadge(recentSource) : 'NO SOURCE YET';
     const phase = session.seasonType?.toUpperCase() ?? 'NFL';
@@ -1296,6 +1324,9 @@ export class SebTerminalRenderer {
       ` SEB ${this.options.version}  ${experienceTitle(session.mode).toUpperCase()}  ${session.season} ${phase}${session.week ? ` W${session.week}` : ''}`,
     );
     const context = [
+      ...(activeModel
+        ? [`MODEL ${activeModel.providerLabel.toUpperCase()} · ${activeModel.model}`]
+        : []),
       ...(session.user
         ? [`SLEEPER @${session.user} · ${session.leagues.length} LEAGUE${session.leagues.length === 1 ? '' : 'S'}`]
         : ['SLEEPER NOT CONNECTED']),
@@ -1853,6 +1884,14 @@ function toolApprovalInputSummary(input: unknown): string {
   const graphemes = terminalGraphemes(safe);
   if (graphemes.length <= TOOL_APPROVAL_INPUT_LIMIT) return safe;
   return `${graphemes.slice(0, TOOL_APPROVAL_INPUT_LIMIT - 1).join('')}…`;
+}
+
+function promptWithoutModelConfigurationArguments(prompt: string): string {
+  const parsed = parseInteractiveCommandInput(prompt);
+  return parsed?.argumentText &&
+      (parsed.command?.name === 'model' || parsed.command?.name === 'provider')
+    ? `/${parsed.command.name}`
+    : prompt;
 }
 
 function errorMessage(error: unknown): string {

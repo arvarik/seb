@@ -151,7 +151,7 @@ export function formatSetupProfile(profile: SebSetupProfile, path?: string): str
     `- Sleeper account: ${profile.sleeper ? `@${profile.sleeper.username}` : 'not connected'}`,
     `- Updated: ${profile.updatedAt}`,
     ...(path ? [`- File: \`${path}\``] : []),
-    '- Gemini keys stay in the environment. Seb never saves them in this profile.',
+    '- Model keys never appear in this profile. Seb stores configured keys in a separate private credentials file.',
     '- Seb refreshes the NFL week, leagues, and owned rosters when chat starts.',
     '- Run `/connect USERNAME` or `/disconnect` to change the Sleeper account.',
   ].join('\n');

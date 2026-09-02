@@ -187,7 +187,7 @@ Complete this review before production use.
 
 - Confirm that every webhook path verifies authenticity.
 - Confirm that logs redact secrets and private message bodies.
-- Confirm that retries do not create duplicate Gemini calls.
+- Confirm that retries do not create duplicate model calls.
 - Confirm that message edits stay below platform limits.
 - Confirm that the adapter closes every resident connection.
 - Confirm that Redis survives one service restart.

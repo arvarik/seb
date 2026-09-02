@@ -16,6 +16,16 @@ export type ModelErrorSurface =
   | 'interactive'
   | 'neutral';
 
+export interface ModelErrorContext {
+  credentialName?: string;
+  providerLabel: string;
+}
+
+const GEMINI_ERROR_CONTEXT: ModelErrorContext = {
+  credentialName: 'GOOGLE_GENERATIVE_AI_API_KEY',
+  providerLabel: 'Gemini',
+};
+
 export function isModelCapacityError(error: unknown, depth = 0): boolean {
   if (depth > 5) {
     return false;
@@ -97,6 +107,7 @@ export function classifyModelError(
 export function formatModelErrorForUser(
   error: unknown,
   surface: ModelErrorSurface = 'neutral',
+  context: ModelErrorContext = GEMINI_ERROR_CONTEXT,
 ): string {
   const healthCheck = surface === 'interactive'
     ? 'Run `/doctor`'
@@ -112,19 +123,21 @@ export function formatModelErrorForUser(
     : 'Run the Seb health check and inspect the local statistics';
   switch (classifyModelError(error)) {
     case 'authentication':
-      return `Gemini rejected GOOGLE_GENERATIVE_AI_API_KEY. Update the key. ${healthCheck}, then retry.`;
+      return context.credentialName
+        ? `${context.providerLabel} rejected ${context.credentialName}. Update the credential. ${healthCheck}, then retry.`
+        : `${context.providerLabel} rejected the authentication configuration. Check the endpoint authentication settings. ${healthCheck}, then retry.`;
     case 'cancelled':
-      return 'The request stopped before Gemini finished.';
+      return `The request stopped before ${context.providerLabel} finished.`;
     case 'capacity':
-      return 'Gemini has no available capacity. Try the request again or select another model.';
+      return `${context.providerLabel} has no available capacity. Try the request again or select another model.`;
     case 'invalid-request':
-      return `Gemini rejected the request as invalid. ${diagnostics}, then retry.`;
+      return `${context.providerLabel} rejected the request as invalid. ${diagnostics}, then retry.`;
     case 'provider-timeout':
-      return 'The Gemini service timed out before it returned a response. Retry the request.';
+      return `The ${context.providerLabel} service timed out before it returned a response. Retry the request.`;
     case 'timeout':
-      return 'Gemini did not finish before the request deadline. Retry the request.';
+      return `${context.providerLabel} did not finish before the request deadline. Retry the request.`;
     default:
-      return `Gemini could not complete the request. ${diagnostics}, then retry.`;
+      return `${context.providerLabel} could not complete the request. ${diagnostics}, then retry.`;
   }
 }
 

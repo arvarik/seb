@@ -150,7 +150,7 @@ Use an explicit mode in production for clearer operations.
 
 ## Rate limits and streaming
 
-The adapter posts a placeholder and edits it as Gemini produces text.
+The adapter posts a placeholder and edits it as the active model produces text.
 
 The adapter limits edit frequency to protect the Telegram API quota.
 

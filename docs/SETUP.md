@@ -13,7 +13,14 @@ node --version
 npm --version
 ```
 
-Create a [Gemini API key](https://aistudio.google.com/app/apikey).
+Choose one supported model provider.
+
+| Provider | Required access | Default primary model | Default fallback model |
+| --- | --- | --- | --- |
+| Google Gemini | `GOOGLE_GENERATIVE_AI_API_KEY` or `GEMINI_API_KEY` | `gemini-3.7-flash` | `gemini-3.6-flash` |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-5` | `claude-haiku-4-5` |
+| OpenAI | `OPENAI_API_KEY` | `gpt-5.6-luna` | `gpt-5.4-mini` |
+| OpenAI-compatible | API base URL and model ID. The key is optional. | No default | The primary model |
 
 Sleeper, nflverse, and the NWS use public read-only endpoints. These sources need no API key.
 
@@ -32,16 +39,44 @@ Copy the example environment file.
 cp .env.example .env
 ```
 
-Add the Gemini key to `.env`.
+Run the private model configuration flow.
+
+```bash
+npm run seb -- configure
+```
+
+The flow masks typed keys and tests the selected provider for 30 seconds.
+
+Seb saves the configuration only after the test succeeds.
+
+The command requires an interactive terminal because it masks private keys.
+
+Run the command again to add another provider or change a saved model.
+
+You can use environment variables instead. This `.env` example selects Google.
 
 ```dotenv
 GOOGLE_GENERATIVE_AI_API_KEY=your-key
 ```
 
+This shell example selects a local OpenAI-compatible endpoint without a key.
+
+```bash
+export SEB_MODEL_PROVIDER=openai-compatible
+export OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
+export OPENAI_COMPATIBLE_MODEL=local-model
+```
+
+Seb ignores custom endpoint selection and configuration path changes from a current-directory `.env` file.
+
+This rule prevents an untrusted project file from selecting a model endpoint or a private storage path.
+
+Use `seb configure`, a shell environment, or a deployment environment for these values.
+
 Add a contact value to the NWS user agent.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.1.2 (you@example.com)
+NWS_USER_AGENT=seb/0.2.0 (you@example.com)
 ```
 
 The default value identifies the public Seb repository. A direct contact value helps the NWS contact you about request problems.
@@ -82,7 +117,7 @@ npm run sleeper:smoke
 
 This test reads the current NFL state.
 
-The test does not call Gemini.
+The test does not call a model provider.
 
 Run the combined nflverse and NWS smoke test.
 
@@ -94,7 +129,7 @@ This test loads the 2026 schedule and 2025 weekly player statistics.
 
 The test also loads the Seattle stadium hourly forecast and active alerts.
 
-This test does not call Gemini.
+This test does not call a model provider.
 
 Run the direct news source smoke test.
 
@@ -108,9 +143,9 @@ It verifies that each source returns at least one valid dated article.
 
 The test can take longer when a publisher requires a crawl delay.
 
-This test does not call Gemini or Google Search.
+This test does not call a model provider or Google Search.
 
-## 4. Verify Gemini
+## 4. Verify the model provider
 
 Run the complete diagnostic command.
 
@@ -118,11 +153,13 @@ Run the complete diagnostic command.
 npm run doctor
 ```
 
-This command checks Node.js, SQLite, Gemini, Sleeper, nflverse, and the NWS.
+This command checks Node.js, SQLite, the active model provider, Sleeper, nflverse, and the NWS.
 
 The SQLite check reports cache, snapshot, identity, and source-link counts.
 
-The Gemini check sends one small request.
+Every provider must complete one forced local tool loop.
+
+The Google check must also return one valid grounded Google Search URL.
 
 Use the offline check when you only want to verify local configuration.
 
@@ -136,11 +173,15 @@ Then ask one small question.
 npm run ask -- "Show the current NFL state."
 ```
 
-One-shot requests use `GEMINI_MODEL` first. They use `GEMINI_FALLBACK_MODEL` after a temporary capacity or rate-limit error.
+One-shot requests use the configured primary model first.
+
+Seb retries the fallback only after a capacity or rate-limit error.
+
+Seb does not retry the fallback for an authentication error, invalid request, timeout, or cancellation.
 
 ## 5. Save the optional Sleeper account
 
-Run setup without a username when you only want to validate Gemini.
+Run setup without a username when you do not want automatic fantasy context.
 
 ```bash
 npm run seb -- setup
@@ -152,17 +193,11 @@ Add one Sleeper username when you want automatic fantasy context.
 npm run seb -- setup your-sleeper-name
 ```
 
-Setup checks that the Gemini key exists.
-
-It sends one small Gemini request to validate the key and configured models.
-
-It does not save the key value.
-
 Seb saves only the optional Sleeper username and the update time.
 
 The preferences file contains no league, roster, NFL team, season, or week.
 
-Starting `seb` without preferences validates Gemini and creates an empty preferences file.
+Starting `seb` without preferences creates an empty preferences file.
 
 The setup command accepts no interactive answers, so scripts can also run it.
 
@@ -346,14 +381,26 @@ The response lists each enabled connector and the selected state adapter.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Yes | Authenticates Gemini requests. |
-| `GEMINI_MODEL` | No | Selects the primary Gemini model. |
-| `GEMINI_FALLBACK_MODEL` | No | Selects the capacity fallback model. |
+| `SEB_MODEL_PROVIDER` | No | Selects `google`, `anthropic`, `openai`, or `openai-compatible`. |
+| `SEB_PROVIDER` | No | Provides the older alias for `SEB_MODEL_PROVIDER`. |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google | Authenticates Google Gemini requests. |
+| `GEMINI_API_KEY` | Google | Provides an accepted Google key alias. |
+| `ANTHROPIC_API_KEY` | Anthropic | Authenticates Anthropic requests. |
+| `OPENAI_API_KEY` | OpenAI | Authenticates OpenAI requests. |
+| `OPENAI_COMPATIBLE_API_KEY` | Endpoint-specific | Authenticates an OpenAI-compatible endpoint when it requires a key. |
+| `OPENAI_COMPATIBLE_BASE_URL` | OpenAI-compatible | Selects the compatible API base URL. |
+| `SEB_MODEL` | No | Overrides the active provider model. |
+| `SEB_FALLBACK_MODEL` | No | Overrides the active provider fallback model. |
+| `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` | No | Select the Google models. |
+| `ANTHROPIC_MODEL`, `ANTHROPIC_FALLBACK_MODEL` | No | Select the Anthropic models. |
+| `OPENAI_MODEL`, `OPENAI_FALLBACK_MODEL` | No | Select the OpenAI models. |
+| `OPENAI_COMPATIBLE_MODEL`, `OPENAI_COMPATIBLE_FALLBACK_MODEL` | OpenAI-compatible | Select the endpoint models. |
 | `NWS_USER_AGENT` | Recommended | Identifies Seb and gives the NWS a contact value. |
 | `SEB_DEVTOOLS` | No | Records local AI SDK traces when it equals `true` or `1`. |
 | `SEB_SLEEPER_USER` | No | Supplies the optional Sleeper username during setup. |
 | `SEB_PROFILE_FILE` | No | Selects the complete preferences file path. |
 | `SEB_CONFIG_HOME` | No | Selects the directory that contains `profile.json`. |
+| `SEB_MODEL_SETTINGS_FILE` | No | Selects the complete non-secret model settings file path. |
 | `SEB_CONNECTORS` | Usually | Lists `slack`, `discord`, or `telegram`. |
 | `SEB_BOT_NAME` | No | Sets the common bot name. The default is `seb`. |
 | `HOST` | No | Sets the connector bind address. The default is `0.0.0.0`. |
@@ -364,24 +411,44 @@ Seb can auto-detect a connector from complete platform credentials.
 
 Set `SEB_CONNECTORS` explicitly in production. This setting prevents an unused credential from enabling a platform.
 
-## Preferences path and security
+Environment values override saved credentials and saved model settings.
 
-Seb selects the preferences path in this order.
+The automatic current-directory `.env` loader ignores custom endpoints, provider selection, private storage paths, and DevTools activation.
+
+An explicit CLI or slash model override uses that model as its own fallback.
+
+An explicit provider-only override keeps that provider's configured fallback.
+
+`SEB_MODEL` does not disable fallback.
+
+It uses `SEB_FALLBACK_MODEL`, a provider-specific fallback, a saved fallback, or the hosted default.
+
+A qualified model uses the `provider:model` format. The provider prefix must match a supported provider ID.
+
+## Local configuration paths and security
+
+Seb selects the account preferences path in this order.
 
 1. `SEB_PROFILE_FILE` selects the complete file path.
 2. `SEB_CONFIG_HOME` selects `DIRECTORY/profile.json`.
 3. `XDG_CONFIG_HOME` selects `DIRECTORY/seb/profile.json`.
 4. The default path is `~/.config/seb/profile.json`.
 
-Use an absolute path for `SEB_PROFILE_FILE` in scripts.
+Seb places `credentials.json` and `model-settings.json` beside `profile.json`.
+
+`SEB_MODEL_SETTINGS_FILE` can select a different model settings path.
+
+Use absolute paths for file overrides in scripts.
 
 Do not set both Seb preferences variables.
 
 `SEB_PROFILE_FILE` has priority when both values exist.
 
-Seb creates the preferences directory with mode `0700`.
+Seb gives a newly created preferences directory mode `0700`.
 
-Seb writes the preferences file with mode `0600`.
+Seb does not change the mode of an existing custom directory.
+
+Seb writes each configuration file with mode `0600`.
 
 It writes a temporary file before an atomic rename.
 
@@ -389,7 +456,15 @@ It rejects a file larger than 64 KiB.
 
 It validates the schema, identifiers, ranges, and update time on every load.
 
-The file contains only the optional Sleeper username, schema version, and update time.
+One saved key cannot exceed 16 KiB. One model ID cannot exceed 200 safe characters.
+
+`profile.json` contains only the optional Sleeper username, schema version, and update time.
+
+`credentials.json` contains saved provider keys and no model settings.
+
+It binds a saved OpenAI-compatible key to one canonical compatible base URL.
+
+`model-settings.json` contains the active provider, model IDs, fallback model IDs, and the optional compatible endpoint. It contains no keys.
 
 Seb migrates version 1 and version 2 files to version 3 when it loads them.
 
@@ -397,19 +472,43 @@ Version 1 migration keeps a valid Sleeper username.
 
 All migrations remove saved league, roster, season, and week values.
 
-The preferences file does not contain the Gemini key or connector credentials.
+The account preferences file does not contain a provider key or connector credential.
+
+The model configuration prompt never adds a typed key to chat or prompt history.
+
+Local usage telemetry excludes keys, authorization headers, and compatible endpoint URLs.
 
 Interactive chat and one-shot requests load these preferences automatically.
+
+They also load saved model credentials and model settings.
+
+Connector services do not load the saved provider files. Configure each connector process through its environment.
 
 One-shot and connector requests do not apply interactive team context.
 
 ## Common setup errors
 
-### The Gemini key is empty
+### No model provider is configured
 
-The command shows `The Google Generative AI API key is empty.`
+Run `seb configure` in an interactive terminal.
 
-Add the key to `.env`. Then restart the command.
+You can instead add a supported provider key or compatible endpoint to the environment.
+
+### An OpenAI-compatible endpoint is rejected
+
+Use an HTTP loopback URL or an HTTPS remote URL.
+
+Use the API base URL. Do not use `/chat/completions`, `/completions`, `/models`, or `/responses` as the final path.
+
+Remove embedded credentials, a query string, and a fragment from the URL.
+
+Seb rejects redirects for compatible model and discovery requests.
+
+The interactive flow asks for confirmation before it sends data to a non-loopback origin.
+
+The endpoint must support streaming and model tool calls.
+
+Run `seb configure` to test those requirements before you save the endpoint.
 
 ### Sleeper finds no league
 
@@ -441,9 +540,11 @@ Then run `seb setup` to create a validated profile.
 
 Restrict the directory and file on Unix systems.
 
+Run each file command only when that file exists.
+
 ```bash
 chmod 700 ~/.config/seb
-chmod 600 ~/.config/seb/profile.json
+chmod 600 ~/.config/seb/profile.json ~/.config/seb/credentials.json ~/.config/seb/model-settings.json
 ```
 
 ### No connector is configured

@@ -14,6 +14,12 @@ import { fantasyAnalysisSchema } from './analysis/output.js';
 import { pruneFantasyMessages } from './ai/context.js';
 import { bindToolRequestSignals } from './ai/request-signal.js';
 import { activeAiDevToolsTelemetry } from './ai/devtools.js';
+import {
+  createProviderLanguageModel,
+  ModelProviderConfigurationError,
+  type ModelProviderId,
+  type ResolvedModelProvider,
+} from './ai/model-provider.js';
 import { createGeminiLanguageModel } from './gemini-model.js';
 import { SleeperClient } from './sleeper/client.js';
 import { createSleeperTools } from './sleeper/tools.js';
@@ -84,6 +90,7 @@ export interface FantasyFootballAgentOptions {
   identityRepository?: IdentityRepository | false;
   languageModel?: LanguageModel;
   model?: string;
+  modelProvider?: ResolvedModelProvider;
   newsClient?: NewsClient;
   nflverseClient?: NflverseClient;
   onUsage?: (usage: {
@@ -101,11 +108,11 @@ export interface FantasyFootballAgentOptions {
 export function createFantasyFootballAgent(
   options: FantasyFootballAgentOptions,
 ) {
-  const { enableWebTools, languageModel, tools } = createAgentComponents(options);
+  const { languageModel, newsToolMode, tools } = createAgentComponents(options);
 
   return new ToolLoopAgent({
     model: languageModel,
-    instructions: runtimeInstructions(options, enableWebTools),
+    instructions: runtimeInstructions(options, newsToolMode),
     prepareCall: ({ options: _options, messages, prompt, ...call }) => {
       const runtimeContext = runtimeContextMessage(options.getRuntimeContext?.());
       return {
@@ -120,7 +127,7 @@ export function createFantasyFootballAgent(
                 : combineRuntimeContext(runtimeContext, prompt),
             }
           : {}),
-        instructions: runtimeInstructions(options, enableWebTools),
+        instructions: runtimeInstructions(options, newsToolMode),
       };
     },
     prepareStep: ({ messages, stepNumber }) => ({
@@ -190,16 +197,29 @@ function agentTelemetry(
 }
 
 function createAgentComponents(options: FantasyFootballAgentOptions) {
-  const { googleProvider, languageModel } = createLanguageModel(options);
-  let toolProvider = googleProvider;
+  const languageModelResult = createLanguageModel(options);
+  const { activeProvider, languageModel } = languageModelResult;
   const sleeperClient = options.sleeperClient ?? new SleeperClient();
   const nflverseClient = options.nflverseClient ?? new NflverseClient();
   const newsClient = options.newsClient ?? new NewsClient();
   const weatherClient = options.weatherClient ?? new WeatherClient();
   const enableWebTools = webToolsEnabled(options);
-  if (enableWebTools && !toolProvider) {
-    toolProvider = createGoogle();
+  let toolProvider = languageModelResult.googleProvider;
+  if (enableWebTools && activeProvider === 'google' && !toolProvider) {
+    const apiKey = options.modelProvider?.apiKey?.trim() ??
+      options.apiKey?.trim();
+    if (!apiKey) {
+      throw new ModelProviderConfigurationError(
+        'Google Gemini needs GOOGLE_GENERATIVE_AI_API_KEY.',
+      );
+    }
+    toolProvider = createGoogle({ apiKey });
   }
+  const newsToolMode: NewsToolMode = !enableWebTools
+    ? 'none'
+    : activeProvider === 'google' && toolProvider
+    ? 'google'
+    : 'direct';
   const tools = bindToolRequestSignals({
     ...createSleeperTools(sleeperClient),
     ...createNflverseTools(nflverseClient),
@@ -214,28 +234,36 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
         ? {}
         : { repository: options.identityRepository },
     ),
-    ...(enableWebTools ? createFirstClassNewsTools(newsClient) : {}),
-    ...(enableWebTools && toolProvider
+    ...(newsToolMode !== 'none' ? createFirstClassNewsTools(newsClient) : {}),
+    ...(newsToolMode === 'google' && toolProvider
       ? createGroundedNewsTools(toolProvider)
       : {}),
   });
-  return { enableWebTools, languageModel, tools };
+  return { languageModel, newsToolMode, tools };
 }
 
 function createLanguageModel(options: FantasyFootballAgentOptions) {
+  let activeProvider: ModelProviderId | undefined =
+    options.modelProvider?.provider;
   let googleProvider: ReturnType<typeof createGoogle> | undefined;
   let languageModel = options.languageModel;
   if (!languageModel) {
-    const apiKey = options.apiKey?.trim();
-    if (!apiKey) {
-      throw new Error('The Google Generative AI API key is empty.');
+    if (options.modelProvider) {
+      languageModel = createProviderLanguageModel(options.modelProvider);
+    } else {
+      const apiKey = options.apiKey?.trim();
+      if (!apiKey) {
+        throw new Error('The Google Generative AI API key is empty.');
+      }
+      activeProvider = 'google';
+      googleProvider = createGoogle({ apiKey });
+      languageModel = createGeminiLanguageModel(
+        googleProvider,
+        options.model ?? DEFAULT_GEMINI_MODEL,
+      );
     }
-    googleProvider = createGoogle({ apiKey });
-    languageModel = createGeminiLanguageModel(
-      googleProvider,
-      options.model ?? DEFAULT_GEMINI_MODEL,
-    );
   }
+  if (!activeProvider && options.apiKey?.trim()) activeProvider = 'google';
   if (typeof languageModel !== 'string') {
     languageModel = wrapLanguageModel({
       model: languageModel,
@@ -244,51 +272,68 @@ function createLanguageModel(options: FantasyFootballAgentOptions) {
       }),
     });
   }
-  return { googleProvider, languageModel };
+  return { activeProvider, googleProvider, languageModel };
 }
 
 function runtimeInstructions(
   options: FantasyFootballAgentOptions,
-  enableWebTools: boolean,
+  newsToolMode: NewsToolMode,
 ): string {
   const today = (options.now?.() ?? new Date()).toISOString().slice(0, 10);
   const dynamicInstructions = options.getRuntimeInstructions?.();
   return [
-    fantasyFootballInstructions(enableWebTools),
+    fantasyFootballInstructions(newsToolMode),
     `The current UTC date is ${today}.`,
-    enableWebTools
-      ? dynamicInstructions
-      : omitWebToolCommands(dynamicInstructions),
+    omitUnavailableNewsToolCommands(dynamicInstructions, newsToolMode),
   ]
     .filter(Boolean)
     .join('\n\n');
 }
 
-function omitWebToolCommands(value: string | undefined): string | undefined {
+function omitUnavailableNewsToolCommands(
+  value: string | undefined,
+  newsToolMode: NewsToolMode,
+): string | undefined {
   if (!value) return value;
+  const unavailableTools = newsToolMode === 'google'
+    ? []
+    : newsToolMode === 'direct'
+    ? ['searchCurrentNews', 'readNewsUrl', 'Google Search', 'URL Context']
+    : [
+        'searchCurrentNews',
+        'searchFirstClassNews',
+        'readNewsUrl',
+        'Google Search',
+        'URL Context',
+      ];
+  if (unavailableTools.length === 0) return value;
   return value
     .split('\n')
     .map((line) => line
       .split(/(?<=[.!?])\s+/u)
-      .filter((sentence) =>
-        !sentence.includes('searchCurrentNews') &&
-        !sentence.includes('searchFirstClassNews') &&
-        !sentence.includes('readNewsUrl')
-      )
+      .filter((sentence) => !unavailableTools.some(
+        (toolName) => sentence.includes(toolName),
+      ))
       .join(' '))
     .filter(Boolean)
     .join('\n');
 }
 
 function webToolsEnabled(options: FantasyFootballAgentOptions): boolean {
-  return options.enableWebTools ?? options.languageModel === undefined;
+  return options.enableWebTools ??
+    (options.languageModel === undefined || options.modelProvider !== undefined);
 }
 
-function fantasyFootballInstructions(enableWebTools: boolean): string {
+type NewsToolMode = 'direct' | 'google' | 'none';
+
+function fantasyFootballInstructions(newsToolMode: NewsToolMode): string {
   return [
     BASE_INSTRUCTIONS,
-    enableWebTools ? WEB_NEWS_INSTRUCTIONS : NO_WEB_NEWS_INSTRUCTIONS,
-  ].join('\n\n');
+    newsToolMode === 'none'
+      ? NO_WEB_NEWS_INSTRUCTIONS
+      : DIRECT_NEWS_INSTRUCTIONS,
+    newsToolMode === 'google' ? GOOGLE_NEWS_INSTRUCTIONS : undefined,
+  ].filter(Boolean).join('\n\n');
 }
 
 function injectRuntimeContext(
@@ -527,22 +572,25 @@ For usage analysis, add a comma-separated Usage trend line when the tools return
 For schedule analysis, add a comma-separated Schedule difficulty line when the tools return comparable numeric values.
 `.trim();
 
-const WEB_NEWS_INSTRUCTIONS = `
+const DIRECT_NEWS_INSTRUCTIONS = `
 Use current news before a final waiver, FAAB, accept, or decline recommendation.
 Do not turn a trade impact result into an accept or decline action without current news evidence.
 Use searchFirstClassNews first for current reporting, injuries, trades, depth-chart changes, and recent team news.
 The first-class tool searches official NFL and team sites, independent reporting, and fantasy-impact sources.
-Use searchCurrentNews only when searchFirstClassNews sets fallbackRecommended to true or the user explicitly requests broad web coverage.
-Do not call searchCurrentNews before searchFirstClassNews for a current NFL or fantasy news request.
-Use readNewsUrl when the user supplies an HTTP or HTTPS article URL.
 Treat web reporting as news evidence, not as the source for league data, schedules, or statistics.
 Give the publisher and publication date for each current news claim when those values are available.
 For roster news, read each relevant owned roster before you search current news.
 Seb uses public feeds, sitemaps, and structured article metadata. Seb has no licensed publisher feed.
-Google Search supplies secondary public coverage with source links.
 Sleeper profile fields can contain injury information, but those fields are not a news report.
 State this limit when a request needs current reporting.
 Do not present model memory as current news.
+`.trim();
+
+const GOOGLE_NEWS_INSTRUCTIONS = `
+Use searchCurrentNews only when searchFirstClassNews sets fallbackRecommended to true or the user explicitly requests broad web coverage.
+Do not call searchCurrentNews before searchFirstClassNews for a current NFL or fantasy news request.
+Use readNewsUrl when the user supplies an HTTP or HTTPS article URL.
+Google Search supplies secondary public coverage with source links.
 `.trim();
 
 const NO_WEB_NEWS_INSTRUCTIONS = `

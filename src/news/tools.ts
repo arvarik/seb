@@ -19,7 +19,7 @@ export function createFirstClassNewsTools(news: NewsClient) {
   return {
     searchFirstClassNews: tool({
       description:
-        'Search Seb\'s cached official NFL, independent NFL, and fantasy-impact sources. Use this before Google Search.',
+        'Search Seb\'s cached official NFL, independent NFL, and fantasy-impact sources. Use this before a broad web search.',
       inputSchema: z.object({
         query: z.string().trim().min(2).max(500),
         categories: z.array(

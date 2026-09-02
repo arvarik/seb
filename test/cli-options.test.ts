@@ -18,6 +18,8 @@ describe('parseCliArguments', () => {
         '--no-progress',
         '--model',
         'gemini-test',
+        '--provider',
+        'google',
         'Analyze',
         'league 123',
       ]),
@@ -25,6 +27,7 @@ describe('parseCliArguments', () => {
       name: 'ask',
       json: true,
       model: 'gemini-test',
+      provider: 'google',
       progress: false,
       prompt: 'Analyze league 123',
     });
@@ -66,10 +69,32 @@ describe('parseCliArguments', () => {
   });
 
   it('accepts an inline model value', () => {
-    expect(parseCliArguments(['chat', '--model=gemini-test'])).toEqual({
+    expect(parseCliArguments([
+      'chat',
+      '--provider=openai-compatible',
+      '--model=local-test',
+    ])).toEqual({
       name: 'chat',
-      model: 'gemini-test',
+      model: 'local-test',
+      provider: 'openai-compatible',
     });
+  });
+
+  it('parses provider configuration and rejects an unknown provider', () => {
+    expect(parseCliArguments(['configure'])).toEqual({ name: 'configure' });
+    expect(parseCliArguments(['ask', '-p', 'anthropic', 'Compare players'])).toEqual({
+      name: 'ask',
+      json: false,
+      progress: true,
+      prompt: 'Compare players',
+      provider: 'anthropic',
+    });
+    expect(() => parseCliArguments(['chat', '--provider', 'other'])).toThrow(
+      '--provider must equal google, anthropic, openai, or openai-compatible.',
+    );
+    expect(() => parseCliArguments(['configure', 'extra'])).toThrow(
+      'configure does not accept more arguments.',
+    );
   });
 
   it('rejects an unknown option', () => {

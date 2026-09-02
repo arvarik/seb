@@ -15,11 +15,12 @@ import {
 } from 'chat';
 import { toAiMessages } from 'chat/ai';
 
+import { createFantasyFootballAgent } from '../agent.js';
 import {
-  createFantasyFootballAgent,
-  DEFAULT_GEMINI_FALLBACK_MODEL,
-  DEFAULT_GEMINI_MODEL,
-} from '../agent.js';
+  resolveModelProvider,
+  type ModelProviderId,
+  type ResolvedModelProvider,
+} from '../ai/model-provider.js';
 import {
   buildFreeformRecommendationEvidence,
   enforceFreeformRecommendation,
@@ -31,6 +32,7 @@ import { getSharedSebDatabase } from '../data/sqlite-store.js';
 import {
   formatModelErrorForUser,
   isModelCapacityError,
+  type ModelErrorContext,
 } from '../model-capacity-error.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { NewsClient } from '../news/client.js';
@@ -57,13 +59,38 @@ const CONNECTOR_REPLY_TIMEOUT_MS = 120_000;
 const FAILURE_MESSAGE =
   'Seb could not answer this request. Check the connector service logs, then retry.';
 const NEVER_ABORT_SIGNAL = new AbortController().signal;
+const CONNECTOR_MODEL_ERROR_CONTEXTS: Readonly<
+  Record<Exclude<ModelProviderId, 'openai-compatible'>, ModelErrorContext>
+> = {
+  anthropic: {
+    credentialName: 'ANTHROPIC_API_KEY',
+    providerLabel: 'Anthropic',
+  },
+  google: {
+    credentialName: 'GOOGLE_GENERATIVE_AI_API_KEY',
+    providerLabel: 'Gemini',
+  },
+  openai: {
+    credentialName: 'OPENAI_API_KEY',
+    providerLabel: 'OpenAI',
+  },
+};
 
 export class ModelResponseError extends Error {
   readonly emittedOutput: boolean;
   override readonly cause: unknown;
 
-  constructor(cause: unknown, emittedOutput: boolean) {
-    super(formatModelErrorForUser(cause, 'connector'), { cause });
+  constructor(
+    cause: unknown,
+    emittedOutput: boolean,
+    context?: ModelErrorContext,
+  ) {
+    super(
+      context
+        ? formatModelErrorForUser(cause, 'connector', context)
+        : formatModelErrorForUser(cause, 'connector'),
+      { cause },
+    );
     this.name = 'ModelResponseError';
     this.cause = cause;
     this.emittedOutput = emittedOutput;
@@ -200,16 +227,31 @@ export function registerConnectorHandlers(
   });
 }
 
+export function resolveConnectorModelProvider(
+  environment: Environment = process.env,
+): ResolvedModelProvider {
+  return resolveModelProvider({ environment });
+}
+
+function connectorModelErrorContext(
+  selection: ResolvedModelProvider,
+): ModelErrorContext {
+  if (selection.provider !== 'openai-compatible') {
+    return CONNECTOR_MODEL_ERROR_CONTEXTS[selection.provider];
+  }
+  return {
+    ...(selection.apiKey
+      ? { credentialName: 'OPENAI_COMPATIBLE_API_KEY' }
+      : {}),
+    providerLabel: 'OpenAI-compatible endpoint',
+  };
+}
+
 function createAgentReply(environment: Environment): ConnectorReply {
-  const apiKey = requireEnvironment(
-    environment,
-    'GOOGLE_GENERATIVE_AI_API_KEY',
-  );
-  const primaryModel =
-    environment.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
-  const fallbackModel =
-    environment.GEMINI_FALLBACK_MODEL?.trim() ||
-    DEFAULT_GEMINI_FALLBACK_MODEL;
+  const selection = resolveConnectorModelProvider(environment);
+  const primaryModel = selection.model;
+  const fallbackModel = selection.fallbackModel;
+  const modelErrorContext = connectorModelErrorContext(selection);
   const sourceContext = new AsyncLocalStorage<SourceTracker>();
   const onSource: SourceObserver = (source) => sourceContext.getStore()?.record(source);
   const sleeperClient = new SleeperClient({ onSource });
@@ -234,8 +276,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
       surface: 'connector',
     });
     const primaryAgent = createFantasyFootballAgent({
-      apiKey,
-      model: primaryModel,
+      ...connectorAgentModel(selection, primaryModel),
       ...clients,
       telemetryFunctionId: 'seb.connector.research',
       telemetryIntegrations: [primaryUsageTelemetry],
@@ -251,8 +292,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
     const fallbackAgent = fallbackModel === primaryModel
       ? primaryAgent
       : createFantasyFootballAgent({
-          apiKey,
-          model: fallbackModel,
+          ...connectorAgentModel(selection, fallbackModel),
           ...clients,
           telemetryFunctionId: 'seb.connector.research',
           telemetryIntegrations: [fallbackUsageTelemetry],
@@ -271,6 +311,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
           sources,
           requestSignal,
           primaryUsageTelemetry,
+          modelErrorContext,
         );
       } catch (error) {
         if (
@@ -289,6 +330,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
           sources,
           requestSignal,
           fallbackUsageTelemetry,
+          modelErrorContext,
         );
       }
     });
@@ -302,12 +344,13 @@ async function postAgentResponse(
   directSources: SourceTracker,
   signal: AbortSignal,
   usageTelemetry: SebUsageTelemetry,
+  modelErrorContext: ModelErrorContext,
 ): Promise<void> {
   let result: Awaited<ReturnType<typeof agent.stream>>;
   try {
     result = await agent.stream({ abortSignal: signal, prompt });
   } catch (error) {
-    throw new ModelResponseError(error, false);
+    throw new ModelResponseError(error, false, modelErrorContext);
   }
   await waitForSignal(
     thread.post(withWebSources(
@@ -320,6 +363,7 @@ async function postAgentResponse(
           new DOMException('The connector stopped reading the response.', 'AbortError'),
       ),
       (error) => usageTelemetry.closeUnfinished(error),
+      modelErrorContext,
     )),
     signal,
   );
@@ -332,6 +376,7 @@ export function withWebSources(
   abortSignal?: AbortSignal,
   onConsumerCancel?: () => void,
   onStreamError?: (error: unknown) => void,
+  modelErrorContext?: ModelErrorContext,
 ) {
   if (questionRequestsRecommendation(question)) {
     return observeConsumerCancellation(
@@ -340,6 +385,7 @@ export function withWebSources(
         directSources ?? new SourceTracker(),
         question,
         abortSignal,
+        modelErrorContext,
       ),
       onConsumerCancel,
       onStreamError,
@@ -350,12 +396,19 @@ export function withWebSources(
   const monitored = (async function* () {
     try {
       for await (const part of stream) {
-        if (isErrorPart(part)) throw new ModelResponseError(part.error, emittedOutput);
+        if (isErrorPart(part)) {
+          throw new ModelResponseError(
+            part.error,
+            emittedOutput,
+            modelErrorContext,
+          );
+        }
         if (isAbortPart(part)) {
           throw new ModelResponseError(
             abortSignal?.reason ??
               new DOMException('The model stream stopped.', 'AbortError'),
             emittedOutput,
+            modelErrorContext,
           );
         }
         if (isUserVisibleOutputPart(part)) emittedOutput = true;
@@ -373,7 +426,7 @@ export function withWebSources(
       }
     } catch (error) {
       if (error instanceof ModelResponseError) throw error;
-      throw new ModelResponseError(error, emittedOutput);
+      throw new ModelResponseError(error, emittedOutput, modelErrorContext);
     }
   })();
   const text = fromFullStream(monitored);
@@ -414,6 +467,7 @@ function guardedRecommendationStream(
   directSources: SourceTracker,
   question: string,
   abortSignal?: AbortSignal,
+  modelErrorContext?: ModelErrorContext,
 ) {
   return (async function* () {
     let answer = '';
@@ -421,12 +475,15 @@ function guardedRecommendationStream(
     const toolResults: RecommendationToolResult[] = [];
     try {
       for await (const part of stream) {
-        if (isErrorPart(part)) throw new ModelResponseError(part.error, false);
+        if (isErrorPart(part)) {
+          throw new ModelResponseError(part.error, false, modelErrorContext);
+        }
         if (isAbortPart(part)) {
           throw new ModelResponseError(
             abortSignal?.reason ??
               new DOMException('The model stream stopped.', 'AbortError'),
             answer.length > 0,
+            modelErrorContext,
           );
         }
         if (isTextDeltaPart(part)) answer += part.text;
@@ -446,7 +503,7 @@ function guardedRecommendationStream(
       }
     } catch (error) {
       if (error instanceof ModelResponseError) throw error;
-      throw new ModelResponseError(error, false);
+      throw new ModelResponseError(error, false, modelErrorContext);
     }
     const guarded = enforceFreeformRecommendation(
       answer,
@@ -704,6 +761,30 @@ function createSlack(
     mode: 'webhook',
     signingSecret: requireEnvironment(environment, 'SLACK_SIGNING_SECRET'),
   });
+}
+
+function connectorAgentModel(
+  selection: ResolvedModelProvider,
+  model: string,
+) {
+  if (selection.provider === 'google') {
+    const apiKey = selection.apiKey;
+    if (!apiKey) {
+      throw new Error(
+        'Google Gemini needs GOOGLE_GENERATIVE_AI_API_KEY.',
+      );
+    }
+    return {
+      apiKey,
+      model,
+    };
+  }
+  return {
+    modelProvider: {
+      ...selection,
+      model,
+    },
+  };
 }
 
 function requireEnvironment(

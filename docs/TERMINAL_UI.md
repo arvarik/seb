@@ -1,6 +1,6 @@
 # Terminal interface guide
 
-Seb `0.1.2` includes a local terminal renderer for interactive research.
+Seb `0.2.0` includes a local terminal renderer for interactive research.
 
 Seb owns the conversation loop and uses the public AI SDK transport contract.
 
@@ -139,6 +139,8 @@ The file uses permission mode `0600`.
 
 The parent directory uses permission mode `0700` when Seb creates it.
 
+Seb keeps the existing mode when you select an existing custom directory.
+
 Set this value to disable disk history.
 
 ```dotenv
@@ -193,6 +195,7 @@ The first header row shows these values.
 
 The following rows show only useful active context.
 
+- Active model provider and model ID
 - Connected Sleeper username and discovered league count
 - Focused fantasy league, when one league has focus
 - Active NFL player or team
@@ -205,6 +208,16 @@ Source states include `LIVE`, `WEB`, `CACHED 4m`, `2025 STATS`, and `STALE`.
 The exact cache age changes as time passes.
 
 Run `/context` for the full context.
+
+Run `/provider` or `/model` to show the active model selection.
+
+Run `/provider NAME` or `/model MODEL` to verify and switch the session model.
+
+The interface starts a fresh model context after a successful switch.
+
+It keeps the visible transcript and clears the prior answer evidence.
+
+Run `seb configure` outside the chat interface to save a key or endpoint.
 
 Run `/sources` for exact links, retrieval times, and cache outcomes.
 

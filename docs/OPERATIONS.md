@@ -14,7 +14,7 @@ Place an HTTPS reverse proxy or load balancer before the service.
 
 The proxy must preserve the original webhook request body.
 
-The service returns platform acknowledgements before Gemini work finishes.
+The service returns platform acknowledgements before model work finishes.
 
 Background tasks continue the agent request after each acknowledgement.
 
@@ -104,11 +104,11 @@ The route returns `200` while the HTTP process can answer.
 
 The JSON response includes enabled connectors, state type, and background task count.
 
-This route does not call Redis, Gemini, Sleeper, or a platform API.
+This route does not call Redis, a model provider, Sleeper, or a platform API.
 
 Add a separate synthetic test when dependency health must affect alerts.
 
-Do not restart the service only because Gemini returns one capacity error.
+Do not restart the service only because a model provider returns one capacity error.
 
 Seb already retries the configured fallback model.
 
@@ -124,7 +124,7 @@ Run the same source contracts locally.
 npm run contract:sources
 ```
 
-The answer job sends a fixed evidence object to Gemini.
+The answer job sends a fixed evidence object to Google Gemini.
 
 It also verifies one local tool result, one model continuation, and one grounded Google Search source.
 
@@ -145,6 +145,9 @@ Treat a contract failure as a provider or integration change until the evidence 
 Store these values in the deployment secret store.
 
 - `GOOGLE_GENERATIVE_AI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `OPENAI_API_KEY`
+- `OPENAI_COMPATIBLE_API_KEY` when the endpoint requires it
 - Platform bot tokens
 - Platform signing secrets
 - Webhook verification tokens
@@ -158,6 +161,16 @@ Rotate a platform token after any suspected exposure.
 
 Restart every service instance after a non-dynamic secret rotation.
 
+The connector reads model provider values only from its process environment.
+
+Set `SEB_MODEL_PROVIDER`, the selected key or endpoint, and the model variables in the deployment configuration.
+
+Use HTTPS for every remote OpenAI-compatible endpoint. An HTTP endpoint must use a loopback host.
+
+Test the endpoint with `seb configure` before deployment.
+
+The configuration flow asks for approval before it sends data to a remote origin.
+
 ## Logs
 
 The service writes startup and shutdown messages to standard output.
@@ -169,6 +182,8 @@ The Chat SDK writes adapter lifecycle events through its console logger.
 Collect both streams in the deployment log service.
 
 Do not add complete request payloads to production logs.
+
+Do not log model keys, authorization headers, or compatible endpoint URLs.
 
 Do not print SQLite snapshot payloads in normal production logs.
 
@@ -182,7 +197,7 @@ Track these operational values.
 
 - Webhook response latency
 - Agent answer latency
-- Gemini error count by status
+- Model provider error count by provider and safe category
 - Successful agent-run rate
 - Failed run count after a returned client tool
 - Safe model error count by category
@@ -204,7 +219,7 @@ Track these operational values.
 1. Run `npm ci` in a clean build environment.
 2. Run `npm run check` and `npm run test:coverage`.
 3. Start Redis and verify its network policy.
-4. Add Gemini and platform secrets.
+4. Add the selected model provider and platform secrets.
 5. Start one Seb instance.
 6. Run `seb cache status` as the service user.
 7. Check `/health`.
@@ -230,11 +245,13 @@ Do not update one Chat SDK adapter without checking the core `chat` version.
 
 ## Incident actions
 
-### Gemini fails
+### The model provider fails
 
-Confirm the key and model names.
+Confirm `SEB_MODEL_PROVIDER`, its key or endpoint, and both model names.
 
 Check whether the fallback model also fails.
+
+Run `seb doctor` with the same environment as the service.
 
 Keep webhook acknowledgements active so platforms do not create a retry storm.
 
@@ -252,7 +269,9 @@ Inspect the failed source ID, discovery URL, and publication date.
 
 Check the site's robots policy and required crawl delay.
 
-Retry the request after a temporary direct source or Gemini Search error.
+Retry the request after a temporary direct source error.
+
+When Google is active, also check for a Google Search error.
 
 Do not replace current reporting with model memory.
 

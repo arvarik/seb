@@ -32,6 +32,46 @@ The repository ignores `.cache/`.
 
 Do not commit the database. It can contain league records and source responses.
 
+## Model configuration files
+
+Seb keeps model configuration outside the SQLite database.
+
+The default configuration directory contains these files.
+
+| File | Content |
+| --- | --- |
+| `profile.json` | The optional Sleeper username and update time. |
+| `credentials.json` | Saved keys and the endpoint binding for an OpenAI-compatible key. |
+| `model-settings.json` | The active provider, model IDs, fallback model IDs, and an optional compatible base URL. |
+
+The default directory is `~/.config/seb`.
+
+`SEB_CONFIG_HOME` or `XDG_CONFIG_HOME` can select another directory.
+
+`SEB_PROFILE_FILE` can select the complete profile path. The two provider files stay beside that path.
+
+`SEB_MODEL_SETTINGS_FILE` can select the complete model settings path.
+
+Seb gives a newly created configuration directory mode `0700` on Unix systems.
+
+Seb keeps the existing mode of a custom configuration directory.
+
+It writes each file with mode `0600` and uses an atomic replacement.
+
+Each provider file uses schema version `1` and has a 64 KiB limit.
+
+One saved key has a 16 KiB limit. Model IDs have a 200-character limit.
+
+The model settings file stores no key or authorization header.
+
+The compatible base URL is not a secret. It can reveal a service hostname.
+
+Do not commit any local configuration file.
+
+Environment values override the corresponding saved credentials and settings.
+
+Connector services read provider values from their environment only.
+
 ## SQLite configuration
 
 Seb uses these SQLite settings.
@@ -134,6 +174,8 @@ Provider HTTP retries can occur inside that call. Seb cannot count those retries
 The tables store identifiers, timestamps, numeric metrics, and bounded categories.
 
 They do not store prompts, answers, tool inputs, tool results, or raw errors.
+
+They also exclude keys, authorization headers, and compatible endpoint URLs.
 
 AI SDK DevTools stores complete content separately under `.devtools/` when a developer enables it.
 

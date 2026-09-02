@@ -11,7 +11,7 @@ npm run seb
 
 Run `/help` inside Seb to show the local command list.
 
-Local commands do not call Gemini. Regular questions call Gemini and the required data tools.
+Most local commands do not call a model provider. Regular questions call the active provider and the required data tools.
 
 Seb refreshes the NFL season, phase, display week, and Sleeper league season at startup.
 
@@ -54,7 +54,7 @@ Read the [experience guide](EXPERIENCES.md) for complete user journeys.
 
 The home screen shows urgent weekly actions before Explore, My Fantasy, and Analyze.
 
-The header shows the active experience and current NFL state.
+The header shows the active experience, current NFL state, provider, and model.
 
 It shows up to three contextual actions.
 
@@ -173,6 +173,8 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/select` | Enables native terminal text selection until you press `Escape`. |
 | `/theme NAME` | Selects a display theme. |
 | `/icons MODE` | Selects Unicode or ASCII symbols. |
+| `/provider [NAME]` | Shows or switches the active configured provider. |
+| `/model [MODEL]` | Shows or switches the active model. |
 | `/export [NAME] [md|json]` | Exports the transcript. |
 | `/doctor [offline]` | Checks configuration and services. |
 | `/devtools` | Shows local AI SDK DevTools status and commands. |
@@ -180,7 +182,7 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/stats [session|today|7d|30d|all]` | Shows detailed local usage analytics. |
 | `/next` | Shows contextual next actions. |
 | `/shell-completion SHELL` | Prints a shell completion script. |
-| `/version` | Shows the Seb and Gemini versions. |
+| `/version` | Shows the Seb version, provider, and model. |
 | `/exit` or `/quit` | Exits interactive mode. |
 
 Earlier command names remain available as aliases.
@@ -244,7 +246,7 @@ Run `/disconnect` to remove the saved username.
 /disconnect
 ```
 
-The preferences file never contains a league, roster, NFL team, season, week, or Gemini key.
+The account preferences file never contains a league, roster, NFL team, season, week, or provider key.
 
 Use `/league ID` only when you want one league instead of the account-wide view.
 
@@ -274,6 +276,41 @@ Remove the saved file.
 The clear action removes the file without changing the active session.
 
 Read the [setup guide](SETUP.md) for the path and file permissions.
+
+## Model selection
+
+Run either command without an argument to show the active provider and model.
+
+```text
+/provider
+/model
+```
+
+Switch to another configured provider.
+
+```text
+/provider anthropic
+```
+
+This command keeps the selected provider's configured fallback model.
+
+Switch the active provider to another model.
+
+```text
+/model claude-haiku-4-5
+```
+
+Seb verifies the new selection before it changes the active agent.
+
+A successful switch starts a fresh model context. It keeps the visible transcript.
+
+The switch clears the prior answer evidence because that evidence belongs to the prior model context.
+
+A failed switch keeps the prior provider, model, context, and agent.
+
+An explicit `/model` value uses that model as its own fallback for the session.
+
+The slash commands have no API key or endpoint argument. Run `seb configure` to add them.
 
 ## Skill commands
 
@@ -635,9 +672,9 @@ Run only local checks when the network is unavailable.
 /doctor offline
 ```
 
-The full doctor sends two small Gemini requests.
+The full doctor forces the active provider through one local tool loop.
 
-The first request tests a streaming local tool continuation. The second request tests grounded Google Search.
+The Google check also requires one valid grounded Google Search URL.
 
 ## Session boundaries
 

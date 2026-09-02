@@ -19,6 +19,12 @@ import {
   throwIfRequestAborted,
 } from './ai/request-signal.js';
 import { activeAiDevToolsTelemetry } from './ai/devtools.js';
+import {
+  createProviderLanguageModel,
+  MODEL_PROVIDER_LABELS,
+  type ResolvedModelProvider,
+} from './ai/model-provider.js';
+import { resolveModelSettingsPath } from './ai/model-settings.js';
 import { createGeminiLanguageModel } from './gemini-model.js';
 import {
   classifyModelError,
@@ -30,6 +36,7 @@ import { NflverseClient } from './nflverse/client.js';
 import { SleeperClient } from './sleeper/client.js';
 import { WeatherClient } from './weather/client.js';
 import { normalizeWebUrl } from './sources.js';
+import { resolveSetupCredentialsPath } from './setup/credentials.js';
 import {
   SebUsageTelemetry,
   type SebUsageTelemetryOptions,
@@ -48,7 +55,7 @@ export interface DoctorReport {
   ok: boolean;
 }
 
-export interface GeminiVerificationTelemetryOptions {
+export interface ModelProviderVerificationTelemetryOptions {
   agentKind: 'contract' | 'doctor' | 'setup';
   database?: SebUsageTelemetryOptions['database'];
   sessionId?: string;
@@ -56,17 +63,32 @@ export interface GeminiVerificationTelemetryOptions {
   surface: 'cli' | 'contract' | 'interactive';
 }
 
+export type GeminiVerificationTelemetryOptions =
+  ModelProviderVerificationTelemetryOptions;
+
+export interface ModelProviderVerificationResult {
+  fallbackUsed: boolean;
+  model: string;
+}
+
 export interface DoctorOptions {
   environment?: NodeJS.ProcessEnv;
   geminiTelemetry?: GeminiVerificationTelemetryOptions;
+  modelProvider?: ResolvedModelProvider;
+  modelProviderTelemetry?: ModelProviderVerificationTelemetryOptions;
   nodeVersion?: string;
   offline: boolean;
+  skipModelProviderCheck?: boolean;
   verifyGemini?: (
     apiKey: string,
     primaryModel: string,
     fallbackModel: string,
     signal: AbortSignal,
-  ) => Promise<{ fallbackUsed: boolean; model: string }>;
+  ) => Promise<ModelProviderVerificationResult>;
+  verifyModelProvider?: (
+    modelProvider: ResolvedModelProvider,
+    signal: AbortSignal,
+  ) => Promise<ModelProviderVerificationResult>;
   verifyDatabase?: () => {
     cacheEntries: number;
     file: string;
@@ -91,7 +113,14 @@ export interface DoctorOptions {
   verifyPermissions?: () => DoctorCheck;
 }
 
-class GeminiVerificationError extends Error {
+class ModelProviderVerificationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ModelProviderVerificationError';
+  }
+}
+
+class GeminiVerificationError extends ModelProviderVerificationError {
   constructor(message: string) {
     super(message);
     this.name = 'GeminiVerificationError';
@@ -102,7 +131,15 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   throwIfRequestAborted();
   const environment = options.environment ?? process.env;
   const nodeVersion = options.nodeVersion ?? process.versions.node;
-  const apiKey = environment.GOOGLE_GENERATIVE_AI_API_KEY?.trim();
+  const modelProvider = options.modelProvider;
+  const googleApiKey = environment.GOOGLE_GENERATIVE_AI_API_KEY?.trim();
+  const geminiApiKey = environment.GEMINI_API_KEY?.trim();
+  const apiKey = googleApiKey || geminiApiKey;
+  const apiKeyVariable = googleApiKey
+    ? 'GOOGLE_GENERATIVE_AI_API_KEY'
+    : geminiApiKey
+      ? 'GEMINI_API_KEY'
+      : null;
   const primaryModel =
     environment.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
   const fallbackModel =
@@ -111,20 +148,30 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [checkNodeVersion(nodeVersion)];
 
   checks.push(
-    apiKey
+    options.skipModelProviderCheck
+      ? {
+          name: 'Model provider key',
+          status: 'skip',
+          detail: 'Seb skipped this check because the model configuration is invalid.',
+        }
+      : modelProvider
+      ? checkModelProviderKey(modelProvider)
+      : apiKey
       ? {
           name: 'Gemini key',
           status: 'pass',
-          detail: 'GOOGLE_GENERATIVE_AI_API_KEY is set.',
+          detail: `${apiKeyVariable} is set.`,
         }
       : {
           name: 'Gemini key',
           status: 'fail',
-          detail: 'Add GOOGLE_GENERATIVE_AI_API_KEY to .env.',
+          detail: 'Add GOOGLE_GENERATIVE_AI_API_KEY or GEMINI_API_KEY to .env.',
         },
   );
   checks.push(checkDatabase(options.verifyDatabase ?? verifyDatabase));
-  checks.push(options.verifyPermissions?.() ?? checkLocalPermissions());
+  checks.push(
+    options.verifyPermissions?.() ?? checkLocalPermissions(environment),
+  );
 
   if (options.offline) {
     checks.push(
@@ -144,7 +191,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
         detail: 'The offline check skipped this request.',
       },
       {
-        name: 'Gemini API',
+        name: modelProvider ? 'Model provider API' : 'Gemini API',
         status: 'skip',
         detail: 'The offline check skipped this request.',
       },
@@ -154,36 +201,28 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     const verifyNflverse = options.verifyNflverse ?? verifyNflverseData;
     const verifyWeather =
       options.verifyWeather ?? (() => verifyWeatherApi(environment));
-    const verifyGemini = options.verifyGemini ?? (
-      (key, primary, fallback, signal) =>
-        verifyGeminiApi(
-          key,
-          primary,
-          fallback,
-          signal,
-          options.geminiTelemetry,
-        )
-    );
-    const geminiSignal = requestSignalWithTimeout(currentRequestSignal(), 30_000);
-    const geminiCheck = apiKey
-      ? checkGemini(
+    const modelSignal = requestSignalWithTimeout(currentRequestSignal(), 30_000);
+    const modelCheck = options.skipModelProviderCheck
+      ? Promise.resolve<DoctorCheck>({
+          name: 'Model provider API',
+          status: 'skip',
+          detail: 'Seb skipped this request because the model configuration is invalid.',
+        })
+      : modelProvider
+      ? createModelProviderCheck(options, modelProvider, modelSignal)
+      : createLegacyGeminiCheck(
+          options,
           apiKey,
           primaryModel,
           fallbackModel,
-          verifyGemini,
-          geminiSignal,
-        )
-      : Promise.resolve<DoctorCheck>({
-        name: 'Gemini API',
-        status: 'skip',
-        detail: 'The request needs a Gemini key.',
-      });
+          modelSignal,
+        );
     checks.push(
       ...(await Promise.all([
         checkSleeper(verifySleeper),
         checkNflverse(verifyNflverse),
         checkWeather(verifyWeather),
-        geminiCheck,
+        modelCheck,
       ])),
     );
   }
@@ -248,6 +287,154 @@ function checkNodeVersion(version: string): DoctorCheck {
     status: 'fail',
     detail: `${version} is too old. Install Node.js 22 or newer.`,
   };
+}
+
+function checkModelProviderKey(
+  modelProvider: ResolvedModelProvider,
+): DoctorCheck {
+  const label = MODEL_PROVIDER_LABELS[modelProvider.provider];
+  if (modelProvider.provider === 'openai-compatible') {
+    if (!modelProvider.baseURL?.trim()) {
+      return {
+        name: 'Model provider key',
+        status: 'fail',
+        detail: 'The OpenAI-compatible provider needs a base URL.',
+      };
+    }
+    return {
+      name: 'Model provider key',
+      status: 'pass',
+      detail: modelProvider.apiKey?.trim()
+        ? `${label} has an API key and a base URL.`
+        : `${label} will connect without an API key.`,
+    };
+  }
+  const variable = providerCredentialName(modelProvider);
+  return modelProvider.apiKey?.trim()
+    ? {
+        name: 'Model provider key',
+        status: 'pass',
+        detail: `${label} has a configured ${variable}.`,
+      }
+    : {
+        name: 'Model provider key',
+        status: 'fail',
+        detail: `${label} needs ${variable}.`,
+      };
+}
+
+function createLegacyGeminiCheck(
+  options: DoctorOptions,
+  apiKey: string | undefined,
+  primaryModel: string,
+  fallbackModel: string,
+  signal: AbortSignal,
+): Promise<DoctorCheck> {
+  if (!apiKey) {
+    return Promise.resolve({
+      name: 'Gemini API',
+      status: 'skip',
+      detail: 'The request needs a Gemini key.',
+    });
+  }
+  const verifyGemini = options.verifyGemini ?? (
+    (key, primary, fallback, requestSignal) =>
+      verifyGeminiApi(
+        key,
+        primary,
+        fallback,
+        requestSignal,
+        options.geminiTelemetry,
+      )
+  );
+  return checkGemini(
+    apiKey,
+    primaryModel,
+    fallbackModel,
+    verifyGemini,
+    signal,
+  );
+}
+
+function createModelProviderCheck(
+  options: DoctorOptions,
+  modelProvider: ResolvedModelProvider,
+  signal: AbortSignal,
+): Promise<DoctorCheck> {
+  if (!modelProviderReady(modelProvider)) {
+    return Promise.resolve({
+      name: 'Model provider API',
+      status: 'skip',
+      detail: `${MODEL_PROVIDER_LABELS[modelProvider.provider]} configuration is incomplete.`,
+    });
+  }
+  const verify = options.verifyModelProvider ?? (
+    (selection, requestSignal) => verifyModelProviderApi(
+      selection,
+      requestSignal,
+      options.modelProviderTelemetry ?? options.geminiTelemetry,
+    )
+  );
+  return checkModelProvider(modelProvider, verify, signal);
+}
+
+async function checkModelProvider(
+  modelProvider: ResolvedModelProvider,
+  verify: NonNullable<DoctorOptions['verifyModelProvider']>,
+  signal: AbortSignal,
+): Promise<DoctorCheck> {
+  const label = MODEL_PROVIDER_LABELS[modelProvider.provider];
+  try {
+    const result = await verify(modelProvider, signal);
+    const grounding = modelProvider.provider === 'google'
+      ? ' and returned a grounded Google Search source'
+      : '';
+    const suffix = result.fallbackUsed
+      ? ' The primary model had no capacity.'
+      : '';
+    return {
+      name: 'Model provider API',
+      status: 'pass',
+      detail: `${label} model ${result.model} completed a local tool loop${grounding}.${suffix}`,
+    };
+  } catch (error) {
+    const credentialName = providerCredentialName(modelProvider);
+    return {
+      name: 'Model provider API',
+      status: 'fail',
+      detail: error instanceof ModelProviderVerificationError
+        ? error.message
+        : formatModelErrorForUser(
+            error,
+            'cli',
+            {
+              providerLabel: label,
+              ...(credentialName ? { credentialName } : {}),
+            },
+          ),
+    };
+  }
+}
+
+function modelProviderReady(modelProvider: ResolvedModelProvider): boolean {
+  return modelProvider.provider === 'openai-compatible'
+    ? Boolean(modelProvider.baseURL?.trim())
+    : Boolean(modelProvider.apiKey?.trim());
+}
+
+function providerCredentialName(
+  modelProvider: ResolvedModelProvider,
+): string | undefined {
+  switch (modelProvider.provider) {
+    case 'google':
+      return 'GOOGLE_GENERATIVE_AI_API_KEY';
+    case 'anthropic':
+      return 'ANTHROPIC_API_KEY';
+    case 'openai':
+      return 'OPENAI_API_KEY';
+    case 'openai-compatible':
+      return modelProvider.apiKey ? 'OPENAI_COMPATIBLE_API_KEY' : undefined;
+  }
 }
 
 async function checkSleeper(
@@ -379,7 +566,7 @@ async function verifyWeatherApi(
   return { periods: forecast.periods.length, timeZone: forecast.timeZone };
 }
 
-function checkLocalPermissions(): DoctorCheck {
+function checkLocalPermissions(environment: NodeJS.ProcessEnv): DoctorCheck {
   if (process.platform === 'win32') {
     return {
       name: 'Local file permissions',
@@ -387,7 +574,16 @@ function checkLocalPermissions(): DoctorCheck {
       detail: 'Windows does not expose Unix permission bits.',
     };
   }
-  const paths = [resolve('.env'), dirname(getSharedSebDatabase().file)];
+  const privateFiles = [
+    resolve('.env'),
+    resolveSetupCredentialsPath(environment),
+    resolveModelSettingsPath(environment),
+  ];
+  const privateDirectories = [
+    dirname(getSharedSebDatabase().file),
+    ...privateFiles.slice(1).map((path) => dirname(path)),
+  ];
+  const paths = [...new Set([...privateFiles, ...privateDirectories])];
   const unsafe = paths.filter((path) => {
     if (!existsSync(path)) return false;
     return (statSync(path).mode & 0o077) !== 0;
@@ -396,14 +592,48 @@ function checkLocalPermissions(): DoctorCheck {
     return {
       name: 'Local file permissions',
       status: 'fail',
-      detail: `Restrict access to ${unsafe.join(', ')}. Use mode 0600 for .env and 0700 for .cache.`,
+      detail: `Restrict access to ${unsafe.join(', ')}. Use mode 0600 for files and 0700 for directories.`,
     };
   }
   return {
     name: 'Local file permissions',
     status: 'pass',
-    detail: 'The local environment and cache paths use private permissions.',
+    detail: 'The local environment, configuration, and cache paths use private permissions.',
   };
+}
+
+export async function verifyModelProviderApi(
+  modelProvider: ResolvedModelProvider,
+  signal = AbortSignal.timeout(30_000),
+  telemetryOptions: ModelProviderVerificationTelemetryOptions = {
+    agentKind: 'doctor',
+    surface: 'cli',
+  },
+): Promise<ModelProviderVerificationResult> {
+  const telemetry = createVerificationTelemetry(telemetryOptions);
+  try {
+    await sendModelProviderTest(
+      modelProvider,
+      modelProvider.model,
+      signal,
+      telemetry,
+    );
+    return { fallbackUsed: false, model: modelProvider.model };
+  } catch (error) {
+    if (
+      !isModelCapacityError(error) ||
+      modelProvider.fallbackModel === modelProvider.model
+    ) {
+      throw error;
+    }
+    await sendModelProviderTest(
+      modelProvider,
+      modelProvider.fallbackModel,
+      signal,
+      telemetry,
+    );
+    return { fallbackUsed: true, model: modelProvider.fallbackModel };
+  }
 }
 
 export async function verifyGeminiApi(
@@ -415,7 +645,23 @@ export async function verifyGeminiApi(
     agentKind: 'doctor',
     surface: 'cli',
   },
-): Promise<{ fallbackUsed: boolean; model: string }> {
+): Promise<ModelProviderVerificationResult> {
+  const telemetry = createVerificationTelemetry(telemetryOptions);
+  try {
+    await sendGeminiTest(apiKey, primaryModel, signal, telemetry);
+    return { fallbackUsed: false, model: primaryModel };
+  } catch (error) {
+    if (!isModelCapacityError(error) || fallbackModel === primaryModel) {
+      throw error;
+    }
+    await sendGeminiTest(apiKey, fallbackModel, signal, telemetry);
+    return { fallbackUsed: true, model: fallbackModel };
+  }
+}
+
+function createVerificationTelemetry(
+  telemetryOptions: ModelProviderVerificationTelemetryOptions,
+): TelemetryOptions {
   const usageTelemetry = new SebUsageTelemetry({
     agentKind: telemetryOptions.agentKind,
     database: telemetryOptions.database ?? getSharedSebDatabase(),
@@ -429,22 +675,75 @@ export async function verifyGeminiApi(
   });
   const devToolsTelemetry = activeAiDevToolsTelemetry();
   const recordContent = devToolsTelemetry.length > 0;
-  const telemetry = {
+  return {
     functionId: `seb.${telemetryOptions.surface}.${telemetryOptions.agentKind}`,
     integrations: [...devToolsTelemetry, usageTelemetry],
     isEnabled: true,
     recordInputs: recordContent,
     recordOutputs: recordContent,
   } satisfies TelemetryOptions;
-  try {
-    await sendGeminiTest(apiKey, primaryModel, signal, telemetry);
-    return { fallbackUsed: false, model: primaryModel };
-  } catch (error) {
-    if (!isModelCapacityError(error) || fallbackModel === primaryModel) {
-      throw error;
+}
+
+async function sendModelProviderTest(
+  modelProvider: ResolvedModelProvider,
+  model: string,
+  signal: AbortSignal,
+  telemetry: TelemetryOptions,
+): Promise<void> {
+  if (modelProvider.provider === 'google') {
+    const apiKey = modelProvider.apiKey?.trim();
+    if (!apiKey) {
+      throw new ModelProviderVerificationError(
+        'Google Gemini needs GOOGLE_GENERATIVE_AI_API_KEY.',
+      );
     }
-    await sendGeminiTest(apiKey, fallbackModel, signal, telemetry);
-    return { fallbackUsed: true, model: fallbackModel };
+    await sendGeminiTest(apiKey, model, signal, telemetry);
+    return;
+  }
+
+  const localResult = streamText({
+    model: createProviderLanguageModel(modelProvider, model),
+    tools: {
+      verifyLocalTool: tool({
+        description: 'Returns a fixed marker for the Seb local tool-loop check.',
+        inputSchema: z.object({ marker: z.literal('seb') }),
+        execute: ({ marker }) => ({ marker: `${marker}-tool-ok` }),
+      }),
+    },
+    prompt: [
+      'Call verifyLocalTool once with the marker seb.',
+      'After the tool returns, write only SEB_TOOL_LOOP_OK.',
+    ].join(' '),
+    maxOutputTokens: 1_024,
+    prepareStep: ({ stepNumber }) =>
+      stepNumber === 0
+        ? {}
+        : { activeTools: [], toolChoice: 'none' },
+    stopWhen: stepCountIs(3),
+    abortSignal: signal,
+    telemetry,
+    toolChoice: { toolName: 'verifyLocalTool', type: 'tool' },
+  });
+  const [finishReason, text, toolResults] = await Promise.all([
+    localResult.finishReason,
+    localResult.text,
+    localResult.toolResults,
+  ]);
+  const completedLocalTool = toolResults.some((toolResult) => {
+    if (toolResult.toolName !== 'verifyLocalTool') return false;
+    const output = toolResult.output;
+    return output !== null &&
+      typeof output === 'object' &&
+      (output as Record<string, unknown>).marker === 'seb-tool-ok';
+  });
+  if (
+    !completedLocalTool ||
+    finishReason !== 'stop' ||
+    text.trim() !== 'SEB_TOOL_LOOP_OK'
+  ) {
+    throw new ModelProviderVerificationError(
+      `${MODEL_PROVIDER_LABELS[modelProvider.provider]} did not complete the local tool loop.`,
+    );
   }
 }
 

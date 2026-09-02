@@ -30,6 +30,7 @@ import {
 import {
   formatDoctorReport,
   runDoctor,
+  type DoctorReport,
   type GeminiVerificationTelemetryOptions,
 } from '../doctor.js';
 import { formatModelErrorForUser } from '../model-capacity-error.js';
@@ -64,7 +65,6 @@ import {
 } from '../setup/profile.js';
 import {
   applySetupProfile,
-  checkGeminiApiKey,
   connectSleeperSession,
   createSetupProfile,
   disconnectSleeperSession,
@@ -79,6 +79,8 @@ import {
   formatCompletions,
   generateShellCompletion,
   interactiveCommandArgumentError,
+  interactiveCommandPrivacyError,
+  MODEL_PROVIDER_VALUES,
   parseInteractiveCommandInput,
   type CompletionShell,
 } from './commands.js';
@@ -93,7 +95,10 @@ import {
 } from './session.js';
 import { formatSkillList, parseSkillInvocation } from './skills.js';
 import { sourceBadge } from './presentation.js';
-import { InteractiveUiState } from './ui-state.js';
+import {
+  InteractiveUiState,
+  type InteractiveModelState,
+} from './ui-state.js';
 
 type SebAgent = ReturnType<typeof createFantasyFootballAgent>;
 
@@ -114,8 +119,11 @@ type RecommendationStreamToolState = {
 
 export interface SebInteractiveTransportOptions {
   agent: SebAgent;
+  doctor?: (offline: boolean) => Promise<DoctorReport>;
   environment: NodeJS.ProcessEnv;
   model: string;
+  provider?: string;
+  providerLabel?: string;
   nflverse: NflverseClient;
   session: SessionState;
   sleeper: SleeperClient;
@@ -129,7 +137,22 @@ export interface SebInteractiveTransportOptions {
   usageSessionId?: string;
   usageTelemetry?: Pick<SebUsageTelemetry, 'abortUnfinished' | 'closeUnfinished'>;
   usageTelemetryDatabase?: GeminiVerificationTelemetryOptions['database'];
+  switchModel?: InteractiveModelSwitcher;
 }
+
+export interface InteractiveModelSwitchRequest {
+  model?: string;
+  provider?: string;
+}
+
+export interface InteractiveModelSwitchResult extends InteractiveModelState {
+  agent: SebAgent;
+  onActivated?: () => void;
+}
+
+export type InteractiveModelSwitcher = (
+  request: InteractiveModelSwitchRequest,
+) => Promise<InteractiveModelSwitchResult>;
 
 function cloneSessionState(state: SessionState): SessionState {
   return {
@@ -143,7 +166,7 @@ function cloneSessionState(state: SessionState): SessionState {
 
 export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   private readonly localOnlyMessageIds = new Set<string>();
-  private readonly delegate: ChatTransport<UIMessage>;
+  private delegate: ChatTransport<UIMessage>;
   private readonly options: SebInteractiveTransportOptions;
   private readonly profileStore: SetupProfileStore;
   private readonly skillPromptByMessageId = new Map<string, string>();
@@ -152,12 +175,30 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   constructor(options: SebInteractiveTransportOptions) {
     this.options = options;
     this.uiState = options.uiState ?? new InteractiveUiState();
+    if (!this.uiState.activeModel) {
+      this.uiState.setActiveModel({
+        model: options.model,
+        provider: options.provider ?? 'configured',
+        providerLabel: options.providerLabel ?? options.provider ?? 'Configured provider',
+      });
+    }
     this.profileStore = options.profileStore ?? new FileSetupProfileStore({
       environment: options.environment,
     });
-    this.delegate = new DirectChatTransport({
-      agent: options.agent,
-      onError: (error) => formatModelErrorForUser(error, 'interactive'),
+    this.delegate = this.createDelegate(options.agent);
+  }
+
+  private createDelegate(agent: SebAgent): ChatTransport<UIMessage> {
+    return new DirectChatTransport({
+      agent,
+      onError: (error) => formatModelErrorForUser(
+        error,
+        'interactive',
+        {
+          providerLabel: this.uiState.activeModel?.providerLabel ??
+            'The model provider',
+        },
+      ),
       sendSources: true,
     }) as unknown as ChatTransport<UIMessage>;
   }
@@ -366,6 +407,10 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     const parsed = parseInteractiveCommandInput(input);
     if (!parsed) {
       throw new Error('Add a command after the slash. Run /help.');
+    }
+    const privacyError = interactiveCommandPrivacyError(parsed);
+    if (privacyError) {
+      throw new Error(privacyError);
     }
     const argumentError = interactiveCommandArgumentError(parsed);
     if (argumentError) {
@@ -601,6 +646,29 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         state.mode = 'explore';
         state.team = resolveTeam(arguments_.join(' '));
         return `The active NFL team is now ${state.team ?? 'unset'}.`;
+      case 'provider': {
+        const provider = arguments_[0]?.toLowerCase();
+        if (!provider) return this.formatModelStatus();
+        if (!MODEL_PROVIDER_VALUES.includes(
+          provider as (typeof MODEL_PROVIDER_VALUES)[number],
+        )) {
+          throw new Error(
+            'Use /provider google, /provider anthropic, /provider openai, or /provider openai-compatible.',
+          );
+        }
+        return this.switchActiveModel({ provider }, messageId);
+      }
+      case 'model': {
+        const model = arguments_[0];
+        return model
+          ? this.switchActiveModel({
+              model,
+              ...(this.uiState.activeModel?.provider
+                ? { provider: this.uiState.activeModel.provider }
+                : {}),
+            }, messageId)
+          : this.formatModelStatus();
+      }
       case 'setup':
         return this.runSetupCommand(arguments_);
       case 'profile':
@@ -756,20 +824,23 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         if (option && !['offline', '--offline'].includes(option)) {
           throw new Error('Use /doctor or /doctor offline.');
         }
-        const report = await runDoctor({
-          environment: this.options.environment,
-          geminiTelemetry: {
-            agentKind: 'doctor',
-            database: this.options.usageTelemetryDatabase ??
-              getSharedSebDatabase(),
-            ...(this.options.usageSessionId === undefined
-              ? {}
-              : { sessionId: this.options.usageSessionId }),
-            sessionUsage: state.usage,
-            surface: 'interactive',
-          },
-          offline: option !== undefined,
-        });
+        const offline = option !== undefined;
+        const report = this.options.doctor
+          ? await this.options.doctor(offline)
+          : await runDoctor({
+              environment: this.options.environment,
+              geminiTelemetry: {
+                agentKind: 'doctor',
+                database: this.options.usageTelemetryDatabase ??
+                  getSharedSebDatabase(),
+                ...(this.options.usageSessionId === undefined
+                  ? {}
+                  : { sessionId: this.options.usageSessionId }),
+                sessionUsage: state.usage,
+                surface: 'interactive',
+              },
+              offline,
+            });
         return `\`\`\`text\n${formatDoctorReport(report)}\n\`\`\``;
       }
       case 'usage':
@@ -798,7 +869,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'suggestions':
         return ['## Suggested next actions', '', ...getContextualSuggestions(state).map((item) => `- ${item}`)].join('\n');
       case 'version':
-        return `Seb ${this.options.version} uses ${this.options.model}.`;
+        return this.formatVersion();
       case 'shell-completion':
       case 'completion': {
         const shell = arguments_[0]?.toLowerCase();
@@ -831,10 +902,6 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
 
   private async runSetupCommand(arguments_: string[]): Promise<string> {
     if (arguments_.length > 1) throw new Error('Use /setup [Sleeper username].');
-    const key = checkGeminiApiKey(this.options.environment);
-    if (!key.present) {
-      throw new Error(key.message);
-    }
     const staged = cloneSessionState(this.options.session);
     if (arguments_[0]) {
       await refreshAutomaticSession(
@@ -852,6 +919,63 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       '',
       formatSetupProfile(profile, this.profileStore.path),
     ].join('\n');
+  }
+
+  private formatModelStatus(): string {
+    const active = this.uiState.activeModel;
+    if (!active) {
+      return [
+        '## Active model',
+        '',
+        'Seb has no active model information.',
+        '',
+        'Run `seb configure` to add a provider, endpoint, model, or private API key.',
+      ].join('\n');
+    }
+    return [
+      '## Active model',
+      '',
+      `- Provider: ${active.providerLabel} (\`${active.provider}\`)`,
+      `- Model: \`${active.model}\``,
+      '',
+      'Run `/provider NAME` to use another configured provider.',
+      'Run `/model MODEL` to use another model from the active provider.',
+      'Run `seb configure` to add an endpoint or private API key.',
+      'Seb never accepts API keys in slash commands.',
+    ].join('\n');
+  }
+
+  private formatVersion(): string {
+    const active = this.uiState.activeModel;
+    return active
+      ? `Seb ${this.options.version} uses ${active.providerLabel} · ${active.model}.`
+      : `Seb ${this.options.version} uses ${this.options.model}.`;
+  }
+
+  private async switchActiveModel(
+    request: InteractiveModelSwitchRequest,
+    messageId: string,
+  ): Promise<string> {
+    if (!this.options.switchModel) {
+      throw new Error(
+        'Interactive model switching is unavailable. Run `seb configure`, then restart Seb.',
+      );
+    }
+    const switched = await this.options.switchModel(request);
+    throwIfRequestAborted();
+    const active = validateInteractiveModelSwitchResult(switched);
+    const delegate = this.createDelegate(switched.agent);
+
+    this.delegate = delegate;
+    this.uiState.setActiveModel(active);
+    this.options.session.contextAfterMessageId = messageId;
+    this.options.sources.clear();
+    this.uiState.clearAnswerEvidence();
+    switched.onActivated?.();
+    return [
+      `Seb now uses ${active.providerLabel} · ${active.model}.`,
+      'Seb started a fresh model context and kept the visible transcript.',
+    ].join(' ');
   }
 
   private async runProfileCommand(action = 'show'): Promise<string> {
@@ -895,6 +1019,11 @@ Ask a player, team, statistic, schedule, or news question in plain language.
 - \`/fantasy [QUESTION]\`: Use the connected Sleeper account.
 - \`/analyze [QUESTION]\`: Compare choices and add decision context.
 - \`/connect USERNAME\`: Save one optional Sleeper username.
+- \`/provider [NAME]\`: Show or switch the configured model provider.
+- \`/model [MODEL]\`: Show or switch the active model.
+
+Run \`seb configure\` to add a provider endpoint or private API key.
+Seb never accepts API keys in slash commands.
 
 ${formatCommandCatalog()}
 
@@ -1525,14 +1654,39 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function validateInteractiveModelSwitchResult(
+  result: InteractiveModelSwitchResult,
+): InteractiveModelState {
+  return {
+    model: safeModelDisplayValue(result.model, 'model'),
+    provider: safeModelDisplayValue(result.provider, 'provider'),
+    providerLabel: safeModelDisplayValue(
+      result.providerLabel || result.provider,
+      'provider label',
+    ),
+  };
+}
+
+function safeModelDisplayValue(value: string, label: string): string {
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    normalized.length > 256 ||
+    /[\u0000-\u001F\u007F]/u.test(normalized)
+  ) {
+    throw new Error(`The model switch returned an invalid ${label}.`);
+  }
+  return normalized;
+}
+
 function incompleteFinishMessage(finishReason: string | undefined): string {
   if (finishReason === 'length') {
-    return 'Gemini reached the output limit before it completed the answer. Ask a narrower question, then retry.';
+    return 'The model reached the output limit before it completed the answer. Ask a narrower question, then retry.';
   }
   if (finishReason === 'content-filter') {
-    return 'Gemini stopped the answer because a safety filter blocked the response.';
+    return 'The model stopped the answer because a safety filter blocked the response.';
   }
-  return 'Gemini stopped before it completed the answer. Run `/doctor` and `/stats session`, then retry.';
+  return 'The model stopped before it completed the answer. Run `/doctor` and `/stats session`, then retry.';
 }
 
 function deletePendingApproval(

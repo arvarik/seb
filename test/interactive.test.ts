@@ -16,6 +16,7 @@ vi.mock('../src/doctor.js', async (importOriginal) => {
 });
 
 import { createFantasyFootballAgent } from '../src/agent.js';
+import { currentRequestSignalWithTimeout } from '../src/ai/request-signal.js';
 import {
   createSessionState,
   formatSessionData,
@@ -289,6 +290,255 @@ function sessionContextData(context: string): Record<string, unknown> {
 }
 
 describe('SebInteractiveTransport', () => {
+  it('switches the provider and starts a fresh model context', async () => {
+    const initialModel = streamingLanguageModel('Initial response.');
+    const switchedModel = streamingLanguageModel('Switched response.');
+    const clients = dataClients();
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    const uiState = new InteractiveUiState();
+    const activations: Array<{
+      contextAfterMessageId: string | null;
+      model: string | undefined;
+    }> = [];
+    const switchedAgent = createFantasyFootballAgent({
+      identityRepository: false,
+      languageModel: switchedModel,
+      ...clients,
+    });
+    const switchModel = vi.fn(async (request: {
+      model?: string;
+      provider?: string;
+    }) => ({
+      agent: switchedAgent,
+      model: request.model ?? 'gpt-test',
+      onActivated: () => {
+        activations.push({
+          contextAfterMessageId: session.contextAfterMessageId,
+          model: uiState.activeModel?.model,
+        });
+      },
+      provider: request.provider ?? 'openai',
+      providerLabel: 'OpenAI',
+    }));
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({
+        identityRepository: false,
+        languageModel: initialModel,
+        ...clients,
+      }),
+      environment: {},
+      model: 'gemini-test',
+      nflverse: clients.nflverseClient,
+      provider: 'google',
+      providerLabel: 'Google Gemini',
+      session,
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      switchModel,
+      uiState,
+      version: '0.2.0',
+      weather: clients.weatherClient,
+    });
+
+    const status = await sendCommand(transport, '/model', 'model-status');
+    const switched = await sendCommand(
+      transport,
+      '/provider openai',
+      'provider-switch',
+    );
+    const modelSwitched = await sendCommand(
+      transport,
+      '/model gpt-next',
+      'model-switch',
+    );
+
+    expect(status).toContain('Google Gemini');
+    expect(status).toContain('gemini-test');
+    expect(status).toContain('never accepts API keys in slash commands');
+    expect(switchModel).toHaveBeenCalledWith({ provider: 'openai' });
+    expect(switched).toContain('OpenAI · gpt-test');
+    expect(switched).toContain('fresh model context');
+    expect(switchModel).toHaveBeenLastCalledWith({
+      model: 'gpt-next',
+      provider: 'openai',
+    });
+    expect(modelSwitched).toContain('OpenAI · gpt-next');
+    expect(uiState.activeModel).toEqual({
+      model: 'gpt-next',
+      provider: 'openai',
+      providerLabel: 'OpenAI',
+    });
+    expect(session.contextAfterMessageId).toBe('model-switch');
+    expect(activations).toEqual([
+      { contextAfterMessageId: 'provider-switch', model: 'gpt-test' },
+      { contextAfterMessageId: 'model-switch', model: 'gpt-next' },
+    ]);
+
+    const output = await sendConversation(transport, [
+      {
+        id: 'old-user',
+        role: 'user',
+        parts: [{ type: 'text', text: 'Old conversation text.' }],
+      },
+      {
+        id: 'old-assistant',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'Old response text.' }],
+      },
+      {
+        id: 'provider-switch',
+        role: 'user',
+        parts: [{ type: 'text', text: '/provider openai' }],
+      },
+      {
+        id: 'switch-confirmation',
+        role: 'assistant',
+        parts: [{ type: 'text', text: switched }],
+      },
+      {
+        id: 'model-switch',
+        role: 'user',
+        parts: [{ type: 'text', text: '/model gpt-next' }],
+      },
+      {
+        id: 'model-switch-confirmation',
+        role: 'assistant',
+        parts: [{ type: 'text', text: modelSwitched }],
+      },
+      {
+        id: 'new-user',
+        role: 'user',
+        parts: [{ type: 'text', text: 'New conversation text.' }],
+      },
+    ]);
+    const prompt = JSON.stringify(switchedModel.doStreamCalls[0]?.prompt);
+
+    expect(output).toContain('Switched response.');
+    expect(prompt).toContain('New conversation text.');
+    expect(prompt).not.toContain('Old conversation text.');
+    expect(prompt).not.toContain('/provider openai');
+    expect(prompt).not.toContain('/model gpt-next');
+    expect(initialModel.doStreamCalls).toHaveLength(0);
+  });
+
+  it('keeps the active agent when a provider switch fails', async () => {
+    const initialModel = streamingLanguageModel('Original model response.');
+    const clients = dataClients();
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    const uiState = new InteractiveUiState();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({
+        identityRepository: false,
+        languageModel: initialModel,
+        ...clients,
+      }),
+      environment: {},
+      model: 'gemini-test',
+      nflverse: clients.nflverseClient,
+      provider: 'google',
+      providerLabel: 'Google Gemini',
+      session,
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      switchModel: async () => {
+        throw new Error('Anthropic is not configured. Run `seb configure`.');
+      },
+      uiState,
+      version: '0.2.0',
+      weather: clients.weatherClient,
+    });
+
+    const failure = await sendCommand(
+      transport,
+      '/provider anthropic',
+      'failed-provider-switch',
+    );
+    const output = await sendConversation(transport, [{
+      id: 'request-after-failure',
+      role: 'user',
+      parts: [{ type: 'text', text: 'Use the original model.' }],
+    }]);
+
+    expect(failure).toContain('Anthropic is not configured');
+    expect(output).toContain('Original model response.');
+    expect(initialModel.doStreamCalls).toHaveLength(1);
+    expect(uiState.activeModel).toEqual({
+      model: 'gemini-test',
+      provider: 'google',
+      providerLabel: 'Google Gemini',
+    });
+    expect(session.contextAfterMessageId).toBeNull();
+  });
+
+  it('does not activate a completed model switch after cancellation', async () => {
+    const initialModel = streamingLanguageModel('Original model response.');
+    const switchedModel = streamingLanguageModel('Switched response.');
+    const clients = dataClients();
+    const session = createSessionState(new Date('2026-08-20T12:00:00Z'));
+    const uiState = new InteractiveUiState();
+    const controller = new AbortController();
+    const onActivated = vi.fn();
+    let combinedSignal: AbortSignal | undefined;
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({
+        identityRepository: false,
+        languageModel: initialModel,
+        ...clients,
+      }),
+      environment: {},
+      model: 'gemini-test',
+      nflverse: clients.nflverseClient,
+      provider: 'google',
+      providerLabel: 'Google Gemini',
+      session,
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      switchModel: async () => {
+        combinedSignal = currentRequestSignalWithTimeout(30_000);
+        controller.abort(new DOMException('The switch stopped.', 'AbortError'));
+        return {
+          agent: createFantasyFootballAgent({
+            identityRepository: false,
+            languageModel: switchedModel,
+            ...clients,
+          }),
+          model: 'gpt-test',
+          onActivated,
+          provider: 'openai',
+          providerLabel: 'OpenAI',
+        };
+      },
+      uiState,
+      version: '0.2.0',
+      weather: clients.weatherClient,
+    });
+
+    const failure = await sendCommand(
+      transport,
+      '/provider openai',
+      'cancelled-provider-switch',
+      controller.signal,
+    );
+    const output = await sendConversation(transport, [{
+      id: 'request-after-cancelled-switch',
+      role: 'user',
+      parts: [{ type: 'text', text: 'Use the original model.' }],
+    }]);
+
+    expect(combinedSignal?.aborted).toBe(true);
+    expect(failure).toContain('The switch stopped.');
+    expect(onActivated).not.toHaveBeenCalled();
+    expect(uiState.activeModel).toEqual({
+      model: 'gemini-test',
+      provider: 'google',
+      providerLabel: 'Google Gemini',
+    });
+    expect(session.contextAfterMessageId).toBeNull();
+    expect(output).toContain('Original model response.');
+    expect(initialModel.doStreamCalls).toHaveLength(1);
+    expect(switchedModel.doStreamCalls).toHaveLength(0);
+  });
+
   it('links a live doctor command to the current usage session', async () => {
     runDoctorMock.mockClear();
     const clients = dataClients();
@@ -1957,6 +2207,7 @@ async function sendCommand(
   transport: SebInteractiveTransport,
   text: string,
   id: string,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   const message: UIMessage = { id, role: 'user', parts: [{ type: 'text', text }] };
   const stream = await transport.sendMessages({
@@ -1964,7 +2215,7 @@ async function sendCommand(
     chatId: 'test-chat',
     messageId: undefined,
     messages: [message],
-    abortSignal: undefined,
+    abortSignal,
   });
   let output = '';
   for await (const chunk of stream) {
@@ -1993,6 +2244,38 @@ async function sendConversation(
 
 function textDelta(chunk: UIMessageChunk): string {
   return chunk.type === 'text-delta' ? chunk.delta : '';
+}
+
+function streamingLanguageModel(text: string): MockLanguageModelV4 {
+  return new MockLanguageModelV4({
+    doStream: async () => ({
+      stream: simulateReadableStream({
+        chunks: [
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: 'text-1' },
+          { type: 'text-delta', id: 'text-1', delta: text },
+          { type: 'text-end', id: 'text-1' },
+          {
+            type: 'finish',
+            finishReason: { unified: 'stop', raw: undefined },
+            usage: {
+              inputTokens: {
+                total: 5,
+                noCache: 5,
+                cacheRead: undefined,
+                cacheWrite: undefined,
+              },
+              outputTokens: {
+                total: 2,
+                text: 2,
+                reasoning: undefined,
+              },
+            },
+          },
+        ],
+      }),
+    }),
+  });
 }
 
 async function streamText(stream: ReadableStream<UIMessageChunk>): Promise<string> {

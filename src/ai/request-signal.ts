@@ -8,6 +8,13 @@ export function currentRequestSignal(): AbortSignal | undefined {
   return REQUEST_SIGNAL.getStore();
 }
 
+/** Combines the current request cancellation with one bounded timeout. */
+export function currentRequestSignalWithTimeout(timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = currentRequestSignal();
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 export function throwIfRequestAborted(): void {
   currentRequestSignal()?.throwIfAborted();
 }

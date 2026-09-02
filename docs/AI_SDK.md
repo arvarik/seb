@@ -18,11 +18,17 @@ Seb does not import private package source files.
 
 This design lets AI SDK package updates stay independent from the terminal interface.
 
-## 1. Direct and grounded current news
+## 1. Providers, direct news, and grounded news
 
-The production Gemini agent uses the standard Gemini `generateContent` API.
+Seb constructs Google, Anthropic, OpenAI, and OpenAI-compatible models through their AI SDK provider packages.
 
-The agent includes a direct news tool, Google Search, and URL Context.
+Google uses the Gemini `generateContent` adapter. OpenAI uses the Responses adapter.
+
+Anthropic uses its provider adapter. Compatible endpoints use the OpenAI-compatible chat adapter.
+
+Every provider receives the direct `searchFirstClassNews` tool.
+
+The Google agent also receives Google Search and URL Context.
 
 The `searchFirstClassNews` tool searches the built-in registry first.
 
@@ -30,11 +36,11 @@ It returns official NFL, independent, fantasy-impact, and official team reportin
 
 It also reports the result count, publisher count, and source failures.
 
-Google Search supplies secondary coverage when the direct result is insufficient.
+Google Search supplies secondary coverage when the direct result is insufficient and Google is active.
 
-Google Search also runs when the user requests broad web coverage.
+Google Search also runs for broad web coverage when Google is active.
 
-URL Context reads an HTTP or HTTPS page that the user supplies.
+URL Context reads a user-supplied HTTP or HTTPS page only when Google is active.
 
 Seb shows the resulting web links in the command line, interactive interface, and chat connectors.
 
@@ -54,6 +60,32 @@ Seb has no licensed publisher feed or official injury-report feed.
 
 Read the [data source guide](DATA_SOURCES.md) for every source ID and cache period.
 
+### Provider resolution
+
+`seb configure` saves keys separately from non-secret model settings.
+
+Environment keys override saved keys. Environment model values override saved model values.
+
+An explicit CLI or slash model override uses that model as its own fallback.
+
+A provider-only override keeps the configured fallback for that provider.
+
+`SEB_MODEL` keeps the resolved fallback when `SEB_FALLBACK_MODEL` is empty.
+
+The normal configured primary uses its fallback only after a capacity or rate-limit error.
+
+The OpenAI-compatible provider accepts an optional key, a required base URL, and a required model ID.
+
+HTTP compatible endpoints must use a loopback host. Remote endpoints must use HTTPS.
+
+Compatible URLs cannot contain credentials, a query, a fragment, or an individual completion endpoint path.
+
+Compatible model and discovery requests reject redirects.
+
+The compatible endpoint must support streaming and tool calls for the full agent flow.
+
+Interactive configuration verifies one local tool loop before it saves the selection.
+
 ## 2. Typed analysis and decision safeguards
 
 `seb ask --json` uses AI SDK `Output.object` with a Zod schema.
@@ -62,7 +94,7 @@ Seb first runs a source-grounded research request with all read-only tools.
 
 Seb then sends that draft to a tool-free formatter request.
 
-This two-request design keeps direct and Google source records available during structured output.
+This two-request design keeps direct and optional Google source records available during structured output.
 
 The validated `analysis` object includes these fields.
 
@@ -137,9 +169,11 @@ This feature improves tool selection without changing the tool input schema.
 
 ## 5. Local usage telemetry
 
-The production Gemini model uses the standard Google `generateContent` API.
+The production agent records the active model provider and model ID.
 
 Google returns input, output, thought, cached, tool-use, and total token values when those values exist.
+
+The OpenAI-compatible adapter requests streamed usage values from endpoints that support them.
 
 AI SDK normalizes model usage and performance for each logical model step.
 
@@ -187,7 +221,9 @@ The local analytics integration ignores content in both configurations.
 
 The analytics tables do not contain prompts, answers, tool inputs, tool results, or raw errors.
 
-The `/usage` and `/stats` commands read these local records without a Gemini request.
+They also exclude keys, authorization headers, and compatible endpoint URLs.
+
+The `/usage` and `/stats` commands read these local records without a model request.
 
 The reports group safe error categories and calculate the successful run rate.
 
@@ -243,7 +279,7 @@ npm run deps:check
 npm audit
 ```
 
-Run one current news request when a Gemini key exists.
+Run one current news request when a configured provider exists.
 
 ```bash
 seb ask --json "Find current official NFL news and cite the publisher and date."
@@ -251,15 +287,23 @@ seb ask --json "Find current official NFL news and cite the publisher and date."
 
 Confirm that the result includes web source links.
 
-Run the doctor to verify Google Search and one streaming local tool continuation.
+Run the doctor to verify one streaming local tool continuation.
 
-The local check registers Google Search beside the local tool. This shape matches the production tool catalog.
+The Google doctor check also verifies one grounded Google Search URL.
 
 ```bash
 npm run doctor
 ```
 
-Run the live first-class source probe without Gemini.
+Unit tests use AI SDK model mocks and injected HTTP mocks.
+
+They cover all four provider selections, provider construction, private storage, setup prompts, model switching, connector routing, and safe error text.
+
+The unit suite does not require live Anthropic, OpenAI, or OpenAI-compatible credentials.
+
+Use `seb doctor` with each real provider configuration when live integration coverage is required.
+
+Run the live first-class source probe without a model provider.
 
 ```bash
 npm run news:smoke
@@ -271,6 +315,9 @@ These official sources define the current telemetry and usage basis.
 
 - [AI SDK telemetry](https://ai-sdk.dev/docs/ai-sdk-core/telemetry)
 - [AI SDK tool calling](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling)
+- [AI SDK Anthropic provider](https://ai-sdk.dev/providers/ai-sdk-providers/anthropic)
+- [AI SDK OpenAI provider](https://ai-sdk.dev/providers/ai-sdk-providers/openai)
+- [AI SDK OpenAI-compatible providers](https://ai-sdk.dev/providers/openai-compatible-providers)
 - [Gemini generateContent API](https://ai.google.dev/api/generate-content)
 - [Gemini function calling](https://ai.google.dev/gemini-api/docs/function-calling)
 - [Gemini token guidance](https://ai.google.dev/gemini-api/docs/tokens)

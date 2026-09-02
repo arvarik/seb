@@ -11,6 +11,7 @@ import {
 import {
   classifyModelError,
   formatModelErrorForUser,
+  type ModelErrorContext,
 } from '../model-capacity-error.js';
 import { SourceTracker } from '../sources.js';
 import { FilePromptHistory, type PromptHistory } from './history.js';
@@ -46,6 +47,7 @@ export interface SebConversationRenderer {
 
 export interface SebConversationRunnerOptions {
   chatId?: string;
+  modelErrorContext?: () => ModelErrorContext;
   renderer: SebConversationRenderer;
   title: string;
   transport: ChatTransport<UIMessage>;
@@ -57,12 +59,14 @@ export interface SebConversationRunnerOptions {
  */
 export class SebConversationRunner {
   private readonly chatId: string;
+  private readonly modelErrorContext: (() => ModelErrorContext) | undefined;
   private readonly renderer: SebConversationRenderer;
   private readonly title: string;
   private readonly transport: ChatTransport<UIMessage>;
 
   constructor(options: SebConversationRunnerOptions) {
     this.chatId = options.chatId ?? `seb-${randomUUID()}`;
+    this.modelErrorContext = options.modelErrorContext;
     this.renderer = options.renderer;
     this.title = options.title;
     this.transport = options.transport;
@@ -109,7 +113,10 @@ export class SebConversationRunner {
         });
       } catch (error) {
         if (isInterruptedError(error)) return;
-        uiMessageStream = requestSetupErrorStream(error);
+        uiMessageStream = requestSetupErrorStream(
+          error,
+          this.modelErrorContext?.(),
+        );
       }
       const result: SebRendererStreamResult = {
         abort: () => abortController.abort(),
@@ -167,6 +174,8 @@ export interface SebInteractiveTuiOptions {
   input?: SebTerminalInput;
   model?: string;
   output?: SebTerminalOutput;
+  provider?: string;
+  providerLabel?: string;
   session: SessionState;
   sources?: SourceTracker;
   title: string;
@@ -190,12 +199,17 @@ export async function runSebInteractiveTui(
     input,
     model: options.model ?? options.title.replace(/^Seb · /u, ''),
     output,
+    ...(options.provider ? { provider: options.provider } : {}),
+    ...(options.providerLabel ? { providerLabel: options.providerLabel } : {}),
     session: options.session,
     sources,
     uiState,
     version: options.version ?? 'development',
   });
   await new SebConversationRunner({
+    modelErrorContext: () => ({
+      providerLabel: uiState.activeModel?.providerLabel ?? 'model provider',
+    }),
     renderer,
     title: options.title,
     transport: options.transport,
@@ -269,9 +283,10 @@ function isInterruptedError(error: unknown): boolean {
 
 function requestSetupErrorStream(
   error: unknown,
+  context?: ModelErrorContext,
 ): ReadableStream<UIMessageChunk> {
   const errorText = classifyModelError(error)
-    ? formatModelErrorForUser(error)
+    ? formatModelErrorForUser(error, 'interactive', context)
     : 'Seb could not start this request. Retry the request.';
   return new ReadableStream<UIMessageChunk>({
     start(controller) {

@@ -6,7 +6,7 @@ This documentation explains how to use, understand, extend, and operate Seb.
 
 | Goal | Guide |
 | --- | --- |
-| Install Seb and connect an account | [Setup](SETUP.md) |
+| Install Seb and configure a model provider | [Setup](SETUP.md) |
 | Understand Explore, My Fantasy, and Analyze | [Experience model](EXPERIENCES.md) |
 | Learn the terminal interface | [Interactive guide](INTERACTIVE.md) |
 | Use scripts, pipes, or JSON | [Command-line guide](CLI.md) |
@@ -21,12 +21,12 @@ New users should read the setup and experience guides first.
 - [Interactive guide](INTERACTIVE.md) covers commands, follow-up context, sources, exports, and examples.
 - [Terminal interface](TERMINAL_UI.md) covers editing, scrolling, tables, history, themes, and accessibility.
 - [Skill guide](SKILLS.md) describes optional advanced workflows.
-- [Command-line guide](CLI.md) covers one-shot requests, standard input, JSON, diagnostics, and shell completion.
+- [Command-line guide](CLI.md) covers provider selection, one-shot requests, JSON, diagnostics, and shell completion.
 
 ## Trust and data
 
 - [Data sources](DATA_SOURCES.md) lists each provider, supported facts, cache period, and known limit.
-- [Storage](STORAGE.md) explains SQLite caches, snapshots, permissions, and recovery.
+- [Storage](STORAGE.md) explains model settings, SQLite caches, snapshots, permissions, and recovery.
 - [Identity](IDENTITIES.md) explains player and team mapping across sources.
 - [Provenance](PROVENANCE.md) explains field-level source lineage and freshness.
 - [Evaluation](EVALUATION.md) explains historical replay rules and baseline metrics.

@@ -7,6 +7,7 @@ import { Chat } from 'chat';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  resolveConnectorModelProvider,
   registerConnectorHandlers,
   ModelResponseError,
   waitForSignal,
@@ -88,6 +89,100 @@ describe('connector model errors', () => {
 
     expect(error.message).toContain('connector service logs');
     expect(error.message).not.toContain('private prompt token');
+  });
+
+  it.each([
+    ['Anthropic', 'ANTHROPIC_API_KEY'],
+    ['OpenAI', 'OPENAI_API_KEY'],
+    ['OpenAI-compatible endpoint', 'OPENAI_COMPATIBLE_API_KEY'],
+  ] as const)(
+    'uses the %s provider context without exposing raw errors',
+    (providerLabel, credentialName) => {
+      const error = new ModelResponseError(
+        {
+          message: 'private-key at https://private.endpoint.test/v1',
+          status: 401,
+        },
+        false,
+        { credentialName, providerLabel },
+      );
+
+      expect(error.message).toContain(`${providerLabel} rejected ${credentialName}`);
+      expect(error.message).not.toContain('private-key');
+      expect(error.message).not.toContain('private.endpoint.test');
+      expect(error.message).not.toContain('Gemini');
+    },
+  );
+});
+
+describe('connector model provider selection', () => {
+  it.each([
+    {
+      environment: {
+        GOOGLE_GENERATIVE_AI_API_KEY: 'google-key',
+        GEMINI_FALLBACK_MODEL: 'gemini-fallback',
+        GEMINI_MODEL: 'gemini-primary',
+        SEB_PROVIDER: 'google',
+      },
+      expected: {
+        fallbackModel: 'gemini-fallback',
+        model: 'gemini-primary',
+        provider: 'google',
+      },
+    },
+    {
+      environment: {
+        ANTHROPIC_API_KEY: 'anthropic-key',
+        ANTHROPIC_MODEL: 'claude-primary',
+        SEB_PROVIDER: 'anthropic',
+      },
+      expected: {
+        model: 'claude-primary',
+        provider: 'anthropic',
+      },
+    },
+    {
+      environment: {
+        OPENAI_API_KEY: 'openai-key',
+        OPENAI_MODEL: 'gpt-primary',
+        SEB_PROVIDER: 'openai',
+      },
+      expected: {
+        model: 'gpt-primary',
+        provider: 'openai',
+      },
+    },
+    {
+      environment: {
+        OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1',
+        OPENAI_COMPATIBLE_MODEL: 'local-primary',
+        SEB_PROVIDER: 'openai-compatible',
+      },
+      expected: {
+        baseURL: 'http://localhost:11434/v1',
+        fallbackModel: 'local-primary',
+        model: 'local-primary',
+        provider: 'openai-compatible',
+      },
+    },
+  ])(
+    'selects $expected.provider synchronously from the environment',
+    ({ environment, expected }) => {
+      const selection = resolveConnectorModelProvider(environment);
+
+      expect(selection).toMatchObject(expected);
+      expect(selection).not.toBeInstanceOf(Promise);
+    },
+  );
+
+  it('keeps the established Google defaults', () => {
+    expect(resolveConnectorModelProvider({
+      GOOGLE_GENERATIVE_AI_API_KEY: 'google-key',
+    })).toMatchObject({
+      fallbackModel: 'gemini-3.6-flash',
+      model: 'gemini-3.7-flash',
+      provider: 'google',
+    });
   });
 });
 
@@ -366,6 +461,34 @@ describe('connector web sources', () => {
     }).rejects.toMatchObject({
       cause: capacityError,
       emittedOutput: false,
+      name: 'ModelResponseError',
+    } satisfies Partial<ModelResponseError>);
+  });
+
+  it('keeps the selected provider name on streamed model errors', async () => {
+    const stream = (async function* () {
+      yield { type: 'error', error: { status: 401 } };
+    })();
+
+    await expect(async () => {
+      for await (const _part of withWebSources(
+        stream,
+        undefined,
+        '',
+        undefined,
+        undefined,
+        undefined,
+        {
+          credentialName: 'ANTHROPIC_API_KEY',
+          providerLabel: 'Anthropic',
+        },
+      )) {
+        // Consume the wrapped response.
+      }
+    }).rejects.toMatchObject({
+      message: expect.stringContaining(
+        'Anthropic rejected ANTHROPIC_API_KEY',
+      ),
       name: 'ModelResponseError',
     } satisfies Partial<ModelResponseError>);
   });

@@ -6,22 +6,22 @@ This design keeps current facts outside model memory.
 
 ## Request flow
 
-1. The command-line parser selects chat, ask, setup, doctor, cache, snapshot, replay, completion, help, or version mode.
-2. Seb loads one optional saved Sleeper username.
+1. The command-line parser selects the requested command and its provider or model override.
+2. Seb loads private credentials, non-secret model settings, and one optional Sleeper username.
 3. Seb refreshes the NFL state, league season, leagues, owned rosters, and league settings.
 4. The Seb renderer reads and edits the terminal prompt.
 5. The transport selects Explore, My Fantasy, or Analyze from the question.
 6. The transport runs a slash command locally or sends a normal question to the agent.
-7. `ToolLoopAgent` gives Gemini the read-only tools, direct news tools, grounded web tools, and active session instructions.
+7. `ToolLoopAgent` gives the selected model read-only tools, direct news tools, and active session instructions.
 8. Middleware adds valid input examples to each compatible data tool.
 9. An identity tool resolves ambiguous player or team identifiers when necessary.
-10. Gemini selects only the tools that the question needs.
+10. The selected model calls only the tools that the question needs.
 11. A source client reads a fresh SQLite cache record or requests the source.
-12. The news client searches built-in sources before Google Search.
-13. Google Search supplies secondary coverage when the direct result has insufficient coverage.
-14. URL Context reads a web page that the user supplies.
+12. The news client searches the built-in sources for every model provider.
+13. Google Search can supply secondary coverage when Google is active.
+14. Google URL Context can read a supplied web page when Google is active.
 15. A deterministic function calculates summaries and risk signals.
-16. Gemini explains the returned facts.
+16. The selected model explains the returned facts.
 17. AI SDK telemetry emits run, model-step, performance, and tool lifecycle events.
 18. Seb writes bounded usage metadata to the local SQLite database.
 19. The transport records each executed tool input and result for the decision gate.
@@ -52,9 +52,13 @@ One submitted prompt can contain at most 32,000 characters.
 
 The last allowed step disables tools and asks the model for the final answer.
 
-The active tool set controls the news instructions.
+The active provider and tool set control the news instructions.
 
-An agent without web tools reports that it cannot verify current news.
+Every production provider receives the direct first-class news tool.
+
+Only the Google provider receives Google Search and URL Context.
+
+An injected test agent can disable all news tools.
 
 The interactive transport binds one cancellation signal to each model request.
 
@@ -114,13 +118,21 @@ It removes local command messages from later model context.
 
 It also supports a `/new` model-context boundary.
 
+The `/provider` and `/model` commands verify a new model before a switch.
+
+A successful switch replaces the agent and starts a fresh model context.
+
+The visible transcript remains available after the switch.
+
+A failed switch keeps the prior agent, model, and context.
+
 The transport records contextual actions for the renderer.
 
 The transport records a tool-selected player only when the user named that player.
 
 The transport also binds validated direct and web sources to the answer ID.
 
-This step uses no extra Gemini request.
+This step uses no extra model request.
 
 The transport buffers a direct action answer until the decision gate finishes.
 
@@ -166,6 +178,7 @@ The session stores these values in memory.
 - NFL team.
 - Active NFL player.
 - Active skill.
+- Active model provider and model display state.
 - Token totals.
 - Model-context boundary.
 
@@ -185,7 +198,7 @@ Interactive chat loads one validated JSON profile before it starts the TUI.
 
 One-shot requests load the same profile before they call the agent.
 
-The top-level setup command validates Gemini and accepts one optional Sleeper username.
+The top-level setup command accepts one optional Sleeper username.
 
 The profile stores only that username, the schema version, and the update time.
 
@@ -197,6 +210,56 @@ The profile store uses a private temporary file and an atomic rename.
 
 The [setup guide](SETUP.md) defines path selection and file permissions.
 
+## Model provider configuration
+
+Seb supports Google Gemini, Anthropic, OpenAI, and OpenAI-compatible endpoints.
+
+The `seb configure` command uses private terminal prompts outside the chat transport.
+
+It masks each key and verifies the selected model before it writes either file.
+
+`credentials.json` stores saved keys. It binds a compatible key to one canonical base URL.
+
+`model-settings.json` stores models and the optional compatible base URL.
+
+Both stores validate a bounded schema and use an atomic file replacement.
+
+Environment credentials, models, and compatible base URLs take priority over saved values.
+
+An explicit command-line provider takes priority over the environment and saved active provider.
+
+An explicit qualified model can also select its provider.
+
+Seb otherwise uses the saved active provider.
+
+It then discovers Google, Anthropic, OpenAI, or OpenAI-compatible access in that order.
+
+Provider-specific model variables take priority over saved models.
+
+Hosted providers use documented defaults after saved values.
+
+An explicit command-line or slash model uses itself as the fallback.
+
+A provider-only override keeps that provider's configured fallback.
+
+The primary and fallback always use the same provider.
+
+Seb retries the fallback only after a capacity or rate-limit error.
+
+The compatible provider requires a base URL and a model. Its key remains optional.
+
+Remote compatible endpoints require HTTPS. HTTP compatible endpoints require a loopback host.
+
+The URL validator rejects credentials, queries, fragments, and individual completion endpoint paths.
+
+Compatible model and discovery requests reject redirects.
+
+Interactive configuration requires approval before it sends data to a remote compatible origin.
+
+The current-directory `.env` loader cannot select a compatible endpoint or redirect the configuration directory.
+
+Connector processes use environment provider settings only. They do not read the local provider files.
+
 ## Source clients
 
 Each direct public source has one client class.
@@ -206,9 +269,17 @@ Each direct public source has one client class.
 - `WeatherClient` reads NWS GeoJSON endpoints.
 - `NewsClient` reads feeds, news sitemaps, and supported publisher pages.
 
-The production model uses the standard Gemini `generateContent` endpoint.
+The provider factory constructs one AI SDK model for the active provider.
 
-The model also receives two provider tools.
+Google uses its standard `generateContent` model adapter.
+
+OpenAI and Anthropic use their matching AI SDK provider adapters.
+
+The OpenAI-compatible adapter uses the configured API base URL.
+
+Every production model receives the direct news tool.
+
+The Google model also receives two provider tools.
 
 - Gemini Google Search supplies secondary public coverage.
 - Gemini URL Context reads a user-supplied web page.
@@ -219,7 +290,9 @@ It validates publication dates before it returns an article.
 
 It validates parsed discovery arrays and article metadata before it stores them.
 
-It recommends Google Search when direct results contain too few articles or publishers.
+It recommends broader coverage when direct results contain too few articles or publishers.
+
+Only the Google agent can act on that recommendation through Google Search.
 
 Each direct source client accepts an injected `fetch` function.
 
@@ -382,11 +455,13 @@ It reduces confidence when fresh required evidence includes a stale supplemental
 
 Seb uses the AI SDK telemetry integration interface for local usage records.
 
-The production model uses the standard Google `generateContent` API.
+The production agent records the active provider and model for each model step.
 
 AI SDK supplies normalized model-step usage, performance values, and tool lifecycle events.
 
-Google usage adds provider-specific totals, tool-use tokens, grounding counts, and service tier when available.
+Google usage adds provider totals, tool-use tokens, grounding counts, and service tier when available.
+
+Other providers can return different token classes and provider metadata.
 
 One model call in a report means one logical AI SDK model step.
 
@@ -436,13 +511,15 @@ Each report reads the 10,000 newest matching runs at most.
 
 Top-level JSON output uses schema version 1.
 
-The local reports do not query Google quota, credits, billing totals, or currency cost.
+The local reports do not query provider quota, credits, billing totals, or currency cost.
 
 The recorder disables input and output capture for local analytics.
 
 It stores identifiers, timestamps, numeric metrics, and bounded categories.
 
 It does not store prompts, answers, tool inputs, tool results, or raw errors.
+
+It also excludes keys, authorization headers, and compatible endpoint URLs.
 
 AI SDK DevTools uses a separate content-rich trace store.
 
@@ -484,13 +561,19 @@ Read the [evaluation guide](EVALUATION.md) for exact rules and limits.
 
 Vitest checks clients, SQLite storage, usage telemetry, analytics, identities, provenance, evaluation, commands, setup, weather, CLI behavior, and connectors.
 
-AI SDK `MockLanguageModelV4` checks complete agent tool loops without model cost.
+Provider tests cover resolution, provider construction, private storage, endpoint validation, setup prompts, and model switching.
+
+AI SDK `MockLanguageModelV4` checks complete agent tool loops without model cost or live provider credentials.
+
+Injected HTTP mocks check compatible model discovery without a live endpoint.
 
 Chat SDK test adapters check connector behavior without platform credentials.
 
-`npm run data:smoke` checks live nflverse and NWS data without Gemini.
+`npm run data:smoke` checks live nflverse and NWS data without a model provider.
 
-`npm run doctor` checks every source, Google Search, and one streaming local Gemini tool continuation.
+`npm run doctor` checks every source and one streaming local tool continuation with the active provider.
+
+The Google doctor check also requires one grounded Google Search source.
 
 Run the full local gate before each commit.
 

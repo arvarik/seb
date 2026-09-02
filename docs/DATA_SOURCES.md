@@ -12,6 +12,8 @@ Read the [storage guide](STORAGE.md) for the common request and stale-data polic
 
 Seb searches its built-in news registry first.
 
+Every supported model provider can use this direct registry.
+
 The registry contains official NFL, independent, fantasy-impact, and official team sources.
 
 Seb validates each article URL and publication date before it returns the article.
@@ -22,15 +24,17 @@ Seb ranks relevant articles by query match, source class, and publication time.
 
 Seb limits one publisher to three results in one answer.
 
-Seb recommends Google Search when the direct search returns fewer than five results.
+Seb recommends broader coverage when the direct search returns fewer than five results.
 
 It uses the requested limit when that limit is smaller than five.
 
-It also recommends Google Search when the results contain fewer than two publishers.
+It also recommends broader coverage when the results contain fewer than two publishers.
 
 An explicit single-source request needs only that publisher.
 
-Google Search also remains available when the user requests broad web coverage.
+The Google provider can use Google Search for that broader coverage.
+
+Other providers report the direct-source limit and do not use model memory as current news.
 
 ## First-class NFL news registry
 
@@ -42,7 +46,7 @@ The tool can infer an NFL team from the question or accept a team code.
 
 The registry is built into Seb.
 
-Version `0.1.2` does not read a custom source file.
+Version `0.2.0` does not read a custom source file.
 
 A tool caller can limit a search with `sourceIds`, `categories`, or `teams`.
 
@@ -206,11 +210,11 @@ Keep deterministic parser tests in CI and run the live probe before each release
 | RotoWire | The public response returned `no-store`. The API also requires access and has redistribution limits. |
 | Yahoo guessed sitemap | The guessed sitemap was not a reliable NFL source. Seb uses the NFL RSS feed instead. |
 
-## Gemini Google Search and URL Context
+## Google Search and URL Context
 
-Seb uses Gemini Google Search for secondary public coverage.
+Seb uses Gemini Google Search for secondary public coverage only when Google is active.
 
-Seb uses Gemini URL Context for an HTTP or HTTPS page that a user supplies.
+Seb uses Gemini URL Context for a supplied HTTP or HTTPS page only when Google is active.
 
 These tools return provider source records and grounding metadata.
 
@@ -220,9 +224,9 @@ Seb validates each direct web source URL before it displays the link.
 
 The command line, interactive interface, and chat connectors show these links.
 
-Seb includes the current UTC date in each agent request.
+Seb includes the current UTC date in each model request.
 
-This date helps Gemini interpret terms such as `today` and `latest`.
+This date helps the active model interpret terms such as `today` and `latest`.
 
 Seb uses direct and grounded reporting for news, injury discussion, trades, and depth-chart changes.
 
@@ -355,7 +359,7 @@ The NWS requires a user agent that identifies the application.
 Set `NWS_USER_AGENT` to an application name and contact value.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.1.2 (you@example.com)
+NWS_USER_AGENT=seb/0.2.0 (you@example.com)
 ```
 
 Seb performs three request types.
@@ -454,13 +458,15 @@ Seb returns an unavailable result when a kickoff falls outside the forecast wind
 
 The doctor checks Sleeper, nflverse, and NWS without cache data.
 
-A grounded news request separately checks Gemini Search access.
+The doctor forces the active provider through one local tool loop.
+
+The Google doctor check separately checks grounded Search access.
 
 ```bash
 npm run doctor
 ```
 
-The public-data smoke test skips Gemini.
+The public-data smoke test skips every model provider.
 
 ```bash
 npm run data:smoke

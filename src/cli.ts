@@ -1,13 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { loadEnvFile } from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import {
   createFantasyFootballAgent,
   createFantasyFootballAnalysisAgent,
-  DEFAULT_GEMINI_FALLBACK_MODEL,
-  DEFAULT_GEMINI_MODEL,
 } from './agent.js';
 import {
   formatFantasyAnalysis,
@@ -23,13 +20,28 @@ import {
   type RecommendationToolResult,
 } from './analysis/recommendation-eligibility.js';
 import { configureAiDevTools } from './ai/devtools.js';
+import { loadModelConfiguration } from './ai/model-configuration.js';
+import {
+  MODEL_PROVIDER_LABELS,
+  resolveVerifiedModelProvider,
+  validateModelProviderId,
+  type ModelProviderId,
+  type ResolvedModelProvider,
+} from './ai/model-provider.js';
+import { currentRequestSignalWithTimeout } from './ai/request-signal.js';
+import { FileModelSettingsStore, formatModelSettings } from './ai/model-settings.js';
 import {
   CLI_HELP,
   CliUsageError,
   parseCliArguments,
   type CliCommand,
 } from './cli-options.js';
-import { formatDoctorReport, runDoctor, verifyGeminiApi } from './doctor.js';
+import {
+  formatDoctorReport,
+  runDoctor,
+  verifyModelProviderApi,
+  type DoctorReport,
+} from './doctor.js';
 import { getSharedSebDatabase } from './data/sqlite-store.js';
 import {
   formatReplaySummary,
@@ -51,6 +63,10 @@ import {
   formatModelErrorForUser,
   isModelCapacityError,
 } from './model-capacity-error.js';
+import {
+  formatIgnoredLocalEnvironment,
+  loadSafeLocalEnvironment,
+} from './local-environment.js';
 import { NflverseClient } from './nflverse/client.js';
 import { NewsClient } from './news/client.js';
 import { SleeperClient } from './sleeper/client.js';
@@ -66,6 +82,12 @@ import {
   FileSetupProfileStore,
   formatSetupProfile,
 } from './setup/profile.js';
+import { FileSetupCredentialStore } from './setup/credentials.js';
+import {
+  ModelConfigurationWizardError,
+  runModelConfigurationWizard,
+} from './setup/model-configuration.js';
+import { TerminalSetupPrompt } from './setup/prompt.js';
 import {
   applySetupProfile,
   refreshAutomaticSession,
@@ -101,10 +123,8 @@ export interface CliStreams {
 }
 
 interface ModelSelection {
-  apiKey: string;
-  fallbackModel: string;
+  modelProvider: ResolvedModelProvider;
   nwsUserAgent: string | undefined;
-  primaryModel: string;
 }
 
 interface AnswerResult {
@@ -225,11 +245,26 @@ export async function runCli(
     case 'setup':
       await runSetupCommand(streams, environment, command.username);
       return 0;
+    case 'configure':
+      await runConfigureCommand(streams, environment);
+      return 0;
     case 'doctor': {
+      let modelProvider: ResolvedModelProvider | undefined;
+      let modelConfigurationError: unknown;
+      try {
+        modelProvider = (await loadModelConfiguration({ environment })).selection;
+      } catch (error) {
+        modelConfigurationError = error;
+      }
       const report = await runDoctor({
         environment,
+        ...(modelProvider ? { modelProvider } : {}),
         offline: command.offline,
+        ...(modelConfigurationError ? { skipModelProviderCheck: true } : {}),
       });
+      if (modelConfigurationError) {
+        applyModelConfigurationError(report, modelConfigurationError);
+      }
       streams.stdout.write(
         command.json
           ? `${JSON.stringify(report)}\n`
@@ -299,6 +334,34 @@ function formatUsageDeletion(message: string, unfinishedPreserved: number): stri
   return `${message}\nSeb preserved ${unfinishedPreserved} unfinished usage runs. Use --include-unfinished to remove them.\n`;
 }
 
+function applyModelConfigurationError(
+  report: DoctorReport,
+  error: unknown,
+): void {
+  const configurationCheck = report.checks.findIndex((check) =>
+    check.name === 'Gemini key' || check.name === 'Model provider key'
+  );
+  const providerCheck = report.checks.findIndex((check) =>
+    check.name === 'Gemini API' || check.name === 'Model provider API'
+  );
+  const detail = errorMessage(error);
+  const failure = {
+    detail,
+    name: 'Model provider configuration',
+    status: 'fail' as const,
+  };
+  if (configurationCheck >= 0) report.checks[configurationCheck] = failure;
+  else report.checks.splice(1, 0, failure);
+  if (providerCheck >= 0) {
+    report.checks[providerCheck] = {
+      detail: 'Fix the model provider configuration, then run the check again.',
+      name: 'Model provider API',
+      status: 'skip',
+    };
+  }
+  report.ok = false;
+}
+
 function formatSnapshotProvenance(snapshot: {
   asOf: string;
   entityKey: string;
@@ -339,7 +402,11 @@ async function startInteractiveChat(
     );
   }
 
-  const selection = selectModels(environment, command.model);
+  const selection = await selectModels(
+    environment,
+    command.model,
+    command.provider,
+  );
   const sources = new SourceTracker();
   const clients = createDataClients(selection.nwsUserAgent, sources);
   const profileStore = new FileSetupProfileStore({ environment });
@@ -366,20 +433,38 @@ async function startInteractiveChat(
     sessionUsage: session.usage,
     surface: 'interactive',
   });
-  const agent = createFantasyFootballAgent({
-    apiKey: selection.apiKey,
-    model: selection.primaryModel,
-    ...clients,
-    getRuntimeContext: () => formatSessionData(session),
-    getRuntimeInstructions: () => formatSessionInstructions(session),
-    telemetryFunctionId: 'seb.interactive.research',
-    telemetryIntegrations: [telemetry],
-  });
+  const createInteractiveAgent = (modelProvider: ResolvedModelProvider) =>
+    createFantasyFootballAgent({
+      modelProvider,
+      ...clients,
+      getRuntimeContext: () => formatSessionData(session),
+      getRuntimeInstructions: () => formatSessionInstructions(session),
+      telemetryFunctionId: 'seb.interactive.research',
+      telemetryIntegrations: [telemetry],
+    });
+  let activeModelProvider = selection.modelProvider;
+  const agent = createInteractiveAgent(activeModelProvider);
+  const provider = activeModelProvider.provider;
+  const providerLabel = MODEL_PROVIDER_LABELS[provider];
   await runSebInteractiveTui({
     transport: new SebInteractiveTransport({
       agent,
+      doctor: (offline) => runDoctor({
+        environment,
+        modelProvider: activeModelProvider,
+        modelProviderTelemetry: {
+          agentKind: 'doctor',
+          database,
+          sessionId: telemetry.sessionId,
+          sessionUsage: session.usage,
+          surface: 'interactive',
+        },
+        offline,
+      }),
       environment,
-      model: selection.primaryModel,
+      model: selection.modelProvider.model,
+      provider,
+      providerLabel,
       nflverse: clients.nflverseClient,
       session,
       sleeper: clients.sleeperClient,
@@ -387,6 +472,50 @@ async function startInteractiveChat(
       version: SEB_VERSION,
       weather: clients.weatherClient,
       profileStore,
+      switchModel: async (request) => {
+        const next = await selectModels(
+          environment,
+          request.model,
+          request.provider
+            ? validateModelProviderId(request.provider)
+            : undefined,
+        );
+        let verifiedModel: string;
+        try {
+          const verification = await verifyModelProviderApi(
+            next.modelProvider,
+            currentRequestSignalWithTimeout(30_000),
+            {
+              agentKind: 'setup',
+              database,
+              sessionId: telemetry.sessionId,
+              sessionUsage: session.usage,
+              surface: 'interactive',
+            },
+          );
+          verifiedModel = verification.model;
+        } catch (error) {
+          throw new Error(formatModelErrorForUser(
+            error,
+            'interactive',
+            modelErrorContext(next.modelProvider),
+          ));
+        }
+        const verifiedModelProvider = resolveVerifiedModelProvider(
+          next.modelProvider,
+          verifiedModel,
+        );
+        const nextAgent = createInteractiveAgent(verifiedModelProvider);
+        return {
+          agent: nextAgent,
+          model: verifiedModelProvider.model,
+          onActivated: () => {
+            activeModelProvider = verifiedModelProvider;
+          },
+          provider: verifiedModelProvider.provider,
+          providerLabel: MODEL_PROVIDER_LABELS[verifiedModelProvider.provider],
+        };
+      },
       uiState,
       usageDatabase: database,
       usageSessionId: telemetry.sessionId,
@@ -394,9 +523,11 @@ async function startInteractiveChat(
       usageTelemetryDatabase: database,
     }),
     environment,
-    model: selection.primaryModel,
+    model: selection.modelProvider.model,
+    provider,
+    providerLabel,
     sources,
-    title: `Seb · ${selection.primaryModel}`,
+    title: `Seb · ${selection.modelProvider.model}`,
     session,
     uiState,
     version: SEB_VERSION,
@@ -418,6 +549,45 @@ async function runSetupCommand(
   streams.stdout.write(`Seb saved the account preference.\n\n${formatSetupProfile(profile, store.path)}\n`);
 }
 
+async function runConfigureCommand(
+  streams: CliStreams,
+  environment: NodeJS.ProcessEnv,
+): Promise<void> {
+  if (streams.stdin.isTTY !== true || streams.stdout.isTTY !== true) {
+    throw new CliUsageError(
+      'Model configuration needs a terminal because Seb masks private keys.',
+    );
+  }
+  const credentialStore = new FileSetupCredentialStore({ environment });
+  const settingsStore = new FileModelSettingsStore({ environment });
+  const prompt = new TerminalSetupPrompt(
+    streams.stdin as NodeJS.ReadStream,
+    streams.stdout as NodeJS.WriteStream,
+  );
+  const result = await runModelConfigurationWizard({
+    credentialStore,
+    environment,
+    prompt,
+    settingsStore,
+    verify: (selection, signal) => verifyModelProviderApi(
+      selection,
+      signal,
+      { agentKind: 'setup', surface: 'cli' },
+    ),
+    write: (text) => streams.stdout.write(text),
+  });
+  streams.stdout.write([
+    '',
+    `${MODEL_PROVIDER_LABELS[result.selection.provider]} is active.`,
+    `Model: ${result.selection.model}`,
+    `Fallback model: ${result.selection.fallbackModel}`,
+    `Private credentials: ${credentialStore.path}`,
+    '',
+    formatModelSettings(result.settings, settingsStore.path),
+    '',
+  ].join('\n'));
+}
+
 async function runSetupWizard(
   environment: NodeJS.ProcessEnv,
   store: FileSetupProfileStore,
@@ -426,25 +596,10 @@ async function runSetupWizard(
     username?: string;
   },
 ) {
-  const primaryModel = environment.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
-  const fallbackModel = environment.GEMINI_FALLBACK_MODEL?.trim() ||
-    DEFAULT_GEMINI_FALLBACK_MODEL;
   return runFirstRunSetup({
     environment,
     store,
     ...(options.username ? { username: options.username } : {}),
-    verifyApiKey: async (apiKey) => {
-      await verifyGeminiApi(
-        apiKey,
-        primaryModel,
-        fallbackModel,
-        AbortSignal.timeout(30_000),
-        {
-          agentKind: 'setup',
-          surface: options.surface,
-        },
-      );
-    },
   });
 }
 
@@ -490,8 +645,10 @@ function formatBytes(bytes: number): string {
 class CliModelResponseError extends Error {
   override readonly cause: unknown;
 
-  constructor(cause: unknown) {
-    super(formatModelErrorForUser(cause, 'cli'), { cause });
+  constructor(cause: unknown, modelProvider: ResolvedModelProvider) {
+    super(formatModelErrorForUser(cause, 'cli', modelErrorContext(modelProvider)), {
+      cause,
+    });
     this.name = 'CliModelResponseError';
     this.cause = cause;
   }
@@ -526,7 +683,11 @@ async function answerOneQuestion(
     );
   }
 
-  const selection = selectModels(environment, command.model);
+  const selection = await selectModels(
+    environment,
+    command.model,
+    command.provider,
+  );
   try {
     if (command.json) {
       const result = await generateAnswer(
@@ -541,7 +702,7 @@ async function answerOneQuestion(
 
     await streamAnswer(selection, prompt, streams, command.progress, environment);
   } catch (error) {
-    throw new CliModelResponseError(error);
+    throw new CliModelResponseError(error, selection.modelProvider);
   }
 }
 
@@ -555,7 +716,7 @@ async function generateAnswer(
   try {
     return await generateWithModel(
       selection,
-      selection.primaryModel,
+      selection.modelProvider.model,
       prompt,
       false,
       environment,
@@ -564,14 +725,14 @@ async function generateAnswer(
   } catch (error) {
     if (
       !isModelCapacityError(error) ||
-      selection.fallbackModel === selection.primaryModel
+      selection.modelProvider.fallbackModel === selection.modelProvider.model
     ) {
       throw error;
     }
     writeFallbackNotice(stderr, selection);
     return generateWithModel(
       selection,
-      selection.fallbackModel,
+      selection.modelProvider.fallbackModel,
       prompt,
       true,
       environment,
@@ -596,8 +757,7 @@ async function generateWithModel(
   );
   sources.clear();
   const researchAgent = createFantasyFootballAgent({
-    apiKey: selection.apiKey,
-    model,
+    modelProvider: modelProviderForModel(selection.modelProvider, model),
     ...clients,
     getRuntimeContext: () => automaticContext.data,
     getRuntimeInstructions: () => automaticContext.instructions,
@@ -614,8 +774,7 @@ async function generateWithModel(
     if (source.sourceType === 'url') sources.recordUrlSource(source);
   }
   const analysisAgent = createFantasyFootballAnalysisAgent({
-    apiKey: selection.apiKey,
-    model,
+    modelProvider: modelProviderForModel(selection.modelProvider, model),
     telemetryFunctionId: 'seb.cli.formatter',
     telemetryIntegrations: [new SebUsageTelemetry({
       agentKind: 'formatter',
@@ -736,8 +895,7 @@ async function streamAnswer(
       clients.sleeperClient,
     );
     const agent = createFantasyFootballAgent({
-      apiKey: selection.apiKey,
-      model,
+      modelProvider: modelProviderForModel(selection.modelProvider, model),
       ...clients,
       getRuntimeContext: () => automaticContext.data,
       getRuntimeInstructions: () => automaticContext.instructions,
@@ -790,22 +948,22 @@ async function streamAnswer(
   };
 
   try {
-    await run(selection.primaryModel);
+    await run(selection.modelProvider.model);
   } catch (error) {
     if (
       wroteText ||
       !isModelCapacityError(error) ||
-      selection.fallbackModel === selection.primaryModel
+      selection.modelProvider.fallbackModel === selection.modelProvider.model
     ) {
       throw error;
     }
     writeFallbackNotice(streams.stderr, selection);
-    await run(selection.fallbackModel);
+    await run(selection.modelProvider.fallbackModel);
   }
 
   if (decisionRequested) {
     if (!bufferedText.trim()) {
-      throw new Error('Gemini returned an empty answer. Try the request again.');
+      throw new Error('The model provider returned an empty answer. Try again.');
     }
     const guarded = enforceFreeformRecommendation(
       bufferedText,
@@ -820,7 +978,7 @@ async function streamAnswer(
   }
 
   if (!wroteText) {
-    throw new Error('Gemini returned an empty answer. Try the request again.');
+    throw new Error('The model provider returned an empty answer. Try again.');
   }
   const sources = new Map<string, string>();
   for (const source of directSources.list()) {
@@ -872,28 +1030,27 @@ async function loadAutomaticContext(
   };
 }
 
-function selectModels(
+async function selectModels(
   environment: NodeJS.ProcessEnv,
   modelOverride?: string,
-): ModelSelection {
-  const apiKey = environment.GOOGLE_GENERATIVE_AI_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error(
-      'The Gemini key is empty. Add GOOGLE_GENERATIVE_AI_API_KEY to .env, then run npm run doctor.',
-    );
-  }
-  const primaryModel =
-    modelOverride ?? environment.GEMINI_MODEL?.trim() ?? DEFAULT_GEMINI_MODEL;
-  const fallbackModel = modelOverride
-    ? modelOverride
-    : (environment.GEMINI_FALLBACK_MODEL?.trim() ??
-      DEFAULT_GEMINI_FALLBACK_MODEL);
+  providerOverride?: ModelProviderId,
+): Promise<ModelSelection> {
+  const configuration = await loadModelConfiguration({
+    environment,
+    ...(modelOverride ? { model: modelOverride } : {}),
+    ...(providerOverride ? { provider: providerOverride } : {}),
+  });
   return {
-    apiKey,
-    primaryModel,
-    fallbackModel,
+    modelProvider: configuration.selection,
     nwsUserAgent: environment.NWS_USER_AGENT?.trim() || undefined,
   };
+}
+
+function modelProviderForModel(
+  selection: ResolvedModelProvider,
+  model: string,
+): ResolvedModelProvider {
+  return { ...selection, model };
 }
 
 async function readPrompt(stdin: CliInput): Promise<string> {
@@ -919,8 +1076,39 @@ function writeFallbackNotice(
   selection: ModelSelection,
 ): void {
   stderr.write(
-    `${selection.primaryModel} has no available capacity. Retrying with ${selection.fallbackModel}.\n`,
+    `${selection.modelProvider.model} has no available capacity. Retrying with ${selection.modelProvider.fallbackModel}.\n`,
   );
+}
+
+function modelErrorContext(modelProvider: ResolvedModelProvider): {
+  credentialName?: string;
+  providerLabel: string;
+} {
+  const provider = modelProvider.provider;
+  switch (provider) {
+    case 'google':
+      return {
+        credentialName: 'GOOGLE_GENERATIVE_AI_API_KEY',
+        providerLabel: MODEL_PROVIDER_LABELS.google,
+      };
+    case 'anthropic':
+      return {
+        credentialName: 'ANTHROPIC_API_KEY',
+        providerLabel: MODEL_PROVIDER_LABELS.anthropic,
+      };
+    case 'openai':
+      return {
+        credentialName: 'OPENAI_API_KEY',
+        providerLabel: MODEL_PROVIDER_LABELS.openai,
+      };
+    case 'openai-compatible':
+      return {
+        ...(modelProvider.apiKey
+          ? { credentialName: 'OPENAI_COMPATIBLE_API_KEY' }
+          : {}),
+        providerLabel: MODEL_PROVIDER_LABELS['openai-compatible'],
+      };
+  }
 }
 
 function describeTool(toolName: string): string {
@@ -974,14 +1162,8 @@ function createDataClients(
   };
 }
 
-export function loadLocalEnvironment(): void {
-  try {
-    loadEnvFile();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error;
-    }
-  }
+export function loadLocalEnvironment(): readonly string[] {
+  return loadSafeLocalEnvironment();
 }
 
 function isMainModule(): boolean {
@@ -1006,7 +1188,10 @@ export async function launchCli(
   installBrokenPipeExit(process.stdout);
   installBrokenPipeExit(process.stderr);
   try {
-    loadLocalEnvironment();
+    const environmentWarning = formatIgnoredLocalEnvironment(
+      loadLocalEnvironment(),
+    );
+    if (environmentWarning) process.stderr.write(environmentWarning);
     if (await configureAiDevTools()) {
       process.stderr.write(
         'Seb AI SDK DevTools is active. Local prompts and tool data are recorded in .devtools/.\n',
@@ -1014,7 +1199,9 @@ export async function launchCli(
     }
     process.exitCode = await runCli(arguments_);
   } catch (error) {
-    const message = error instanceof CliUsageError || !classifyModelError(error)
+    const message = error instanceof CliUsageError ||
+      error instanceof ModelConfigurationWizardError ||
+      !classifyModelError(error)
       ? errorMessage(error)
       : formatModelErrorForUser(error, 'cli');
     const prefix = error instanceof CliUsageError ? 'Seb' : 'Seb failed';

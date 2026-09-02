@@ -125,6 +125,7 @@ Do not use them as normal setup steps.
 | Value | Source | Persistence |
 | --- | --- | --- |
 | Sleeper username | User preference | Saved locally |
+| Model provider and models | Model configuration | Saved locally or supplied by the environment |
 | NFL season and phase | Current Sleeper state | Refreshed per request or session |
 | Display week | Current Sleeper state | Refreshed per request or session |
 | Sleeper league season | Current Sleeper state | Refreshed per request or session |
@@ -133,7 +134,9 @@ Do not use them as normal setup steps.
 | Active player or team | Current conversation | Current session |
 | Focused league | User override or clear automatic match | Current session |
 
-Seb never saves an API key, league ID, roster ID, NFL team, season, or week in the preferences file.
+The account preferences file never stores a key, league ID, roster ID, NFL team, season, or week.
+
+`seb configure` stores saved keys in the separate private credential file.
 
 ## Failure behavior
 

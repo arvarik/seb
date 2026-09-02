@@ -57,6 +57,14 @@ describe('interactive command completion', () => {
     expect(completeInteractiveInput('/export report ')[0]?.value).toBe(
       '/export report md',
     );
+    expect(completeInteractiveInput('/provider anth')[0]).toEqual({
+      value: '/provider anthropic',
+      description: 'Switch to Anthropic.',
+    });
+    expect(completeInteractiveInput('/model ', {
+      model: 'gpt-test',
+      provider: 'openai',
+    })[0]?.value).toBe('/model gpt-test');
   });
 
   it('closes skill completion after one valid skill or inline question', () => {
@@ -129,6 +137,10 @@ describe('interactive command completion', () => {
     expect(findInteractiveCommand('/completion')?.name).toBe('shell-completion');
     expect(findInteractiveCommand('/quit')?.name).toBe('exit');
     expect(findInteractiveCommand('/my')?.name).toBe('fantasy');
+    expect(findInteractiveCommand('/provider')?.category).toBe('Preferences');
+    expect(findInteractiveCommand('/model')?.category).toBe('Preferences');
+    expect(findInteractiveCommand('/provider')?.usage).toBe('/provider [NAME]');
+    expect(findInteractiveCommand('/model')?.usage).toBe('/model [MODEL]');
   });
 
   it.each(['bash', 'fish', 'zsh'] as const)(
@@ -138,6 +150,9 @@ describe('interactive command completion', () => {
       expect(script).toContain('seb');
       expect(script).toContain('doctor');
       expect(script).toContain('ask');
+      expect(script).toContain('configure');
+      expect(script).toContain('openai-compatible');
+      expect(script).toContain('provider');
     },
   );
 

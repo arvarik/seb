@@ -154,9 +154,9 @@ These rules provide analysis context. They do not create an official projection.
 
 The `news-briefing` skill prevents false current-news claims.
 
-It searches the built-in first-class news sources before Google Search.
+It searches the built-in first-class news sources with every model provider.
 
-It uses Google Search when direct sources return insufficient coverage.
+It can use Google Search for insufficient coverage when Google is active.
 
 It includes validated publisher links and publication dates.
 

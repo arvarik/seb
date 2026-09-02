@@ -26,7 +26,7 @@ export interface SleeperSetupDiscovery {
 export interface ApiKeyPresence {
   message: string;
   present: boolean;
-  variable: 'GOOGLE_GENERATIVE_AI_API_KEY';
+  variable: 'GEMINI_API_KEY' | 'GOOGLE_GENERATIVE_AI_API_KEY';
 }
 
 export interface DiscoveredSleeperAccount {
@@ -51,13 +51,20 @@ export class SetupWizardError extends Error {
 }
 
 export function checkGeminiApiKey(environment: NodeJS.ProcessEnv): ApiKeyPresence {
-  const present = Boolean(environment.GOOGLE_GENERATIVE_AI_API_KEY?.trim());
+  const googleKey = environment.GOOGLE_GENERATIVE_AI_API_KEY?.trim();
+  const geminiKey = environment.GEMINI_API_KEY?.trim();
+  const present = Boolean(googleKey || geminiKey);
+  const variable = googleKey
+    ? 'GOOGLE_GENERATIVE_AI_API_KEY'
+    : geminiKey
+      ? 'GEMINI_API_KEY'
+      : 'GOOGLE_GENERATIVE_AI_API_KEY';
   return {
-    variable: 'GOOGLE_GENERATIVE_AI_API_KEY',
+    variable,
     present,
     message: present
       ? 'The Gemini API key is present in the environment.'
-      : 'Add GOOGLE_GENERATIVE_AI_API_KEY to the environment. Seb does not save this key in the profile.',
+      : 'Add GOOGLE_GENERATIVE_AI_API_KEY or GEMINI_API_KEY to the environment. Seb does not save this key in the profile.',
   };
 }
 
@@ -99,14 +106,14 @@ export async function discoverOwnedRosters(
 export async function runFirstRunSetup(
   options: FirstRunSetupOptions,
 ): Promise<SebSetupProfile> {
-  const key = checkGeminiApiKey(options.environment);
-  if (!key.present) {
-    throw new SetupWizardError(key.message);
-  }
   if (options.verifyApiKey) {
+    const key = checkGeminiApiKey(options.environment);
+    if (!key.present) {
+      throw new SetupWizardError(key.message);
+    }
     try {
       await options.verifyApiKey(
-        options.environment.GOOGLE_GENERATIVE_AI_API_KEY?.trim() ?? '',
+        options.environment[key.variable]?.trim() ?? '',
       );
     } catch (error) {
       throw new SetupWizardError(

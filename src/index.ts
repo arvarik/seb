@@ -6,6 +6,25 @@ export {
   type FantasyFootballAgentOptions,
 } from './agent.js';
 export {
+  createProviderLanguageModel,
+  DEFAULT_PROVIDER_MODELS,
+  discoverConfiguredModelProviders,
+  MODEL_PROVIDER_IDS,
+  MODEL_PROVIDER_LABELS,
+  ModelProviderConfigurationError,
+  resolveModelProvider,
+  resolveProviderApiKey,
+  validateModelId,
+  validateModelProviderId,
+  validateOpenAICompatibleBaseURL,
+  type ModelProviderCredentials,
+  type ModelProviderId,
+  type ProviderLanguageModel,
+  type ProviderModelDefaults,
+  type ResolvedModelProvider,
+  type ResolveModelProviderOptions,
+} from './ai/model-provider.js';
+export {
   FANTASY_ANALYSIS_SCHEMA_VERSION,
   fantasyAnalysisSchema,
   formatFantasyAnalysis,

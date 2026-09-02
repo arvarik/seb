@@ -7,10 +7,17 @@ import type { SebIconMode, SebThemeName } from './theme.js';
 
 const MAX_RECORDED_ANSWER_EVIDENCE = 50;
 
+export interface InteractiveModelState {
+  model: string;
+  provider: string;
+  providerLabel: string;
+}
+
 export class InteractiveUiState {
   private readonly evidenceByAnswerId = new Map<string, SourceEvidenceSnapshot>();
 
   iconMode: SebIconMode = 'unicode';
+  activeModel: InteractiveModelState | null = null;
   latestAnswer = '';
   latestAnswerId = '';
   latestPrompt = '';
@@ -20,6 +27,14 @@ export class InteractiveUiState {
   sources: DataSourceRecord[] = [];
   suggestions: string[] = [];
   theme: SebThemeName = 'default';
+
+  setActiveModel(model: InteractiveModelState): void {
+    this.activeModel = {
+      model: model.model.trim(),
+      provider: model.provider.trim(),
+      providerLabel: model.providerLabel.trim(),
+    };
+  }
 
   recordAnswerEvidence(snapshot: SourceEvidenceSnapshot): void {
     const capturedAt = new Date(snapshot.capturedAt);

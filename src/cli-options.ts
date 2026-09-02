@@ -1,6 +1,7 @@
 export type CliCommand =
   | { name: 'help' }
   | { name: 'version' }
+  | { name: 'configure' }
   | { name: 'setup'; username?: string }
   | { name: 'completion'; shell: 'bash' | 'fish' | 'zsh' }
   | {
@@ -40,15 +41,22 @@ export type CliCommand =
       retainDays?: number;
       scope: 'today' | '7d' | '30d' | 'all';
     }
-  | { name: 'chat'; model?: string }
+  | { name: 'chat'; model?: string; provider?: ModelProviderOption }
   | {
       name: 'ask';
       json: boolean;
       model?: string;
       progress: boolean;
       prompt?: string;
+      provider?: ModelProviderOption;
     }
   | { name: 'doctor'; json: boolean; offline: boolean };
+
+export type ModelProviderOption =
+  | 'anthropic'
+  | 'google'
+  | 'openai'
+  | 'openai-compatible';
 
 export class CliUsageError extends Error {
   constructor(message: string) {
@@ -61,9 +69,10 @@ export const CLI_HELP = `Seb reads Sleeper, nflverse, weather, and grounded news
 
 Usage:
   seb
-  seb chat [--model MODEL]
+  seb chat [--provider NAME] [--model MODEL]
   seb ask [OPTIONS] [QUESTION]
   seb doctor [--offline] [--json]
+  seb configure
   seb setup [SLEEPER_USERNAME]
   seb completion bash|fish|zsh
   seb cache [status|clear|prune] [--max-size-mb N] [--max-age-days N] [--retain N] [--json]
@@ -77,20 +86,24 @@ Usage:
 Commands:
   chat       Start an interactive terminal session. This is the default.
   ask        Ask one question. Seb also reads the question from standard input.
-  doctor     Verify Node.js, Gemini, Sleeper, nflverse, and weather.
-  setup      Validate Gemini and save one optional Sleeper username.
+  doctor     Verify the active model provider, local data, and public data APIs.
+  configure  Enter a provider key, endpoint, and model through a private prompt.
+  setup      Save one optional Sleeper username.
   completion Print a shell completion script.
   cache      Inspect or clear the local SQLite cache.
   snapshots  List versioned source snapshots.
   replay     Measure historical nflverse baseline accuracy without future leakage.
-  usage      Show concise, locally observed Gemini API usage.
+  usage      Show concise, locally observed model API usage.
   stats      Show detailed token, latency, model, and tool analytics.
   help       Show this help.
   version    Show the Seb version.
 
-Ask options:
+Chat and ask model options:
+  --provider NAME  Use google, anthropic, openai, or openai-compatible.
+  --model MODEL    Use one model and disable fallback for this request.
+
+Ask output options:
   --json           Print one validated analysis object for a script.
-  --model MODEL    Use one Gemini model for this request.
   --no-progress    Hide tool activity from the terminal.
 
 Doctor options:
@@ -99,7 +112,9 @@ Doctor options:
 
 Examples:
   seb
+  seb configure
   seb ask "Show the current NFL state."
+  seb ask --provider anthropic --model claude-sonnet-5 "Compare two players."
   printf 'Show trending adds' | seb ask
   seb ask --json "Analyze league 123456789."
   seb doctor
@@ -139,6 +154,9 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
       return parseAskArguments(rest);
     case 'doctor':
       return parseDoctorArguments(rest);
+    case 'configure':
+      requireNoArguments(rest, first);
+      return { name: 'configure' };
     case 'setup':
       if (rest[0] === '--help' || rest[0] === '-h') {
         return { name: 'help' };
@@ -395,6 +413,7 @@ function parseSnapshotArguments(arguments_: readonly string[]): CliCommand {
 
 function parseChatArguments(arguments_: readonly string[]): CliCommand {
   let model: string | undefined;
+  let provider: ModelProviderOption | undefined;
 
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
@@ -410,16 +429,30 @@ function parseChatArguments(arguments_: readonly string[]): CliCommand {
       model = readInlineOptionValue(argument, '--model');
       continue;
     }
+    if (argument === '--provider' || argument === '-p') {
+      provider = readProviderOption(readOptionValue(arguments_, index, argument));
+      index += 1;
+      continue;
+    }
+    if (argument?.startsWith('--provider=')) {
+      provider = readProviderOption(readInlineOptionValue(argument, '--provider'));
+      continue;
+    }
     throw new CliUsageError(`Unknown chat option: ${argument}`);
   }
 
-  return model ? { name: 'chat', model } : { name: 'chat' };
+  return {
+    name: 'chat',
+    ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
+  };
 }
 
 function parseAskArguments(arguments_: readonly string[]): CliCommand {
   let json = false;
   let model: string | undefined;
   let progress = true;
+  let provider: ModelProviderOption | undefined;
   const promptParts: string[] = [];
   let optionsEnded = false;
 
@@ -453,6 +486,15 @@ function parseAskArguments(arguments_: readonly string[]): CliCommand {
       model = readInlineOptionValue(argument, '--model');
       continue;
     }
+    if (argument === '--provider' || argument === '-p') {
+      provider = readProviderOption(readOptionValue(arguments_, index, argument));
+      index += 1;
+      continue;
+    }
+    if (argument?.startsWith('--provider=')) {
+      provider = readProviderOption(readInlineOptionValue(argument, '--provider'));
+      continue;
+    }
     if (argument?.startsWith('-')) {
       throw new CliUsageError(`Unknown ask option: ${argument}`);
     }
@@ -465,8 +507,23 @@ function parseAskArguments(arguments_: readonly string[]): CliCommand {
     json,
     progress,
     ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
     ...(prompt ? { prompt } : {}),
   };
+}
+
+function readProviderOption(value: string): ModelProviderOption {
+  if (
+    value === 'google' ||
+    value === 'anthropic' ||
+    value === 'openai' ||
+    value === 'openai-compatible'
+  ) {
+    return value;
+  }
+  throw new CliUsageError(
+    '--provider must equal google, anthropic, openai, or openai-compatible.',
+  );
 }
 
 function parseDoctorArguments(arguments_: readonly string[]): CliCommand {

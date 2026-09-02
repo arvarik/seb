@@ -91,6 +91,30 @@ describe('model error presentation', () => {
     );
   });
 
+  it('uses a provider label without exposing endpoint or credential values', () => {
+    const message = formatModelErrorForUser(
+      { status: 401, message: 'secret-key at http://private.test/v1' },
+      'interactive',
+      { credentialName: 'OPENAI_API_KEY', providerLabel: 'OpenAI' },
+    );
+
+    expect(message).toContain('OpenAI rejected OPENAI_API_KEY');
+    expect(message).not.toContain('secret-key');
+    expect(message).not.toContain('private.test');
+  });
+
+  it('describes keyless endpoint authentication without naming a missing key', () => {
+    const message = formatModelErrorForUser(
+      { status: 401 },
+      'connector',
+      { providerLabel: 'OpenAI-compatible endpoint' },
+    );
+
+    expect(message).toContain('rejected the authentication configuration');
+    expect(message).toContain('endpoint authentication settings');
+    expect(message).not.toContain('OPENAI_COMPATIBLE_API_KEY');
+  });
+
   it('bounds recursive classification and never displays raw provider data', () => {
     const error: Record<string, unknown> = {
       code: 'invalid_request',

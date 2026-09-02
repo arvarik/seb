@@ -43,6 +43,8 @@ export interface CompletionContext {
   leagues?: readonly { leagueId: string; name: string }[];
   leagueOptions?: readonly string[];
   mode?: 'analyze' | 'explore' | 'fantasy';
+  model?: string;
+  provider?: string;
   rosterId?: number | null;
   rosterOptions?: readonly number[];
   season?: number;
@@ -59,6 +61,20 @@ export const NFL_TEAM_CODES = [
   'LAC', 'LAR', 'LV', 'MIA', 'MIN', 'NE', 'NO', 'NYG',
   'NYJ', 'PHI', 'PIT', 'SEA', 'SF', 'TB', 'TEN', 'WAS',
 ] as const;
+
+export const MODEL_PROVIDER_VALUES = [
+  'google',
+  'anthropic',
+  'openai',
+  'openai-compatible',
+] as const;
+
+const MODEL_PROVIDER_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  anthropic: 'Anthropic',
+  google: 'Google Gemini',
+  openai: 'OpenAI',
+  'openai-compatible': 'OpenAI-compatible endpoint',
+};
 
 const DEFAULT_COMMAND_ORDER = [
   'explore',
@@ -131,12 +147,14 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('export', '/export [NAME] [md|json]', 'Export the conversation under exports/.', 'Conversation', 'Create a transcript file under exports/.', ['save'], ['md', 'json'], undefined, 2),
   command('theme', '/theme default|high-contrast|compact', 'Select the terminal theme.', 'Preferences', 'Change colors and terminal spacing.', undefined, ['default', 'high-contrast', 'compact'], undefined, 1),
   command('icons', '/icons unicode|ascii', 'Select Unicode or ASCII symbols.', 'Preferences', 'Change terminal symbols for this session.', undefined, ['unicode', 'ascii'], undefined, 1),
+  command('provider', '/provider [NAME]', 'Show or switch the active configured model provider.', 'Preferences', 'Switch the provider and start a fresh model context.', undefined, MODEL_PROVIDER_VALUES, undefined, 1),
+  command('model', '/model [MODEL]', 'Show or switch the active model.', 'Preferences', 'Switch the model and start a fresh model context.', undefined, undefined, undefined, 1),
   command('doctor', '/doctor [offline]', 'Check the local setup and connected services.', 'Diagnostics', 'Run local and optional network checks.', undefined, ['offline', '--offline'], undefined, 1),
   command('devtools', '/devtools', 'Show local AI SDK DevTools status.', 'Diagnostics', 'Print local AI SDK trace settings.', undefined, undefined, undefined, 0),
   command(
     'usage',
     '/usage [session|today|7d|30d|all]',
-    'Show concise, locally observed Gemini API usage.',
+    'Show concise, locally observed model API usage.',
     'Diagnostics',
     'Print model calls, token classes, coverage, and local tool activity.',
     ['cost'],
@@ -157,7 +175,7 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   ),
   command('next', '/next', 'Show useful next actions.', 'Essentials', 'Print useful actions for the active context.', ['suggest', 'suggestions'], undefined, undefined, 0),
   command('shell-completion', '/shell-completion bash|fish|zsh', 'Print a shell completion script.', 'Preferences', 'Print a completion script for the selected shell.', ['completion'], ['bash', 'fish', 'zsh'], undefined, 1),
-  command('version', '/version', 'Show the Seb and Gemini model versions.', 'Diagnostics', 'Print the active Seb and model versions.', undefined, undefined, undefined, 0),
+  command('version', '/version', 'Show the Seb version and active model.', 'Diagnostics', 'Print the active Seb, provider, and model.', undefined, undefined, undefined, 0),
   command('exit', '/exit', 'Exit interactive mode.', 'Essentials', 'Close Seb and restore the terminal.', ['quit', 'q'], undefined, undefined, 0),
 ] as const;
 
@@ -195,6 +213,21 @@ export function interactiveCommandArgumentError(
     return null;
   }
   return `Use ${parsed.command?.usage ?? `/${parsed.name}`}.`;
+}
+
+export function interactiveCommandPrivacyError(
+  parsed: ParsedInteractiveCommandInput,
+): string | null {
+  if (
+    (parsed.command?.name === 'model' || parsed.command?.name === 'provider') &&
+    (
+      parsed.arguments.some(isLikelyApiKey) ||
+      /^bearer\s+\S+/iu.test(parsed.argumentText)
+    )
+  ) {
+    return 'Seb does not accept API keys in slash commands. Run `seb configure`.';
+  }
+  return null;
 }
 
 export function searchInteractiveCommands(
@@ -304,6 +337,9 @@ function argumentCompletionDescription(
     return league
       ? `Focus My Fantasy on ${league.name}.`
       : `Focus My Fantasy on league ${value}.`;
+  }
+  if (candidate.name === 'provider') {
+    return `Switch to ${MODEL_PROVIDER_DISPLAY_NAMES[value] ?? value}.`;
   }
   return `Complete ${candidate.usage}.`;
 }
@@ -437,6 +473,8 @@ function activeCommandValue(
     case 'roster': return context.rosterId ? String(context.rosterId) : 'unset';
     case 'team': return context.team ?? 'unset';
     case 'skill': return context.skillId ?? 'general';
+    case 'provider': return context.provider ?? 'unset';
+    case 'model': return context.model ?? 'unset';
     default: return null;
   }
 }
@@ -520,6 +558,12 @@ function argumentSuggestions(
     case 'team':
       if (context.team) values.unshift(context.team);
       break;
+    case 'provider':
+      if (context.provider) values.unshift(context.provider);
+      break;
+    case 'model':
+      if (context.model) values.unshift(context.model);
+      break;
   }
   return [...new Set(values)];
 }
@@ -549,6 +593,23 @@ function normalizeSearch(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
+function isLikelyApiKey(value: string): boolean {
+  const normalized = value.trim();
+  return /^AIza[A-Za-z0-9_-]{20,}$/u.test(normalized) ||
+    /^sk-(?:ant-|proj-)?[A-Za-z0-9_.-]{16,}$/u.test(normalized) ||
+    /^(?:hf_|github_pat_|gh[pousr]_|glpat-|nvapi-|xox[baprs]-)[A-Za-z0-9_.-]{16,}$/u
+      .test(normalized) ||
+    /^ya29\.[A-Za-z0-9_-]{16,}$/u.test(normalized) ||
+    /^eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,})?$/u
+      .test(normalized) ||
+    /^[A-Fa-f0-9]{32,}$/u.test(normalized) ||
+    (
+      normalized.length >= 24 &&
+      /(?:^|[-_.:/+@])(?:api[-_]?key|bearer|credential|password|secret|token)(?:$|[-_.:=/+@])/iu
+        .test(normalized)
+    );
+}
+
 function bashCompletion(): string {
   return `# Seb completion for Bash
 _seb_completion() {
@@ -557,7 +618,11 @@ _seb_completion() {
   current="\${COMP_WORDS[COMP_CWORD]}"
   previous="\${COMP_WORDS[COMP_CWORD-1]}"
   if [[ "\${COMP_CWORD}" -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "chat ask doctor setup cache snapshots replay usage stats completion help version" -- "\${current}") )
+    COMPREPLY=( $(compgen -W "chat ask doctor configure setup cache snapshots replay usage stats completion help version" -- "\${current}") )
+    return
+  fi
+  if [[ "\${previous}" == "--provider" || "\${previous}" == "-p" ]]; then
+    COMPREPLY=( $(compgen -W "google anthropic openai openai-compatible" -- "\${current}") )
     return
   fi
   range=""
@@ -567,8 +632,8 @@ _seb_completion() {
     esac
   done
   case "\${COMP_WORDS[1]}" in
-    chat) COMPREPLY=( $(compgen -W "--model --help" -- "\${current}") ) ;;
-    ask) COMPREPLY=( $(compgen -W "--json --model --no-progress --help" -- "\${current}") ) ;;
+    chat) COMPREPLY=( $(compgen -W "--provider --model --help" -- "\${current}") ) ;;
+    ask) COMPREPLY=( $(compgen -W "--json --provider --model --no-progress --help" -- "\${current}") ) ;;
     doctor) COMPREPLY=( $(compgen -W "--offline --json --help" -- "\${current}") ) ;;
     cache) COMPREPLY=( $(compgen -W "status clear prune --max-size-mb --max-age-days --retain --json --help" -- "\${current}") ) ;;
     snapshots) COMPREPLY=( $(compgen -W "--kind --entity --id --limit --json --help" -- "\${current}") ) ;;
@@ -605,16 +670,18 @@ complete -c seb -f
 complete -c seb -n '__fish_use_subcommand' -a chat -d 'Start an interactive terminal session'
 complete -c seb -n '__fish_use_subcommand' -a ask -d 'Ask one question'
 complete -c seb -n '__fish_use_subcommand' -a doctor -d 'Check the local setup'
+complete -c seb -n '__fish_use_subcommand' -a configure -d 'Configure a model provider privately'
 complete -c seb -n '__fish_use_subcommand' -a setup -d 'Configure a Sleeper profile'
 complete -c seb -n '__fish_use_subcommand' -a cache -d 'Inspect or clear the SQLite cache'
 complete -c seb -n '__fish_use_subcommand' -a snapshots -d 'List source snapshots'
 complete -c seb -n '__fish_use_subcommand' -a replay -d 'Measure historical baseline accuracy'
-complete -c seb -n '__fish_use_subcommand' -a usage -d 'Show local Gemini API usage'
+complete -c seb -n '__fish_use_subcommand' -a usage -d 'Show local model API usage'
 complete -c seb -n '__fish_use_subcommand' -a stats -d 'Show detailed model and tool analytics'
 complete -c seb -n '__fish_use_subcommand' -a completion -d 'Print shell completion'
 complete -c seb -n '__fish_use_subcommand' -a help -d 'Show help'
 complete -c seb -n '__fish_use_subcommand' -a version -d 'Show the version'
-complete -c seb -n '__fish_seen_subcommand_from chat ask' -l model -r -d 'Select a Gemini model'
+complete -c seb -n '__fish_seen_subcommand_from chat ask' -l provider -s p -r -a 'google anthropic openai openai-compatible' -d 'Select a model provider'
+complete -c seb -n '__fish_seen_subcommand_from chat ask' -l model -r -d 'Select a model'
 complete -c seb -n '__fish_seen_subcommand_from ask doctor' -l json -d 'Print JSON'
 complete -c seb -n '__fish_seen_subcommand_from ask' -l no-progress -d 'Hide tool activity'
 complete -c seb -n '__fish_seen_subcommand_from doctor' -l offline -d 'Skip network checks'
@@ -647,11 +714,12 @@ _seb() {
     'chat:Start an interactive terminal session'
     'ask:Ask one question'
     'doctor:Check the local setup'
+    'configure:Configure a model provider privately'
     'setup:Configure a Sleeper profile'
     'cache:Inspect or clear the SQLite cache'
     'snapshots:List source snapshots'
     'replay:Measure historical baseline accuracy'
-    'usage:Show local Gemini API usage'
+    'usage:Show local model API usage'
     'stats:Show detailed model and tool analytics'
     'completion:Print shell completion'
     'help:Show help'
@@ -664,8 +732,8 @@ _seb() {
     command) _describe 'command' commands ;;
     arguments)
       case "$words[2]" in
-        chat) _arguments '--model[Select a Gemini model]:model:' '--help[Show help]' ;;
-        ask) _arguments '--json[Print JSON]' '--model[Select a Gemini model]:model:' '--no-progress[Hide tool activity]' '--help[Show help]' '*:question:' ;;
+        chat) _arguments '--provider[Select a model provider]:provider:(google anthropic openai openai-compatible)' '--model[Select a model]:model:' '--help[Show help]' ;;
+        ask) _arguments '--json[Print JSON]' '--provider[Select a model provider]:provider:(google anthropic openai openai-compatible)' '--model[Select a model]:model:' '--no-progress[Hide tool activity]' '--help[Show help]' '*:question:' ;;
         doctor) _arguments '--offline[Skip network checks]' '--json[Print JSON]' '--help[Show help]' ;;
         cache) _arguments '1:action:(status clear prune)' '--max-size-mb[Set the snapshot size limit]:megabytes:' '--max-age-days[Delete older snapshots]:days:' '--retain[Retain snapshots per source key]:count:' '--json[Print JSON]' '--help[Show help]' ;;
         snapshots) _arguments '--kind[Filter snapshot kind]:kind:' '--entity[Filter entity key]:key:' '--id[Inspect snapshot provenance]:id:' '--limit[Limit results]:number:' '--json[Print JSON]' '--help[Show help]' ;;

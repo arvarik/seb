@@ -6,6 +6,42 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-01
+
+### Added
+
+- Seb now supports Google Gemini, Anthropic, OpenAI, and OpenAI-compatible model providers.
+- `seb configure` now collects or reuses provider access, a primary model, and a fallback model through a masked terminal flow.
+- `seb chat` and `seb ask` now accept `--provider` and `--model` overrides.
+- `/provider` and `/model` now show or switch the active model configuration during an interactive session.
+- Private credential and non-secret model settings stores now use validated, bounded, atomic local files.
+
+### Changed
+
+- Every model provider can use the 44 built-in first-class news sources.
+- Google Search and URL Context remain available only with the Google provider.
+- The doctor now checks the selected provider with a forced local tool loop. The Google check also requires one grounded Search source.
+- Connector services now select providers, models, and fallback models from environment variables.
+- Provider-only overrides keep the configured fallback. Explicit CLI and slash model overrides use one model without a separate fallback.
+- Usage reports and safe error messages now identify the active provider without storing model content or raw errors.
+
+### Security
+
+- Model settings store no API keys. Private keys use a separate file with mode `0600` on Unix systems.
+- Seb binds each saved OpenAI-compatible key to one canonical endpoint. A changed endpoint never receives the old key.
+- Configuration saves use bounded file reads, atomic replacement, and a short local commit lock.
+- Model configuration prompts mask keys and never add them to chat or prompt history.
+- Interactive model and provider commands redact their arguments from the visible transcript and prompt history.
+- Remote OpenAI-compatible endpoints require HTTPS and explicit approval during interactive configuration.
+- OpenAI-compatible URLs reject embedded credentials, query strings, fragments, and individual completion endpoint paths.
+- OpenAI-compatible model and discovery requests reject redirects to another origin.
+- Current-directory `.env` files cannot select a provider, custom endpoint, private storage path, or DevTools recording.
+
+### Testing
+
+- Mock tests cover provider selection, provider construction, model switching, configuration prompts, storage, connector routing, and provider-neutral errors.
+- Live Anthropic, OpenAI, and OpenAI-compatible credentials are not required by the unit test suite.
+
 ## [0.1.2] - 2026-09-01
 
 ### Added

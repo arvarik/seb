@@ -1,9 +1,12 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { loadEnvFile } from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import { configureAiDevTools } from '../ai/devtools.js';
+import {
+  formatIgnoredLocalEnvironment,
+  loadSafeLocalEnvironment,
+} from '../local-environment.js';
 import {
   createConnectorRuntime,
   isConnectorName,
@@ -99,7 +102,10 @@ export function createConnectorApp(
 }
 
 async function main(): Promise<void> {
-  loadLocalEnvironment();
+  const localEnvironmentWarning = formatIgnoredLocalEnvironment(
+    loadSafeLocalEnvironment(),
+  );
+  if (localEnvironmentWarning) process.stderr.write(localEnvironmentWarning);
   if (await configureAiDevTools()) {
     process.stderr.write(
       'Seb AI SDK DevTools is active. Local prompts and tool data are recorded in .devtools/.\n',
@@ -257,16 +263,6 @@ async function withTimeout<T>(
     ]);
   } finally {
     if (timeout) clearTimeout(timeout);
-  }
-}
-
-function loadLocalEnvironment(): void {
-  try {
-    loadEnvFile();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error;
-    }
   }
 }
 

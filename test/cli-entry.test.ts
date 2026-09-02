@@ -24,7 +24,7 @@ describe('Seb executable', () => {
     const result = runSeb('--version');
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe('seb 0.1.2\n');
+    expect(result.stdout).toBe('seb 0.2.0\n');
   });
 
   it('returns the usage exit code for an empty one-shot request', () => {
@@ -32,6 +32,16 @@ describe('Seb executable', () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('Add a question');
+  });
+
+  it('requires a terminal for the masked configuration flow', () => {
+    const result = runSeb('configure');
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(
+      'Model configuration needs a terminal because Seb masks private keys.',
+    );
+    expect(result.stderr).not.toContain('API_KEY=');
   });
 
   it('prints a shell completion script without credentials', () => {

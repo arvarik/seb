@@ -30,27 +30,56 @@ You can skip `npm link`. Use `npm run seb` and `npm run ask` instead.
 | --- | --- |
 | `seb` or `seb chat` | Start interactive chat. |
 | `seb ask` | Ask one question or read standard input. |
-| `seb setup [USERNAME]` | Validate Gemini and save one optional Sleeper username. |
+| `seb configure` | Configure and verify one model provider through private prompts. |
+| `seb setup [USERNAME]` | Save one optional Sleeper username. |
 | `seb doctor` | Verify local configuration and source access. |
 | `seb cache` | Inspect or clear the SQLite source cache. |
 | `seb snapshots` | List snapshots or inspect snapshot provenance. |
 | `seb replay` | Measure the nflverse PPR baseline. |
-| `seb usage` | Show concise local Gemini API usage. |
+| `seb usage` | Show concise local model API usage. |
 | `seb stats` | Show detailed local model and tool analytics. |
 | `seb completion` | Print a shell completion script. |
 | `seb version` | Print the installed Seb version. |
 
 Run `seb COMMAND --help` to return the general command help.
 
-## First-run preferences
+## Configure a model provider
 
-Validate Gemini without connecting Sleeper.
+Run the private configuration flow from a terminal.
+
+```bash
+seb configure
+```
+
+Seb lists Google Gemini, Anthropic, OpenAI, and OpenAI-compatible providers.
+
+It masks each typed key and does not add the key to prompt history.
+
+Google, Anthropic, and OpenAI require a key. An OpenAI-compatible key is optional.
+
+The compatible flow asks for a base URL and reads `GET /models` without following redirects.
+
+It sends the optional compatible key to that endpoint for model discovery.
+
+The flow asks for approval before it sends data to a remote compatible origin.
+
+It lists up to 25 discovered models. A failed discovery permits manual model entry.
+
+Seb tests the selected provider for 30 seconds. It saves the configuration only after a successful test.
+
+The default paths are `~/.config/seb/credentials.json` and `~/.config/seb/model-settings.json`.
+
+The credential file stores keys. The model settings file stores no keys.
+
+Both files use mode `0600` on Unix systems. Read the [setup guide](SETUP.md#local-configuration-paths-and-security) for path overrides.
+
+## Account preferences
+
+Create an account profile without connecting Sleeper.
 
 ```bash
 seb setup
 ```
-
-Setup validates Gemini with one small request.
 
 Add a Sleeper username when you want automatic fantasy context.
 
@@ -58,11 +87,11 @@ Add a Sleeper username when you want automatic fantasy context.
 seb setup your-sleeper-name
 ```
 
-Seb stores only the optional username and update time.
+The account profile stores only the optional username and update time.
 
-It never stores a league, roster, NFL team, season, week, or API key.
+It never stores a league, roster, NFL team, season, week, or provider key.
 
-Starting interactive chat without preferences validates Gemini and creates an empty file.
+Starting interactive chat without account preferences creates an empty file.
 
 Read the [setup guide](SETUP.md) for profile paths and security rules.
 
@@ -138,7 +167,7 @@ The interface animates only active work. It keeps each completed tool on one com
 
 Seb hides model reasoning by default. It shows a compact reasoning card when the provider returns reasoning.
 
-Run `/help` inside the interface. Local commands do not call Gemini.
+Run `/help` inside the interface. Most local commands do not call a model provider.
 
 Run `/connect USERNAME` once to save a Sleeper account.
 
@@ -456,12 +485,16 @@ seb doctor
 The doctor performs these checks.
 
 1. It verifies Node.js 22 or newer.
-2. It verifies that the Gemini key exists.
+2. It verifies the selected provider key or compatible endpoint.
 3. It opens SQLite and reports the schema and record counts.
 4. It reads the current Sleeper NFL state.
 5. It loads the nflverse schedule.
 6. It loads one NWS hourly forecast.
-7. It sends one small Gemini test request.
+7. It forces the selected provider through one local tool loop.
+
+The Google check also requires one valid grounded Google Search URL.
+
+The report names these checks `Model provider key` and `Model provider API`.
 
 Use the offline option when the computer has no network access.
 
@@ -475,7 +508,7 @@ Use JSON for an installation script.
 seb doctor --json
 ```
 
-The doctor never prints the Gemini key.
+The doctor never prints a provider key.
 
 ## Inspect the local cache
 
@@ -577,12 +610,14 @@ Read the [evaluation guide](EVALUATION.md) before you compare two reports.
 
 ## Select a model
 
-Set the default models in `.env`.
+Select a configured provider for one command.
 
-```dotenv
-GEMINI_MODEL=gemini-3.7-flash
-GEMINI_FALLBACK_MODEL=gemini-3.6-flash
+```bash
+seb ask --provider anthropic "Show the current NFL state."
+seb chat -p openai
 ```
+
+The provider must equal `google`, `anthropic`, `openai`, or `openai-compatible`.
 
 Override the model for one command.
 
@@ -591,13 +626,64 @@ seb ask --model gemini-3.7-flash "Show the current NFL state."
 seb chat --model gemini-3.7-flash
 ```
 
-An explicit model disables the fallback for that command. This behavior makes experiments repeatable.
+`-p` is the short form of `--provider`. `-m` is the short form of `--model`.
+
+An explicit CLI model uses that model as its own fallback. This rule makes one-run experiments repeatable.
+
+An explicit `--provider` without `--model` keeps that provider's configured fallback.
+
+Seb resolves the provider in this order.
+
+1. An explicit `--provider` value.
+2. The provider from a qualified `--model` value.
+3. `SEB_MODEL_PROVIDER` or the older `SEB_PROVIDER` alias.
+4. The provider from a qualified `SEB_MODEL` value.
+5. The active provider in `model-settings.json`.
+6. The first configured provider in this order: Google, Anthropic, OpenAI, then OpenAI-compatible.
+
+A qualified model uses `provider:model`.
+
+Seb resolves the primary model in this order.
+
+1. An explicit `--model` value.
+2. `SEB_MODEL`.
+3. The active provider-specific model variable.
+4. Saved model settings.
+5. The hosted provider default.
+
+Seb resolves the fallback in this order.
+
+1. The explicit `--model` value, when present.
+2. `SEB_FALLBACK_MODEL`.
+3. The active provider-specific fallback variable.
+4. Saved model settings.
+5. The hosted provider default or primary model.
+
+Environment keys take priority over saved keys.
+
+Google uses `GEMINI_MODEL` and `GEMINI_FALLBACK_MODEL`.
+
+Anthropic and OpenAI use the matching `ANTHROPIC_*` and `OPENAI_*` model variables.
+
+OpenAI-compatible endpoints use `OPENAI_COMPATIBLE_MODEL` and `OPENAI_COMPATIBLE_FALLBACK_MODEL`.
+
+An OpenAI-compatible endpoint has no default model.
+
+`SEB_MODEL` does not disable fallback when `SEB_FALLBACK_MODEL` is empty.
+
+Seb then uses the provider-specific, saved, or default fallback.
 
 One-shot mode retries a capacity or rate-limit failure before it prints answer text.
 
 JSON mode can also use this fallback before it prints the output object.
 
-Interactive mode uses the selected primary model for the session. Restart with `--model` when that model has no capacity or quota.
+Seb does not use the fallback after another error category.
+
+Run `/provider` or `/model` to inspect the active interactive model.
+
+Run `/provider NAME` or `/model MODEL` to switch it. A successful switch starts a fresh model context and keeps the visible transcript.
+
+`/provider` keeps the configured fallback. `/model` uses the selected model as its own fallback.
 
 ## Output and exit guarantees
 

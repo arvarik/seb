@@ -26,7 +26,6 @@ import {
   refreshAutomaticSession,
   resolveCurrentNflWeek,
   runFirstRunSetup,
-  SetupWizardError,
   type SleeperSetupDiscovery,
 } from '../src/setup/wizard.js';
 import { createSessionState } from '../src/interactive/session.js';
@@ -50,6 +49,18 @@ describe('Gemini API key setup check', () => {
 
     expect(result.present).toBe(true);
     expect(JSON.stringify(result)).not.toContain('top-secret-key');
+  });
+
+  it('accepts GEMINI_API_KEY without returning the secret', () => {
+    const result = checkGeminiApiKey({
+      GEMINI_API_KEY: 'alias-secret-key',
+    });
+
+    expect(result).toMatchObject({
+      present: true,
+      variable: 'GEMINI_API_KEY',
+    });
+    expect(JSON.stringify(result)).not.toContain('alias-secret-key');
   });
 });
 
@@ -103,13 +114,14 @@ describe('first-run setup wizard', () => {
     })).rejects.toThrow('Use 1 through 100 letters');
   });
 
-  it('stops before Sleeper discovery when the Gemini key is absent', async () => {
-    await expect(
-      runFirstRunSetup({
-        environment: {},
-        store: new MemoryProfileStore(),
-      }),
-    ).rejects.toThrow(SetupWizardError);
+  it('saves the Sleeper preference without requiring a model key', async () => {
+    const store = new MemoryProfileStore();
+
+    await expect(runFirstRunSetup({
+      environment: {},
+      store,
+    })).resolves.toMatchObject({ sleeper: null });
+    expect(store.saved).not.toBeNull();
   });
 
   it('validates the Gemini key before it saves the profile', async () => {
@@ -127,6 +139,18 @@ describe('first-run setup wizard', () => {
     ).rejects.toThrow('Gemini key validation failed');
     expect(verifyApiKey).toHaveBeenCalledWith('bad-key');
     expect(store.saved).toBeNull();
+  });
+
+  it('uses GEMINI_API_KEY for legacy key verification', async () => {
+    const verifyApiKey = vi.fn(async () => undefined);
+
+    await runFirstRunSetup({
+      environment: { GEMINI_API_KEY: 'alias-key' },
+      store: new MemoryProfileStore(),
+      verifyApiKey,
+    });
+
+    expect(verifyApiKey).toHaveBeenCalledWith('alias-key');
   });
 
   it('includes co-owned rosters and excludes unrelated rosters', async () => {

@@ -30,7 +30,7 @@ Seb then responds to later messages in the same thread.
 
 The connector reads up to 20 recent messages for conversation context.
 
-The connector streams each Gemini answer through the platform adapter.
+The connector streams each model answer through the platform adapter.
 
 It buffers a direct fantasy action until the deterministic evidence gate finishes.
 
@@ -46,9 +46,50 @@ Service shutdown cancels every active model reply.
 
 Every connector can use the Sleeper, nflverse, and NWS tools.
 
+Every provider can use the 44 built-in first-class news sources.
+
+Google Search and URL Context are available only when Google is active.
+
 Terminal slash commands apply only to the interactive command-line interface.
 
 Set `NWS_USER_AGENT` for connector weather requests.
+
+## Model provider environment
+
+The connector service reads model configuration only from its process environment.
+
+It does not read `credentials.json` or `model-settings.json` from `seb configure`.
+
+Select one provider with `SEB_MODEL_PROVIDER`.
+
+| Provider | Required environment |
+| --- | --- |
+| `google` | `GOOGLE_GENERATIVE_AI_API_KEY` or `GEMINI_API_KEY` |
+| `anthropic` | `ANTHROPIC_API_KEY` |
+| `openai` | `OPENAI_API_KEY` |
+| `openai-compatible` | `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_MODEL`, and an optional `OPENAI_COMPATIBLE_API_KEY` |
+
+Use `SEB_MODEL` and `SEB_FALLBACK_MODEL` for provider-neutral model values.
+
+`SEB_MODEL` keeps the configured fallback when `SEB_FALLBACK_MODEL` is empty.
+
+You can instead use the provider-specific primary and fallback model variables from [the setup guide](SETUP.md#environment-reference).
+
+Seb uses the fallback only after a capacity or rate-limit error.
+
+Use the same primary and fallback model to disable the fallback.
+
+The connector never uses a fallback from another provider.
+
+Use an HTTP loopback base URL for a local compatible service. Use HTTPS for a remote compatible service.
+
+The service cannot ask for remote endpoint approval. Approve and test that endpoint before deployment.
+
+Set compatible endpoint values in the service environment.
+
+The automatic current-directory `.env` loader ignores custom endpoint selection.
+
+The connector reports provider-safe error categories. It does not include raw provider errors in user messages.
 
 ## Start the service
 

@@ -105,7 +105,7 @@ Answer these questions before you add a platform.
 
 1. Does the platform provide signed webhooks or another verified event channel?
 2. Can the bot read mentions and direct messages?
-3. Can the bot fetch enough thread history for Gemini context?
+3. Can the bot fetch enough thread history for model context?
 4. Does the platform permit streamed edits or only final messages?
 5. Which rate limits apply to posts, edits, and history reads?
 6. Which data retention rules apply to message content?

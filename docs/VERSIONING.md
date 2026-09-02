@@ -2,7 +2,7 @@
 
 Seb uses [Semantic Versioning](https://semver.org/) with the `MAJOR.MINOR.PATCH` format.
 
-The current version is `0.1.2`.
+The current version is `0.2.0`.
 
 ## Version meaning
 
@@ -38,12 +38,14 @@ seb --version
 
 ## Release names
 
-Git tags use a lowercase `v` prefix. Version `0.1.2` uses the `v0.1.2` tag.
+Git tags use a lowercase `v` prefix. Version `0.2.0` uses the `v0.2.0` tag.
+
+The GitHub release title must exactly match the tag. This release uses the title `v0.2.0`.
 
 Release commit subjects use this format.
 
 ```text
-chore(release): v0.1.2
+chore(release): v0.2.0
 ```
 
 ## Prepare a release
@@ -54,7 +56,7 @@ Complete these steps from a clean branch.
 2. Update the package files without creating a tag.
 
    ```bash
-   npm version 0.1.2 --no-git-tag-version
+   npm version 0.2.0 --no-git-tag-version
    ```
 
 3. Run all checks.
@@ -68,8 +70,9 @@ Complete these steps from a clean branch.
 
 4. Commit the release with the documented subject format.
 5. Put the release commit on `main` through the selected repository workflow.
-6. Create the matching Git tag from the final release commit.
+6. Create the annotated Git tag from the final release commit on `main`.
 7. Push the tag after the release commit exists on GitHub.
+8. Create the GitHub release with the exact tag text as its title.
 
 Do not reuse or move a published version tag.
 

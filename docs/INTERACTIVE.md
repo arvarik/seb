@@ -420,6 +420,9 @@ Read the [terminal interface guide](TERMINAL_UI.md) for every key and path.
 
 Tool activity uses one compact row per call. Consecutive successful calls to the same tool share a count and total duration. Failures retain their error text.
 
+Evidence uses one blue line: `Evidence: 7 sources · /sources`. Run `/sources` for full details.
+The color follows `NO_COLOR` and terminal settings. Copy commands and exports retain the evidence text.
+
 ## Retry, edit, and copy
 
 Run `/retry` to submit the latest non-command prompt again.
@@ -761,3 +764,9 @@ Sleeper player records are not an official NFL roster source.
 ```text
 /fantasy Rank the top trending adds by recent opportunity and schedule.
 ```
+
+## Model families
+
+Enter a family such as `gemini-flash` in `seb configure`, or run `/model gemini-flash` for the current session.
+Seb resolves the newest stable version when it starts or switches models. It shows the resolved model ID in the header.
+Exact IDs stay pinned. See [model selection](MODELS.md) for all families and defaults.

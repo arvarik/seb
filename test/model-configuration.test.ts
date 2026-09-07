@@ -32,8 +32,8 @@ describe('resolveLoadedModelProvider', () => {
 
     expect(selection).toEqual({
       apiKey: 'google-key',
-      fallbackModel: 'gemini-3.6-flash',
-      model: 'gemini-3.7-flash',
+      fallbackModel: 'gemini-flash-lite',
+      model: 'gemini-flash',
       provider: 'google',
     });
   });

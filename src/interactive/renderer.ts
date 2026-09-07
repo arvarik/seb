@@ -105,7 +105,7 @@ export interface SebRendererOptions {
   version: string;
 }
 
-type SectionKind = 'assistant' | 'error' | 'reasoning' | 'tool' | 'user';
+type SectionKind = 'assistant' | 'error' | 'evidence' | 'reasoning' | 'tool' | 'user';
 
 interface Section {
   content: string;
@@ -114,6 +114,7 @@ interface Section {
   title: string;
   completedTool?: string;
   durationMs?: number;
+  evidenceCount?: number;
 }
 
 interface BodyRow {
@@ -852,18 +853,15 @@ export class SebTerminalRenderer {
     for (const [index, part] of message.parts.entries()) {
       const id = `${message.id}:${index}`;
       if (part.type === 'text' && part.text.trim()) {
-        const continuationIndex = /^(?:##\s+Evidence\b|Web sources:)/u.test(part.text.trimStart())
-          ? previousTextPartIndex(message.parts, index)
-          : undefined;
-        if (continuationIndex !== undefined) {
-          const continuationId = `${message.id}:${continuationIndex}`;
-          const previousPart = message.parts[continuationIndex];
-          active.add(continuationId);
+        if (/^(?:##\s+Evidence\s*\n|Web sources:)/u.test(part.text.trimStart())) {
+          active.add(id);
+          const snapshot = this.options.uiState.evidenceForAnswer(message.id);
           this.upsert({
-            content: `${previousPart?.type === 'text' ? previousPart.text : ''}${part.text}`,
-            id: continuationId,
-            kind: 'assistant',
-            title: 'Seb',
+            content: part.text,
+            id,
+            kind: 'evidence',
+            title: 'Evidence',
+            ...(snapshot ? { evidenceCount: snapshot.sources.length } : {}),
           });
         } else {
           active.add(id);
@@ -1553,6 +1551,18 @@ export class SebTerminalRenderer {
     const rows: BodyRow[] = [];
     for (let index = 0; index < this.sections.length; index += 1) {
       const section = this.sections[index]!;
+      if (section.kind === 'evidence') {
+        const count = section.evidenceCount;
+        const summary = count === undefined ? 'Evidence · /sources for details'
+          : `Evidence: ${count} source${count === 1 ? '' : 's'} · /sources`;
+        rows.push({
+          sectionId: section.id,
+          sectionRowCount: 1,
+          sectionRowIndex: 0,
+          text: paint(this.theme, 'source', fit(`  ${summary}`, width)),
+        });
+        continue;
+      }
       if ((section.kind === 'tool' || section.kind === 'error') &&
         (section.title === 'Tool' || section.title === 'Working')) {
         let count = 1;
@@ -1935,17 +1945,6 @@ function toReadableStream<T>(source: AsyncIterable<T> | ReadableStream<T>): Read
       await iterator.return?.(reason);
     },
   });
-}
-
-function previousTextPartIndex(parts: UIMessage['parts'], index: number): number | undefined {
-  for (let candidateIndex = index - 1; candidateIndex >= 0; candidateIndex -= 1) {
-    const candidate = parts[candidateIndex];
-    if (candidate?.type === 'source-url' || candidate?.type === 'source-document' || candidate?.type === 'step-start') {
-      continue;
-    }
-    return candidate?.type === 'text' ? candidateIndex : undefined;
-  }
-  return undefined;
 }
 
 function clampScreenPoint(point: ScreenPoint, lines: readonly string[]): ScreenPoint {

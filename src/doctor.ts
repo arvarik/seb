@@ -1,3 +1,4 @@
+import { resolveModelFamilies } from './ai/model-families.js';
 import { LearningStore } from './learning/store.js';
 import { createGoogle } from '@ai-sdk/google';
 import {
@@ -622,6 +623,7 @@ export async function verifyModelProviderApi(
     surface: 'cli',
   },
 ): Promise<ModelProviderVerificationResult> {
+  modelProvider = await resolveModelFamilies(modelProvider, { signal });
   const telemetry = createVerificationTelemetry(telemetryOptions);
   try {
     await sendModelProviderTest(

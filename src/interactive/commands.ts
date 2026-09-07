@@ -1,3 +1,4 @@
+import { MODEL_FAMILIES, type ModelProviderId } from '../ai/model-provider.js';
 import { findSkill, SEB_SKILLS } from './skills.js';
 
 export type CompletionShell = 'bash' | 'fish' | 'zsh';
@@ -148,7 +149,7 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('theme', '/theme default|high-contrast|compact', 'Select the terminal theme.', 'Preferences', 'Change colors and terminal spacing.', undefined, ['default', 'high-contrast', 'compact'], undefined, 1),
   command('icons', '/icons unicode|ascii', 'Select Unicode or ASCII symbols.', 'Preferences', 'Change terminal symbols for this session.', undefined, ['unicode', 'ascii'], undefined, 1),
   command('provider', '/provider [NAME]', 'Show or switch the active configured model provider.', 'Preferences', 'Switch the provider and start a fresh model context.', undefined, MODEL_PROVIDER_VALUES, undefined, 1),
-  command('model', '/model [MODEL]', 'Show or switch the active model.', 'Preferences', 'Switch the model and start a fresh model context.', undefined, undefined, undefined, 1),
+  command('model', '/model [MODEL]', 'Show or switch the active model family or exact ID.', 'Preferences', 'Resolve and verify a model, then start a fresh model context.', undefined, undefined, undefined, 1),
   command('doctor', '/doctor [offline]', 'Check the local setup and connected services.', 'Diagnostics', 'Run local and optional network checks.', undefined, ['offline', '--offline'], undefined, 1),
   command('devtools', '/devtools', 'Show local AI SDK DevTools status.', 'Diagnostics', 'Print local AI SDK trace settings.', undefined, undefined, undefined, 0),
   command(
@@ -566,6 +567,7 @@ function argumentSuggestions(
       if (context.provider) values.unshift(context.provider);
       break;
     case 'model':
+      values.push(...(MODEL_FAMILIES[context.provider as ModelProviderId] ?? []));
       if (context.model) values.unshift(context.model);
       break;
   }

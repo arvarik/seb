@@ -40,20 +40,20 @@ describe('model provider configuration', () => {
     })).toMatchObject({ provider: 'openai', model: 'new-model', fallbackModel: 'new-model' });
   });
 
-  it('keeps the existing Gemini defaults and environment names', () => {
+  it('uses Gemini families by default and keeps environment names', () => {
     const selection = resolveModelProvider({
       environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'google-key' },
     });
 
     expect(selection).toEqual({
       apiKey: 'google-key',
-      fallbackModel: 'gemini-3.6-flash',
-      model: 'gemini-3.7-flash',
+      fallbackModel: 'gemini-flash-lite',
+      model: 'gemini-flash',
       provider: 'google',
     });
     expect(DEFAULT_PROVIDER_MODELS.google).toEqual({
-      fallbackModel: 'gemini-3.6-flash',
-      model: 'gemini-3.7-flash',
+      fallbackModel: 'gemini-flash-lite',
+      model: 'gemini-flash',
     });
   });
 
@@ -202,7 +202,7 @@ describe('model provider configuration', () => {
         OPENAI_COMPATIBLE_BASE_URL: 'https://models.example.com/v1?',
       },
     })).toMatchObject({
-      model: 'gemini-3.7-flash',
+      model: 'gemini-flash',
       provider: 'google',
     });
   });
@@ -302,7 +302,7 @@ describe('model provider validation', () => {
   });
 
   it('accepts model IDs used by hosted and local providers', () => {
-    expect(validateModelId('gemini-3.7-flash')).toBe('gemini-3.7-flash');
+    expect(validateModelId('gemini-flash')).toBe('gemini-flash');
     expect(validateModelId('meta-llama/Llama-3.3-70B-Instruct')).toBe(
       'meta-llama/Llama-3.3-70B-Instruct',
     );

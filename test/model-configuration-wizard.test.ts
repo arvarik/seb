@@ -112,6 +112,40 @@ class QueuePrompt implements SetupPrompt {
 }
 
 describe('runModelConfigurationWizard', () => {
+  it('verifies exact resolved models but saves family names', async () => {
+    const credentials = new MemoryCredentialStore();
+    const settings = new MemorySettingsStore();
+    const output: string[] = [];
+    const verify = vi.fn(async (selection) => ({ fallbackUsed: false, model: selection.model }));
+    const result = await runModelConfigurationWizard({
+      credentialStore: credentials, settingsStore: settings, environment: {},
+      prompt: new QueuePrompt(['google'], ['test-key', 'gemini-flash', 'gemini-flash-lite']),
+      fetch: vi.fn(async () => Response.json({ models: [
+        { name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] },
+      ] })),
+      verify, write: (text) => output.push(text),
+    });
+    expect(verify.mock.calls[0]?.[0]).toMatchObject({ model: 'gemini-3.8-flash', fallbackModel: 'gemini-3.5-flash-lite' });
+    expect(result.selection.model).toBe('gemini-3.8-flash');
+    expect(settings.saved?.providers.google).toEqual({ model: 'gemini-flash', fallbackModel: 'gemini-flash-lite' });
+    expect(output.join('')).toContain('gemini-flash → gemini-3.8-flash');
+  });
+
+  it('does not save credentials or settings when family discovery fails', async () => {
+    const credentials = new MemoryCredentialStore();
+    const settings = new MemorySettingsStore();
+    const verify = vi.fn();
+    await expect(runModelConfigurationWizard({
+      credentialStore: credentials, settingsStore: settings, environment: {},
+      prompt: new QueuePrompt(['google'], ['test-key', 'gemini-flash', 'gemini-flash']),
+      fetch: vi.fn(async () => Response.json({ error: 'test-key' }, { status: 503 })), verify,
+    })).rejects.toThrow('could not read');
+    expect(verify).not.toHaveBeenCalled();
+    expect(credentials.saved).toBeNull();
+    expect(settings.saved).toBeNull();
+  });
+
   it('tests and saves an OpenAI key separately from model settings', async () => {
     const credentials = new MemoryCredentialStore();
     const settings = new MemorySettingsStore();

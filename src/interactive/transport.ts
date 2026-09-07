@@ -1,3 +1,4 @@
+import { MODEL_FAMILIES, type ModelProviderId } from '../ai/model-provider.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -945,7 +946,10 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       `- Model: \`${active.model}\``,
       '',
       'Run `/provider NAME` to use another configured provider.',
-      'Run `/model MODEL` to use another model from the active provider.',
+      'Run `/model MODEL` with a family or exact ID from the active provider.',
+      ...(MODEL_FAMILIES[active.provider as ModelProviderId]?.length
+        ? [`Families: ${MODEL_FAMILIES[active.provider as ModelProviderId]!.join(', ')}`]
+        : []),
       'Run `seb configure` to add an endpoint or private API key.',
       'Seb never accepts API keys in slash commands.',
     ].join('\n');

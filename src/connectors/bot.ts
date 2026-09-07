@@ -1,3 +1,4 @@
+import { resolveModelFamilies } from '../ai/model-families.js';
 import { createDiscordAdapter } from '@chat-adapter/discord';
 import { createSlackAdapter } from '@chat-adapter/slack';
 import { createMemoryState } from '@chat-adapter/state-memory';
@@ -249,10 +250,8 @@ function connectorModelErrorContext(
 }
 
 function createAgentReply(environment: Environment): ConnectorReply {
-  const selection = resolveConnectorModelProvider(environment);
-  const primaryModel = selection.model;
-  const fallbackModel = selection.fallbackModel;
-  const modelErrorContext = connectorModelErrorContext(selection);
+  const configured = resolveConnectorModelProvider(environment);
+  const modelErrorContext = connectorModelErrorContext(configured);
   const sourceContext = new AsyncLocalStorage<SourceTracker>();
   const onSource: SourceObserver = (source) => sourceContext.getStore()?.record(source);
   const sleeperClient = new SleeperClient({ onSource });
@@ -269,6 +268,9 @@ function createAgentReply(environment: Environment): ConnectorReply {
 
   return async (thread, message, context, requestSignal) => {
     requestSignal.throwIfAborted();
+    const selection = await resolveModelFamilies(configured, { signal: requestSignal });
+    const primaryModel = selection.model;
+    const fallbackModel = selection.fallbackModel;
     const usageSessionId = randomUUID();
     const primaryUsageTelemetry = new SebUsageTelemetry({
       agentKind: 'research',

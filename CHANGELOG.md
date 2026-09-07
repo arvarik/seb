@@ -39,6 +39,18 @@ The project follows [Semantic Versioning](https://semver.org/).
 - An explicit compatible endpoint selects the compatible provider. Conflicting provider and endpoint overrides produce a configuration error.
 - Cancellation and timeout errors cannot trigger a capacity fallback. Connector fallback also respects the shared request deadline.
 
+## [0.2.3] - 2026-09-07
+
+### Added
+
+- Model families select the newest stable version from the provider catalog. Setup saves the family, while each run uses a resolved model ID.
+- Google, Anthropic, and OpenAI primary and fallback defaults use model families. Exact IDs remain pinned.
+- Model discovery reads complete catalogs with pagination, a timeout, size limits, and redirect rejection. Offline Doctor skips discovery.
+
+### Changed
+
+- Evidence uses one blue summary line with a `/sources` hint. The source command shows full details. Copy commands and exports retain the evidence text.
+
 ## [0.2.2] - 2026-09-07
 
 ### Fixed

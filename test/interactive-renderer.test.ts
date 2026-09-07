@@ -669,6 +669,136 @@ describe('SebTerminalRenderer prompt input', () => {
     await expect(prompt).resolves.toBe('new request');
   });
 
+  it('copies every turn without screen wrapping and exposes native scrollback', async () => {
+    const terminal = createTerminal();
+    const copied: string[] = [];
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), new InteractiveUiState(),
+      (text) => copied.push(text));
+    const first = renderer.readPrompt();
+    terminal.input.type('Check my bye weeks\r');
+    await first;
+    const answer = Array.from({ length: 90 }, (_, index) => `Transcript row ${index}`).join('\n');
+    await renderText(renderer, answer);
+    const prompt = renderer.readPrompt();
+    terminal.input.type('/copy all\r');
+    expect(copied).toEqual([`You\nCheck my bye weeks\n\nSeb\n${answer}`]);
+    const start = terminal.output.chunks.length;
+    terminal.input.type('/select\r');
+    const native = terminal.output.chunks.slice(start).join('');
+    expect(native).toContain('\x1b[?1049l');
+    expect(native).toContain('Check my bye weeks');
+    expect(native).toContain(answer.replace(/\n/g, '\r\n'));
+    const count = terminal.output.chunks.length;
+    terminal.output.columns = 70;
+    terminal.output.emit('resize');
+    expect(terminal.output.chunks).toHaveLength(count);
+    terminal.input.type('\r');
+    expect(terminal.output.chunks.slice(count).join('')).toContain('\x1b[?1049h');
+    terminal.input.type('Next question\r');
+    await expect(prompt).resolves.toBe('Next question');
+    renderer.close();
+  });
+
+  it.each(['down', 'up'])('extends a drag %s across multiple screens', async (direction) => {
+    const terminal = createTerminal();
+    const copied: string[] = [];
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), new InteractiveUiState(),
+      (text) => copied.push(text));
+    await renderText(renderer, Array.from({ length: 70 }, (_, index) => `Selection row ${index}`).join('\n'));
+    const prompt = renderer.readPrompt();
+    const frame = () => stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    if (direction === 'up') {
+      for (let index = 0; index < 8; index += 1) terminal.input.type('\x1b[6~');
+      await expect.poll(frame).toContain('Selection row 69');
+    }
+    const lines = frame().split('\r\n');
+    const matches = lines.flatMap((line, index) => line.includes('Selection row') ? [index] : []);
+    const anchor = direction === 'down' ? matches[0]! : matches.at(-1)!;
+    const label = lines[anchor]!.trim();
+    const edge = direction === 'down' ? terminal.output.rows : 1;
+    const anchorColumn = direction === 'down' ? 3 : lines[anchor]!.length;
+    const edgeColumn = direction === 'down' ? 100 : 1;
+    terminal.input.type(`\x1b[<0;${anchorColumn};${anchor + 1}M`);
+    terminal.input.type(`\x1b[<32;${edgeColumn};${edge}M`);
+    const expected = direction === 'down' ? 'Selection row 45' : 'Selection row 20';
+    await expect.poll(frame, { timeout: 3000 }).toContain(expected);
+    terminal.input.type(`\x1b[<0;${edgeColumn};${edge}m`);
+    expect(copied).toHaveLength(1);
+    expect(copied[0]).toContain(label);
+    expect(copied[0]).toContain(expected);
+    expect(copied[0]).not.toContain('MODEL');
+    expect(copied[0]).not.toContain('Ready');
+    expect(copied[0]!.split('\n').length).toBeGreaterThan(25);
+    terminal.input.type('Next\r');
+    await prompt;
+    renderer.close();
+  });
+
+  it('keeps a wheel selection stable during streaming and clears it on resize', async () => {
+    const terminal = createTerminal();
+    const copied: string[] = [];
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), new InteractiveUiState(),
+      (text) => copied.push(text));
+    let controller!: ReadableStreamDefaultController<UIMessageChunk>;
+    const rendered = renderer.renderStream({ uiMessageStream: new ReadableStream({
+      start(value) { controller = value; },
+    }) });
+    controller.enqueue({ type: 'text-start', id: 'streaming' });
+    controller.enqueue({ type: 'text-delta', id: 'streaming', delta:
+      Array.from({ length: 80 }, (_, index) => `Stable row ${index}`).join('\n') });
+    const frame = () => stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    await expect.poll(frame).toContain('Stable row 79');
+    const lines = frame().split('\r\n');
+    const anchor = lines.findIndex((line) => line.includes('Stable row 70'));
+    expect(anchor).toBeGreaterThan(0);
+    terminal.input.type(`\x1b[<0;100;${anchor + 1}M`);
+    terminal.input.type(`\x1b[<32;1;${anchor + 1}M`);
+    for (let index = 0; index < 10; index += 1) terminal.input.type('\x1b[<64;1;15M');
+    controller.enqueue({ type: 'text-delta', id: 'streaming', delta: '\nNew arrival' });
+    controller.enqueue({ type: 'text-end', id: 'streaming' });
+    controller.enqueue({ type: 'finish', finishReason: 'stop' });
+    controller.close();
+    await rendered;
+    const prompt = renderer.readPrompt();
+    terminal.input.type(`\x1b[<0;1;${anchor + 1}m`);
+    expect(copied[0]).toContain('Stable row 41');
+    expect(copied[0]).toContain('Stable row 70');
+    expect(copied[0]).not.toContain('New arrival');
+    terminal.output.columns = 70;
+    terminal.output.emit('resize');
+    expect(terminal.output.text().split('\x1b[H').at(-1)).not.toContain('\x1b[7m');
+    for (let index = 0; index < 10; index += 1) terminal.input.type('\x1b[6~');
+    await expect.poll(frame).toContain('New arrival');
+    terminal.input.type('Next\r');
+    await prompt;
+    renderer.close();
+  });
+
+  it('combines repeated successful tools and retains failed calls', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    await renderer.renderStream({ uiMessageStream: new ReadableStream({ start(controller) {
+      controller.enqueue({ type: 'start', messageId: 'compact-tools' });
+      for (let index = 0; index < 12; index += 1) {
+        controller.enqueue({ type: 'tool-input-available', toolCallId: `schedule-${index}`,
+          toolName: 'getNflSchedule', input: { week: index + 1 } });
+        controller.enqueue({ type: 'tool-output-available', toolCallId: `schedule-${index}`, output: {} });
+      }
+      controller.enqueue({ type: 'tool-input-available', toolCallId: 'failed',
+        toolName: 'getLeague', input: {} });
+      controller.enqueue({ type: 'tool-output-error', toolCallId: 'failed', errorText: 'League unavailable' });
+      controller.enqueue({ type: 'finish', finishReason: 'stop' });
+      controller.close();
+    } }) });
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame).toContain('×12');
+    expect(frame).toContain('total');
+    expect(frame).toContain('League unavailable');
+    expect(frame.match(/×12/g)).toHaveLength(1);
+    expect(frame).not.toContain('• Tool');
+    renderer.close();
+  });
+
   it('selects visible text by dragging and copies it on release', async () => {
     const copied: string[] = [];
     const terminal = createTerminal();
@@ -783,7 +913,7 @@ describe('SebTerminalRenderer prompt input', () => {
     const prompt = renderer.readPrompt();
 
     terminal.input.type('/copy extra\r');
-    expect(terminal.output.text()).toContain('Use /copy.');
+    expect(terminal.output.text()).toContain('Use /copy [all].');
     terminal.input.type('\u0003');
 
     await expect(prompt).rejects.toThrow('Interrupted');
@@ -1501,4 +1631,14 @@ function createTerminal() {
     text(): string { return this.chunks.join(''); }
   }
   return { input: new Input(), output: new Output() };
+}
+
+async function renderText(renderer: SebTerminalRenderer, text: string): Promise<void> {
+  await renderer.renderStream({ uiMessageStream: new ReadableStream({ start(controller) {
+    controller.enqueue({ type: 'text-start', id: 'text' });
+    controller.enqueue({ type: 'text-delta', id: 'text', delta: text });
+    controller.enqueue({ type: 'text-end', id: 'text' });
+    controller.enqueue({ type: 'finish', finishReason: 'stop' });
+    controller.close();
+  } }) });
 }

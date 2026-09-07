@@ -142,8 +142,8 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('refresh', '/refresh [all|sleeper|nflverse|weather]', 'Refresh source data on the next read.', 'Sources', 'Delete selected cache entries before the next read.', undefined, ['all', 'sleeper', 'nflverse', 'weather'], true, 1),
   command('new', '/new', 'Start a new conversation context.', 'Conversation', 'Exclude earlier messages from the next model call.', ['clear'], undefined, true, 0),
   command('history', '/history [clear]', 'Show or clear question history.', 'Conversation', 'Read or delete the private prompt history.', undefined, ['clear'], undefined, 1),
-  command('copy', '/copy', 'Copy the latest Seb answer.', 'Conversation', 'Send the latest answer to the terminal clipboard.', undefined, undefined, undefined, 0),
-  command('select', '/select', 'Enable native terminal text selection.', 'Conversation', 'Release the mouse so text can be selected and copied.', ['copy-mode'], undefined, undefined, 0),
+  command('copy', '/copy [all]', 'Copy the latest answer or full conversation.', 'Conversation', 'Send the latest answer or full conversation to the clipboard.', undefined, ['all'], undefined, 1),
+  command('select', '/select', 'Select the full conversation in terminal scrollback.', 'Conversation', 'Print the conversation for native selection. Press Escape to return.', ['copy-mode'], undefined, undefined, 0),
   command('export', '/export [NAME] [md|json]', 'Export the conversation under exports/.', 'Conversation', 'Create a transcript file under exports/.', ['save'], ['md', 'json'], undefined, 2),
   command('theme', '/theme default|high-contrast|compact', 'Select the terminal theme.', 'Preferences', 'Change colors and terminal spacing.', undefined, ['default', 'high-contrast', 'compact'], undefined, 1),
   command('icons', '/icons unicode|ascii', 'Select Unicode or ASCII symbols.', 'Preferences', 'Change terminal symbols for this session.', undefined, ['unicode', 'ascii'], undefined, 1),
@@ -208,6 +208,10 @@ export function parseInteractiveCommandInput(
 export function interactiveCommandArgumentError(
   parsed: ParsedInteractiveCommandInput,
 ): string | null {
+  if (parsed.command?.name === 'copy' && parsed.arguments.length > 0 &&
+    (parsed.arguments.length !== 1 || parsed.arguments[0]?.toLowerCase() !== 'all')) {
+    return 'Use /copy [all].';
+  }
   const maximum = parsed.command?.maxArguments;
   if (maximum === undefined || parsed.arguments.length <= maximum) {
     return null;

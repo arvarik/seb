@@ -112,6 +112,8 @@ interface Section {
   id: string;
   kind: SectionKind;
   title: string;
+  completedTool?: string;
+  durationMs?: number;
 }
 
 interface BodyRow {
@@ -135,6 +137,7 @@ interface ScreenSelection {
   anchor: ScreenPoint;
   focus: ScreenPoint;
   moved: boolean;
+  bodyRows?: BodyRow[];
 }
 
 type ContextField = 'league' | 'roster' | 'week' | 'player' | 'team';
@@ -177,6 +180,11 @@ export class SebTerminalRenderer {
   private escapeTimer: ReturnType<typeof setTimeout> | undefined;
   private exitRequested = false;
   private framePlainLines: string[] = [];
+  private bodyScreenStart = 0;
+  private bodyVisibleStart = 0;
+  private bodyVisibleEnd = 0;
+  private selectionDrag: ScreenPoint | undefined;
+  private selectionTimer: ReturnType<typeof setInterval> | undefined;
   private historyIndex = -1;
   private historyDraft = '';
   private dispatchingInput = false;
@@ -336,7 +344,7 @@ export class SebTerminalRenderer {
       ) === true;
       if (!this.interrupted && !streamFailed && !awaitsApproval) {
         this.captureAnswer(response);
-        if (this.scrollOffset === 0) this.focusLatestAnswer();
+        if (this.scrollOffset === 0 && !this.screenSelection) this.focusLatestAnswer();
       }
       this.paint();
       this.streamStop = undefined;
@@ -398,7 +406,7 @@ export class SebTerminalRenderer {
     if (this.handleMouseSelection(key)) return;
     if (key.type === 'ctrl-c' && this.copyScreenSelection()) return;
     if (this.screenSelection) {
-      this.screenSelection = undefined;
+      this.clearSelection();
       this.requestPaint();
     }
     if (this.selectionMode) {
@@ -575,10 +583,11 @@ export class SebTerminalRenderer {
       return;
     }
     if (localCommand?.name === 'copy') {
-      const answer = this.options.uiState.latestAnswer;
+      const all = parsed?.arguments[0]?.toLowerCase() === 'all';
+      const answer = all ? this.transcriptText() : this.options.uiState.latestAnswer;
       if (answer && this.options.output.isTTY !== false) {
         this.copyText(answer);
-        this.status = 'Copied the latest answer';
+        this.status = all ? 'Copied the full conversation' : 'Copied the latest answer';
       } else {
         this.status = 'No answer is available to copy';
       }
@@ -810,7 +819,7 @@ export class SebTerminalRenderer {
     if (this.handleMouseSelection(key)) return;
     if (key.type === 'ctrl-c' && this.copyScreenSelection()) return;
     if (this.screenSelection) {
-      this.screenSelection = undefined;
+      this.clearSelection();
       this.requestPaint();
     }
     if (key.type === 'escape') {
@@ -903,6 +912,10 @@ export class SebTerminalRenderer {
           id,
           kind: failed ? 'error' : 'tool',
           title: running ? 'Working' : 'Tool',
+          ...(state === 'output-available' ? {
+            completedTool: name,
+            durationMs: this.toolDurations.get(id) ?? 0,
+          } : {}),
         });
         if (running) {
           this.status = retrying
@@ -1032,11 +1045,15 @@ export class SebTerminalRenderer {
       this.options.input.setRawMode?.(true);
       this.options.input.resume();
     }
-    this.onResize = () => this.paint(true);
+    this.onResize = () => {
+      this.clearSelection();
+      this.paint(true);
+    };
     this.options.output.on('resize', this.onResize);
   }
 
   private stop(): void {
+    this.clearSelection();
     this.detachInput();
     this.stopTicker();
     this.cancelPaint();
@@ -1132,14 +1149,31 @@ export class SebTerminalRenderer {
   }
 
   private handleMouseSelection(key: TerminalKey): boolean {
+    if (this.selectionDrag && this.screenSelection?.bodyRows &&
+      (key.type === 'scroll-up' || key.type === 'scroll-down')) {
+      this.scrollOffset = clamp(this.scrollOffset +
+        (key.type === 'scroll-up' ? MOUSE_WHEEL_LINES : -MOUSE_WHEEL_LINES),
+      0, this.maximumScrollOffset);
+      this.screenSelection.moved = true;
+      this.paint();
+      return true;
+    }
     if (key.type !== 'mouse') return false;
     if (this.selectionMode || this.framePlainLines.length === 0) return true;
-    const point = clampScreenPoint(key, this.framePlainLines);
     if (key.action === 'press') {
+      this.clearSelection();
+      const bodyRows = this.overlay === 'none' && this.sections.length > 0 &&
+        key.row > this.bodyScreenStart &&
+        key.row <= this.bodyScreenStart + this.bodyVisibleEnd - this.bodyVisibleStart
+        ? this.renderBodyRows(Math.max(1, this.options.output.columns ?? 80)) : undefined;
+      const point = bodyRows
+        ? this.transcriptPoint(key, bodyRows)
+        : clampScreenPoint(key, this.framePlainLines);
       this.screenSelection = {
         anchor: point,
         focus: point,
         moved: false,
+        ...(bodyRows ? { bodyRows } : {}),
       };
       this.status = 'Selecting text';
       this.paint();
@@ -1147,12 +1181,21 @@ export class SebTerminalRenderer {
     }
     const selection = this.screenSelection;
     if (!selection) return true;
+    const point = selection.bodyRows
+      ? this.transcriptPoint(key, selection.bodyRows)
+      : clampScreenPoint(key, this.framePlainLines);
     selection.focus = point;
     selection.moved = selection.moved || !sameScreenPoint(selection.anchor, point);
     if (key.action === 'drag') {
+      this.selectionDrag = key;
+      if (selection.bodyRows && !this.selectionTimer) {
+        this.selectionTimer = setInterval(() => this.scrollSelection(), 50);
+        this.selectionTimer.unref?.();
+      }
       this.requestPaint();
       return true;
     }
+    this.stopSelectionDrag();
     if (!selection.moved || !this.copyScreenSelection()) {
       this.screenSelection = undefined;
       this.status = 'Ready';
@@ -1163,7 +1206,11 @@ export class SebTerminalRenderer {
 
   private copyScreenSelection(): boolean {
     if (!this.screenSelection?.moved) return false;
-    const text = selectedScreenText(this.framePlainLines, this.screenSelection);
+    this.stopSelectionDrag();
+    const text = selectedScreenText(
+      this.screenSelection.bodyRows?.map((row) => stripAnsi(row.text)) ?? this.framePlainLines,
+      this.screenSelection,
+    );
     if (!text) return false;
     this.copyText(text);
     const characterCount = terminalGraphemes(text).length;
@@ -1182,25 +1229,68 @@ export class SebTerminalRenderer {
     }
   }
 
-  private enterSelectionMode(): void {
+  private transcriptText(): string {
+    return this.sections.map((section) =>
+      `${sanitizeTerminalText(section.title)}\n${sanitizeTerminalText(section.content)}`,
+    ).join('\n\n');
+  }
+
+  private clearSelection(): void {
+    this.stopSelectionDrag();
     this.screenSelection = undefined;
+  }
+
+  private stopSelectionDrag(): void {
+    if (this.selectionTimer) clearInterval(this.selectionTimer);
+    this.selectionTimer = undefined;
+    this.selectionDrag = undefined;
+  }
+
+  private transcriptPoint(point: ScreenPoint, rows: BodyRow[]): ScreenPoint {
+    const visibleRow = clamp(point.row - this.bodyScreenStart,
+      1, Math.max(1, this.bodyVisibleEnd - this.bodyVisibleStart));
+    const row = this.bodyVisibleStart + visibleRow;
+    return {
+      row,
+      column: clamp(point.column, 1, Math.max(1, visibleLength(rows[row - 1]?.text ?? ''))),
+    };
+  }
+
+  private scrollSelection(): void {
+    const selection = this.screenSelection;
+    const point = this.selectionDrag;
+    if (!selection?.bodyRows || !point) return;
+    const delta = point.row <= this.bodyScreenStart + 1 ? MOUSE_WHEEL_LINES
+      : point.row >= this.bodyScreenStart + this.paintedBodyHeight ? -MOUSE_WHEEL_LINES : 0;
+    const next = clamp(this.scrollOffset + delta, 0, this.maximumScrollOffset);
+    if (next === this.scrollOffset) return;
+    this.answerFocus = null;
+    this.scrollOffset = next;
+    selection.moved = true;
+    this.paint();
+  }
+
+  private enterSelectionMode(): void {
+    this.clearSelection();
+    this.cancelPaint();
     this.selectionMode = true;
     this.editor.set('');
-    this.status = 'Selection mode · drag to select, copy with the terminal shortcut, then press Escape';
-    this.options.output.write(MOUSE_REPORTING_OFF);
-    this.paint();
+    this.status = 'Selection mode';
+    this.options.output.write(`${MOUSE_REPORTING_OFF}\x1b[?1049l\x1b[?25h\r\n` +
+      'Selection mode: scroll and select the full conversation. Press Escape to return.\r\n\r\n' +
+      this.transcriptText().replace(/\n/g, '\r\n') + '\r\n');
   }
 
   private leaveSelectionMode(): void {
     if (!this.selectionMode) return;
     this.selectionMode = false;
     this.status = 'Ready';
-    this.options.output.write(MOUSE_REPORTING_ON);
+    this.options.output.write(`\x1b[?1049h\x1b[?25l${MOUSE_REPORTING_ON}`);
     this.paint(true);
   }
 
   private scroll(delta: number): void {
-    this.screenSelection = undefined;
+    this.clearSelection();
     const nextOffset = clamp(
       this.scrollOffset + delta,
       0,
@@ -1266,7 +1356,7 @@ export class SebTerminalRenderer {
   }
 
   private requestPaint(): void {
-    if (!this.active) return;
+    if (!this.active || this.selectionMode) return;
     if (this.paintTimer) return;
     const elapsed = performance.now() - this.lastPaintAt;
     const delay = Math.max(0, FRAME_INTERVAL_MS - elapsed);
@@ -1283,6 +1373,7 @@ export class SebTerminalRenderer {
   }
 
   private paint(clear = false): void {
+    if (this.selectionMode) return;
     if (this.dispatchingInput) {
       this.inputPaintRequested = true;
       this.inputClearRequested ||= clear;
@@ -1349,9 +1440,23 @@ export class SebTerminalRenderer {
     if (transcriptVisible) {
       this.viewportAnchor = viewportAnchorForRow(bodyRows[visibleStart]);
     }
-    const cleanLines = [...header, ...visible, ...footer].slice(0, height);
+    this.bodyScreenStart = header.length + Math.max(0, bodyHeight - (end - visibleStart));
+    this.bodyVisibleStart = visibleStart;
+    this.bodyVisibleEnd = end;
+    if (this.selectionDrag && this.screenSelection?.bodyRows) {
+      this.screenSelection.focus = this.transcriptPoint(this.selectionDrag, this.screenSelection.bodyRows);
+    }
+    const bodySelection = this.screenSelection?.bodyRows ? this.screenSelection : undefined;
+    const selectedVisible = bodySelection?.moved
+      ? visible.map((line, index) => {
+        const row = visibleStart + index - (this.bodyScreenStart - header.length) + 1;
+        const columns = selectedColumnsForRow(bodySelection, row, visibleLength(line));
+        return columns && columns.end > columns.start
+          ? highlightTerminalColumns(line, columns.start, columns.end) : line;
+      }) : visible;
+    const cleanLines = [...header, ...selectedVisible, ...footer].slice(0, height);
     this.framePlainLines = cleanLines.map(stripAnsi);
-    const lines = this.screenSelection?.moved
+    const lines = this.screenSelection?.moved && !bodySelection
       ? highlightScreenSelection(cleanLines, this.screenSelection)
       : cleanLines;
     const frame = `${width}x${height}\n${lines.join('\n')}`;
@@ -1432,6 +1537,7 @@ export class SebTerminalRenderer {
   }
 
   private renderBodyRows(width: number): BodyRow[] {
+    if (this.screenSelection?.bodyRows) return this.screenSelection.bodyRows;
     if (this.overlay === 'shortcuts') {
       return this.shortcuts(width).map((text) => ({ text }));
     }
@@ -1445,7 +1551,31 @@ export class SebTerminalRenderer {
       return this.home(width).map((text) => ({ text }));
     }
     const rows: BodyRow[] = [];
-    for (const section of this.sections) {
+    for (let index = 0; index < this.sections.length; index += 1) {
+      const section = this.sections[index]!;
+      if ((section.kind === 'tool' || section.kind === 'error') &&
+        (section.title === 'Tool' || section.title === 'Working')) {
+        let count = 1;
+        let duration = section.durationMs ?? 0;
+        while (section.completedTool &&
+          this.sections[index + count]?.completedTool === section.completedTool) {
+          duration += this.sections[index + count]?.durationMs ?? 0;
+          count += 1;
+        }
+        const content = count > 1
+          ? `${symbol(this.theme, 'done')} ${friendlyToolName(section.completedTool!)} ×${count} · ${formatElapsed(duration)} total`
+          : section.content;
+        const lines = wrapTerminalLine(sanitizeTerminalText(content), Math.max(20, width - 2));
+        rows.push(...lines.map((line, sectionRowIndex) => ({
+          sectionId: section.id,
+          sectionRowCount: lines.length,
+          sectionRowIndex,
+          text: paint(this.theme, section.kind === 'error' ? 'danger' : 'tool', `  ${line}`),
+        })));
+        index += count - 1;
+        if (this.sections[index + 1]?.kind !== 'tool' && !this.theme.compact) rows.push({ text: '' });
+        continue;
+      }
       const color = section.kind === 'reasoning' ? 'dim' : section.kind === 'error' ? 'danger' : section.kind === 'tool' ? 'tool' : section.kind === 'assistant' ? 'assistant' : 'accent';
       const lines = [paint(this.theme, color, `${section.kind === 'assistant' ? symbol(this.theme, 'assistant') : symbol(this.theme, 'bullet')} ${sanitizeTerminalText(section.title)}`)];
       const rendered = section.kind === 'assistant'
@@ -1604,8 +1734,9 @@ export class SebTerminalRenderer {
       '  Ctrl+R       Search prompt history',
       '  PgUp/PgDn    Scroll the transcript or panel',
       '  Mouse wheel  Scroll the transcript or panel',
-      '  Mouse drag    Select and copy visible text',
-      '  /select       Use native selection as a fallback',
+      '  Mouse drag    Select text, hold at an edge to scroll',
+      '  /copy all     Copy the full conversation',
+      '  /select       Select the full conversation in scrollback',
       '  Escape       Close a panel or stop a request',
       '  Ctrl+C       Exit Seb',
       '  /exit        Exit Seb',

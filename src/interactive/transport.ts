@@ -813,9 +813,9 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           ? 'Run `/history clear` in the Seb terminal to delete its private prompt history.'
           : 'Run `/history` in the Seb terminal to view its private prompt history.';
       case 'copy':
-        return 'Run `/copy` in the Seb terminal to copy the latest answer with OSC 52.';
+        return 'Run `/copy` in the Seb terminal to copy the latest answer, or `/copy all` for the full conversation.';
       case 'select':
-        return 'Run `/select` in the Seb terminal to select and copy visible text with the terminal clipboard.';
+        return 'Run `/select` in the Seb terminal to select the full conversation in terminal scrollback.';
       case 'theme':
         return 'Use `/theme default`, `/theme high-contrast`, or `/theme compact` in the Seb terminal.';
       case 'icons':

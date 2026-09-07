@@ -239,6 +239,12 @@ describe('interactive presentation', () => {
     expect(clipboard).toContain(Buffer.from('answer').toString('base64'));
   });
 
+  it('retains long conversations and complete Unicode characters in clipboard output', () => {
+    const text = 'x'.repeat(100 * 1024 - 1) + '🏈 Full conversation ending';
+    const payload = osc52(text).slice('\x1b]52;c;'.length, -1);
+    expect(Buffer.from(payload, 'base64').toString('utf8')).toBe(text);
+  });
+
   it('keeps wrapped Markdown and bare URLs clickable', () => {
     const theme = createTheme({});
     const url = 'https://example.com/a/long/source/path';

@@ -372,6 +372,7 @@ describe('connector web sources', () => {
         type: 'source',
         url: 'file:///tmp/unsafe',
       };
+      yield { type: 'finish', finishReason: 'stop' };
     })();
     let output = '';
 
@@ -398,6 +399,7 @@ describe('connector web sources', () => {
     });
     const stream = (async function* () {
       yield { type: 'text-delta', text: 'Current state.' };
+      yield { type: 'finish', finishReason: 'stop' };
     })();
     let output = '';
 
@@ -411,9 +413,34 @@ describe('connector web sources', () => {
     expect(output).toContain('cache fresh');
   });
 
+  it.each(['length', 'content-filter', 'tool-calls', undefined])(
+    'rejects a connector recommendation without a successful finish: %s', async (finishReason) => {
+      const stream = (async function* () {
+        yield { type: 'text-delta', text: 'Start Example Player.' };
+        if (finishReason) yield { type: 'finish', finishReason };
+      })();
+      const output: unknown[] = [];
+      await expect(async () => {
+        for await (const part of withWebSources(stream, new SourceTracker(), 'Should I start Example Player?')) output.push(part);
+      }).rejects.toMatchObject({ name: 'ModelResponseError', emittedOutput: false });
+      expect(output).toEqual([]);
+    },
+  );
+
+  it('reports an incomplete ordinary connector answer after partial output', async () => {
+    const stream = (async function* () {
+      yield { type: 'text-delta', text: 'Partial news.' };
+      yield { type: 'finish', finishReason: 'length' };
+    })();
+    await expect(async () => {
+      for await (const _part of withWebSources(stream)) { /* Consume the response. */ }
+    }).rejects.toMatchObject({ name: 'ModelResponseError', emittedOutput: true });
+  });
+
   it('withholds an unsupported connector decision before posting it', async () => {
     const stream = (async function* () {
       yield { type: 'text-delta', text: 'Start Example Player with high confidence.' };
+      yield { type: 'finish', finishReason: 'stop' };
     })();
     let output = '';
 

@@ -16,6 +16,7 @@ import {
 import { toAiMessages } from 'chat/ai';
 
 import { createFantasyFootballAgent } from '../agent.js';
+import { observeCompletedModelStream } from '../ai/stream-completion.js';
 import {
   resolveModelProvider,
   type ModelProviderId,
@@ -315,6 +316,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
         );
       } catch (error) {
         if (
+          requestSignal.aborted ||
           !(error instanceof ModelResponseError) ||
           error.emittedOutput ||
           !isModelCapacityError(error.cause) ||
@@ -395,22 +397,7 @@ export function withWebSources(
   let emittedOutput = false;
   const monitored = (async function* () {
     try {
-      for await (const part of stream) {
-        if (isErrorPart(part)) {
-          throw new ModelResponseError(
-            part.error,
-            emittedOutput,
-            modelErrorContext,
-          );
-        }
-        if (isAbortPart(part)) {
-          throw new ModelResponseError(
-            abortSignal?.reason ??
-              new DOMException('The model stream stopped.', 'AbortError'),
-            emittedOutput,
-            modelErrorContext,
-          );
-        }
+      for await (const part of observeCompletedModelStream(stream, abortSignal)) {
         if (isUserVisibleOutputPart(part)) emittedOutput = true;
         if (isUrlSourcePart(part)) {
           const url = normalizeWebUrl(part.url);
@@ -474,18 +461,7 @@ function guardedRecommendationStream(
     const toolCalls = new Map<string, { input: unknown; toolName: string }>();
     const toolResults: RecommendationToolResult[] = [];
     try {
-      for await (const part of stream) {
-        if (isErrorPart(part)) {
-          throw new ModelResponseError(part.error, false, modelErrorContext);
-        }
-        if (isAbortPart(part)) {
-          throw new ModelResponseError(
-            abortSignal?.reason ??
-              new DOMException('The model stream stopped.', 'AbortError'),
-            answer.length > 0,
-            modelErrorContext,
-          );
-        }
+      for await (const part of observeCompletedModelStream(stream, abortSignal)) {
         if (isTextDeltaPart(part)) answer += part.text;
         recordRecommendationToolCall(part, toolCalls);
         if (isUrlSourcePart(part)) {
@@ -616,23 +592,6 @@ function isUserVisibleOutputPart(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
   const type = (value as { type?: unknown }).type;
   return type === 'markdown_text' || type === 'task_update' || type === 'plan_update';
-}
-
-function isErrorPart(value: unknown): value is { error: unknown; type: 'error' } {
-  return Boolean(
-    value &&
-    typeof value === 'object' &&
-    (value as { type?: unknown }).type === 'error' &&
-    'error' in value,
-  );
-}
-
-function isAbortPart(value: unknown): value is { type: 'abort' } {
-  return Boolean(
-    value &&
-    typeof value === 'object' &&
-    (value as { type?: unknown }).type === 'abort',
-  );
 }
 
 function isUrlSourcePart(value: unknown): value is {

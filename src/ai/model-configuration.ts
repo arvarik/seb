@@ -95,6 +95,7 @@ export function resolveLoadedModelProvider(
   const requestedProvider = firstNonEmpty([
     options.provider,
     providerFromQualifiedModel(options.model),
+    options.baseURL ? 'openai-compatible' : undefined,
     environment.SEB_MODEL_PROVIDER,
     environment.SEB_PROVIDER,
     providerFromQualifiedModel(environment.SEB_MODEL),
@@ -148,7 +149,9 @@ export function resolveLoadedModelProvider(
   }
 
   return resolveModelProvider({
-    ...(canonicalBaseURL ? { baseURL: canonicalBaseURL } : {}),
+    ...(canonicalBaseURL || options.baseURL
+      ? { baseURL: canonicalBaseURL ?? options.baseURL }
+      : {}),
     credentials,
     environment,
     ...(fallbackModel ? { fallbackModel } : {}),

@@ -28,6 +28,33 @@ const usage = {
 };
 
 describe('fantasy football agent harness', () => {
+  it.each([true, false])('executes an approval continuation only when approved=%s', async (approved) => {
+    let calls = 0;
+    const model = new MockLanguageModelV4({ doGenerate: [
+      { content: [{ type: 'tool-call', toolCallId: 'approved-call', toolName: 'getNflState', input: '{}' }],
+        finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] },
+      { content: [{ type: 'text', text: 'Finished the approved or denied turn.' }],
+        finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] },
+    ] });
+    const agent = createFantasyFootballAgent({
+      languageModel: model, identityRepository: false,
+      ...isolatedClients(async () => { calls += 1; return nflStateResponse(); }),
+    });
+    agent.tools.getNflState.needsApproval = true;
+    const first = await agent.generate({ prompt: 'Read the NFL state.' });
+    expect(calls).toBe(0);
+    const approval = first.content.find((part) => part.type === 'tool-approval-request');
+    if (!approval || approval.type !== 'tool-approval-request') throw new Error('Missing approval request');
+    const second = await agent.generate({ prompt: [
+      { role: 'user', content: 'Read the NFL state.' },
+      ...first.responseMessages,
+      { role: 'tool', content: [{ type: 'tool-approval-response', approvalId: approval.approvalId, approved }] },
+    ] });
+    expect(calls).toBe(approved ? 1 : 0);
+    expect(second.finishReason).toBe('stop');
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
   it('executes a Sleeper tool and returns the model answer', async () => {
     let sleeperCalls = 0;
     const fetch: typeof globalThis.fetch = async () => {

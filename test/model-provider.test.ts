@@ -19,6 +19,27 @@ afterEach(() => {
 });
 
 describe('model provider configuration', () => {
+  it('lets explicit model and fallback overrides replace qualified environment defaults', () => {
+    expect(resolveModelProvider({
+      credentials: { google: 'google-key', openai: 'openai-key' },
+      environment: { SEB_MODEL: 'google:old-model', SEB_FALLBACK_MODEL: 'google:old-fallback' },
+      model: 'openai:new-model',
+    })).toMatchObject({ provider: 'openai', model: 'new-model', fallbackModel: 'new-model' });
+    expect(resolveModelProvider({
+      credentials: { openai: 'openai-key' },
+      environment: { SEB_FALLBACK_MODEL: 'google:old-fallback' },
+      provider: 'openai', fallbackModel: 'openai:new-fallback',
+    }).fallbackModel).toBe('new-fallback');
+  });
+
+  it('keeps the environment provider for an unqualified model override', () => {
+    expect(resolveModelProvider({
+      credentials: { google: 'google-key', openai: 'openai-key' },
+      environment: { SEB_MODEL: 'openai:old-model' },
+      model: 'new-model',
+    })).toMatchObject({ provider: 'openai', model: 'new-model', fallbackModel: 'new-model' });
+  });
+
   it('keeps the existing Gemini defaults and environment names', () => {
     const selection = resolveModelProvider({
       environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'google-key' },

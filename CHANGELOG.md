@@ -6,6 +6,15 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- CLI and connector answers now require a successful model finish. Truncated, cancelled, and incomplete responses cannot become completed recommendations.
+- JSON research must finish before the formatter runs. JSON evidence validation now retains the executed tool inputs and checks the requested league.
+- Interactive streams report a missing finish event. Denied tools no longer leave a pending approval behind.
+- Explicit model and fallback overrides replace lower-priority environment model references.
+- An explicit compatible endpoint selects the compatible provider. Conflicting provider and endpoint overrides produce a configuration error.
+- Cancellation and timeout errors cannot trigger a capacity fallback. Connector fallback also respects the shared request deadline.
+
 ## [0.2.1] - 2026-09-07
 
 ### Fixed

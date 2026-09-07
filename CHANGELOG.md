@@ -39,6 +39,16 @@ The project follows [Semantic Versioning](https://semver.org/).
 - An explicit compatible endpoint selects the compatible provider. Conflicting provider and endpoint overrides produce a configuration error.
 - Cancellation and timeout errors cannot trigger a capacity fallback. Connector fallback also respects the shared request deadline.
 
+## [0.2.2] - 2026-09-07
+
+### Fixed
+
+- Tool activity uses compact rows. Consecutive successful calls to the same tool share a count and total duration.
+- Mouse selection extends across the conversation when you hold the pointer at the top or bottom edge.
+- Selection retains a stable transcript while new response content arrives. Resizing clears the selection safely.
+- `/copy all` copies the full conversation without screen wrapping or the previous clipboard length cutoff.
+- `/select` prints the full conversation to normal terminal scrollback for native selection. Escape returns to Seb.
+
 ## [0.2.1] - 2026-09-07
 
 ### Fixed

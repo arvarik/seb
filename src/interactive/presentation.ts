@@ -595,8 +595,7 @@ export function terminalLink(label: string, url: string, enabled = true): string
 }
 
 export function osc52(text: string): string {
-  const safe = text.slice(0, 100 * 1024);
-  return `\x1b]52;c;${Buffer.from(safe, 'utf8').toString('base64')}\x07`;
+  return `\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`;
 }
 
 export function visibleLength(value: string): number {

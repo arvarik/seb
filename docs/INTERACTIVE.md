@@ -169,8 +169,8 @@ The `/complete` command remains useful in copied transcripts and remote terminal
 | `/refresh [SOURCE]` | Clears selected source cache entries. |
 | `/new` or `/clear` | Starts a new model context. |
 | `/history [clear]` | Shows or clears private prompt history. |
-| `/copy` | Copies the latest Seb answer. |
-| `/select` | Enables native terminal text selection until you press `Escape`. |
+| `/copy [all]` | Copies the latest answer, or the full conversation with `all`. |
+| `/select` | Prints the full conversation to terminal scrollback for native selection. `Escape` returns to Seb. |
 | `/theme NAME` | Selects a display theme. |
 | `/icons MODE` | Selects Unicode or ASCII symbols. |
 | `/provider [NAME]` | Shows or switches the active configured provider. |
@@ -418,11 +418,15 @@ Set `SEB_HISTORY=false` to disable disk history.
 
 Read the [terminal interface guide](TERMINAL_UI.md) for every key and path.
 
+Tool activity uses one compact row per call. Consecutive successful calls to the same tool share a count and total duration. Failures retain their error text.
+
 ## Retry, edit, and copy
 
 Run `/retry` to submit the latest non-command prompt again.
 
 Run `/edit` to place that prompt in the editor.
+
+Run `/copy all` to copy the full conversation, including prompts and tool activity.
 
 Run `/copy` to send the latest answer to the terminal clipboard.
 
@@ -430,7 +434,11 @@ Seb uses the local system clipboard when available. It also sends OSC 52 for com
 
 Drag across visible text to select it. Seb highlights the selection and copies it when you release the mouse button.
 
-Run `/select` only when you need the terminal's native selection mode. Press `Escape` to return.
+Hold the pointer at the top or bottom edge while dragging to extend the selection across the conversation. You can also use the mouse wheel during a drag.
+
+Seb keeps the selected transcript stable while a response arrives. A resize clears the selection.
+
+Run `/select` to print the full conversation to normal terminal scrollback. Use your terminal to scroll, select, and copy. Press `Escape` to return. The printed conversation remains in terminal scrollback.
 
 ## Themes and symbols
 

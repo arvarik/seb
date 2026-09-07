@@ -157,11 +157,15 @@ The next prompt screen shows the file error.
 
 Do not place an API key or another secret in a prompt.
 
+Tool activity uses one compact row per call. Consecutive successful calls to the same tool share a count and total duration. Failures retain their error text.
+
 ## Reuse an answer or prompt
 
 Run `/retry` to submit the latest non-command prompt again.
 
 Run `/edit` to place that prompt in the editor.
+
+Run `/copy all` to copy the full conversation, including prompts and tool activity.
 
 Run `/copy` to copy the latest Seb answer.
 
@@ -173,7 +177,9 @@ Drag across visible text to select and copy it without a command.
 
 Seb highlights the selected cells and copies the text when you release the mouse button.
 
-Run `/select` as a fallback for native terminal selection. Press `Escape` to return.
+Hold the pointer at the top or bottom edge while dragging to select across screens. You can also scroll with the mouse wheel during a drag.
+
+Run `/select` to print the full conversation to normal terminal scrollback for native selection. Press `Escape` to return. The printed conversation remains in scrollback.
 
 Run `/source 1` to show the first validated source link.
 

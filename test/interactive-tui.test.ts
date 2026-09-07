@@ -7,6 +7,30 @@ import {
 } from '../src/interactive/tui.js';
 
 describe('SebConversationRunner', () => {
+  it('opens the renderer before transport setup completes and cancels a late stream', async () => {
+    let resolveSetup!: (stream: ReadableStream<UIMessageChunk>) => void;
+    let signal: AbortSignal | undefined;
+    let cancelled = false;
+    const renderer = rendererFor(['Question', undefined], []);
+    renderer.renderStream = async (result) => {
+      expect(signal?.aborted).toBe(false);
+      result.abort?.();
+      await (result.uiMessageStream as ReadableStream<UIMessageChunk>).cancel();
+      resolveSetup(new ReadableStream({ cancel() { cancelled = true; } }));
+      return undefined;
+    };
+    const transport: ChatTransport<UIMessage> = {
+      reconnectToStream: async () => null,
+      sendMessages: (options) => {
+        signal = options.abortSignal;
+        return new Promise((resolve) => { resolveSetup = resolve; });
+      },
+    };
+    await new SebConversationRunner({ renderer, transport, title: 'Test' }).run();
+    expect(signal?.aborted).toBe(true);
+    await expect.poll(() => cancelled).toBe(true);
+  });
+
   it('keeps conversation messages through the public chat transport', async () => {
     const sent: UIMessage[][] = [];
     const responses = [assistant('answer-1', 'First answer'), assistant('answer-2', 'Second answer')];

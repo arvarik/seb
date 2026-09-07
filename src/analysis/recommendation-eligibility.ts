@@ -1,3 +1,4 @@
+import { normalizePlayerName, normalizeTeamText } from '../identity/normalize.js';
 import type { FantasyAnalysis } from './output.js';
 import type { DataSourceRecord } from '../sources.js';
 
@@ -172,6 +173,18 @@ export function enforceFreeformRecommendation(
 export function buildRecommendationEvidence(
   input: BuildRecommendationEvidenceInput,
 ): RecommendationEvidence {
+  input = { ...input, toolResults: input.toolResults.flatMap((result) => {
+    if (result.toolName !== 'compareStartSit') return [result];
+    const projections = asRecord(result.output)?.projections;
+    const requested = asRecord(result.input)?.playerNames;
+    if (!Array.isArray(projections) || projections.length < 2 ||
+      (Array.isArray(requested) && requested.length !== projections.length)) {
+      return [{ toolName: 'projectPlayer', output: { recommendationEligible: false }, input: result.input }];
+    }
+    return projections.map((projection) => ({ toolName: 'projectPlayer', output: asRecord(result.output)?.recommendationEligible === true
+      ? projection : { ...asRecord(projection), recommendationEligible: false },
+      input: { ...asRecord(result.input), playerName: asRecord(asRecord(projection)?.player)?.name } }));
+  }) };
   if (!input.analysis.recommendation) {
     return {
       currentEvidence: sourceEvidenceState(input.sources),
@@ -391,27 +404,20 @@ function playerStatusEvidenceState(
   question: string,
 ): RequiredEvidenceState {
   const subjects = relevantPlayerSubjects(toolResults, question);
-  const hasPlayerStatus = toolResults.some((result) =>
-    PLAYER_STATUS_TOOLS.has(result.toolName) &&
-    (!isIndividualPlayerTool(result.toolName) ||
-      individualPlayerResultMatchesQuestion(result, question)) &&
-    (result.toolName === 'projectPlayer'
-      ? hasProjectionPlayerStatus(result.output)
-      : hasPlayerStatusFields(result.output))
-  );
-  const hasGroundedWebNews = toolResults.some(
-    (result) => result.toolName === 'searchCurrentNews' &&
-      evidenceMatchesSubjects([result.input, result.output], subjects),
-  ) && sources.some((source) => source.id.startsWith('web:'));
-  const hasFirstClassNews = toolResults.some((result) =>
-    result.toolName === 'searchFirstClassNews' &&
-    hasUsableFirstClassNews(result.output, subjects)
-  ) && sources.some((source) =>
-    source.id.startsWith('news-article:') &&
-    source.cacheOutcome !== 'stale-if-error'
-  );
-  const hasCurrentNews = hasGroundedWebNews || hasFirstClassNews;
-  return hasPlayerStatus && hasCurrentNews ? 'present' : 'missing';
+  if (subjects.length === 0) return 'missing';
+  const supported = subjects.every((subject) => {
+    const hasPlayerStatus = toolResults.some((result) =>
+      PLAYER_STATUS_TOOLS.has(result.toolName) &&
+      evidenceMatchesSubjects([result.output], [subject]) &&
+      (result.toolName === 'projectPlayer' ? hasProjectionPlayerStatus(result.output) : hasPlayerStatusFields(result.output)));
+    const hasGroundedWebNews = toolResults.some((result) => result.toolName === 'searchCurrentNews' &&
+      evidenceMatchesSubjects([result.output], [subject])) && sources.some((source) => source.id.startsWith('web:'));
+    const hasFirstClassNews = toolResults.some((result) => result.toolName === 'searchFirstClassNews' &&
+      hasUsableFirstClassNews(result.output, [subject])) && sources.some((source) =>
+        source.id.startsWith('news-article:') && source.cacheOutcome !== 'stale-if-error');
+    return hasPlayerStatus && (hasGroundedWebNews || hasFirstClassNews);
+  });
+  return supported ? 'present' : 'missing';
 }
 
 function hasUsableFirstClassNews(
@@ -452,6 +458,8 @@ function projectionEligibilityState(
   if (projections.length === 0) {
     return START_SIT_REQUEST.test(question) ? 'ineligible' : 'not-required';
   }
+  const comparesPlayers = /\b(?:versus|vs\.?)\b|\bor\s+(?!sit\b|start\b|bench\b|not\b|leave\b|keep\b|him\b|them\b)\p{L}+/iu.test(question);
+  if (START_SIT_REQUEST.test(question) && comparesPlayers && projections.length < 2) return 'ineligible';
   return projections.every(
       (result) => asRecord(result.output)?.recommendationEligible === true &&
         individualPlayerResultMatchesQuestion(result, question),
@@ -582,7 +590,7 @@ function relevantPlayerSubjects(
       ? candidates.filter((subject) => textMentionsSubject(question, subject))
       : candidates;
   });
-  return [...new Set(subjects.map(normalizeEvidenceText).filter(Boolean))];
+  return [...new Set(subjects.map(normalizePlayerName).filter(Boolean))];
 }
 
 function toolInputPlayerSubjects(result: RecommendationToolResult): string[] {
@@ -657,7 +665,7 @@ function evidenceMatchesSubjects(
 ): boolean {
   if (subjects.length === 0) return false;
   const evidence = normalizeEvidenceText(values.map(stringifyEvidence).join(' '));
-  return subjects.some((subject) => textMentionsSubject(evidence, subject));
+  return subjects.some((subject) => ` ${evidence} `.includes(` ${normalizeEvidenceText(subject)} `));
 }
 
 function stringifyEvidence(value: unknown): string {
@@ -671,7 +679,7 @@ function stringifyEvidence(value: unknown): string {
 
 function textMentionsSubject(text: string, subject: string): boolean {
   const normalizedText = normalizeEvidenceText(text);
-  const normalizedSubject = normalizeEvidenceText(subject);
+  const normalizedSubject = normalizePlayerName(subject);
   if (!normalizedText || !normalizedSubject) return false;
   if (` ${normalizedText} `.includes(` ${normalizedSubject} `)) return true;
   const tokens = normalizedSubject.split(' ').filter((token) => token.length >= 3);
@@ -680,7 +688,7 @@ function textMentionsSubject(text: string, subject: string): boolean {
 }
 
 function normalizeEvidenceText(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/gu, ' ').trim();
+  return normalizeTeamText(value);
 }
 
 function leagueIdsAreConsistent(

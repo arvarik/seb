@@ -1,3 +1,10 @@
+import { completedLearningWeek } from './learning/completed-week.js';
+import { DEFAULT_PROJECTION_PARAMETERS } from './projection/statistics.js';
+import { writeFile } from 'node:fs/promises';
+import { evaluateProjectionModels } from './evaluation/projection-benchmark.js';
+import { LearningService } from './learning/service.js';
+import { LearningStore } from './learning/store.js';
+import { PPR_SCORING } from './learning/engine.js';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -161,6 +168,43 @@ export async function runCli(
   const command = parseCliArguments(arguments_);
 
   switch (command.name) {
+    case 'evaluate': {
+      const client = new NflverseClient({ database: false });
+      completedLearningWeek(await client.getSchedule({ season: command.season, gameType: 'REG' }), command.season, command.throughWeek);
+      const allRows = await client.getPlayerWeeklyStats({ season: command.season, seasonType: 'REG', throughWeek: command.throughWeek });
+      const rows = command.positions ? allRows.filter((row) => command.positions!.includes(row.position)) : allRows;
+      const report = await evaluateProjectionModels({ rows, season: command.season, throughWeek: command.throughWeek });
+      const json = `${JSON.stringify(report, null, 2)}\n`;
+      if (command.output) await writeFile(resolve(command.output), json, { mode: 0o600 });
+      streams.stdout.write(command.json ? json : [
+        `Projection evaluation: ${command.season} through Week ${command.throughWeek}`,
+        ...Object.entries(report.models).map(([name, result]) => `${name}: MAE ${result.regression.mae?.toFixed(3) ?? 'unavailable'}, RMSE ${result.regression.rmse?.toFixed(3) ?? 'unavailable'}, n=${result.regression.sampleSize}`),
+        ...report.limitations, '',
+      ].join('\n'));
+      return 0;
+    }
+    case 'learn': {
+      const scoring = command.leagueId
+        ? (await new SleeperClient({ database: false }).getLeague(command.leagueId)).scoring_settings
+        : PPR_SCORING;
+      const result = command.action === 'update'
+        ? await new LearningService().update({ season: command.season, scoring,
+          ...(command.throughWeek === undefined ? {} : { throughWeek: command.throughWeek }) })
+        : { changed: false, file: null, revision: await new LearningStore().latest(command.season, (command.throughWeek ?? 18) + 1, scoring) };
+      const revision = result.revision;
+      const context = await new LearningStore().context(command.season, command.throughWeek ?? revision?.throughWeek ?? 18, scoring);
+      const active = { learningEnabled: context.enabled, manualOverride: context.manual, effectiveParameters: context.parameters ?? DEFAULT_PROJECTION_PARAMETERS };
+      streams.stdout.write(command.json ? `${JSON.stringify({ ...result, ...active })}\n` : revision
+        ? [`Learning: ${revision.season} through Week ${revision.throughWeek}`,
+          revision.reason, `Learning enabled: ${active.learningEnabled}. Manual override: ${active.manualOverride}.`,
+          `Validation samples: ${revision.baseline.samples}`,
+          `Current validation MAE: ${revision.baseline.mae?.toFixed(3) ?? 'unavailable'}`,
+          `Candidate validation MAE: ${revision.candidateMetrics.mae?.toFixed(3) ?? 'unavailable'}`,
+          `Players: ${Object.keys(revision.players).length}`, `Effective parameters: ${JSON.stringify(active.effectiveParameters)}`,
+          ...(result.file ? [`Saved: ${result.file}`] : []), ''].join('\n')
+        : `No matching local learning exists. Learning enabled: ${active.learningEnabled}. Manual override: ${active.manualOverride}.\nRun seb learn update after the week completes.\n`);
+      return 0;
+    }
     case 'help':
       streams.stdout.write(CLI_HELP);
       return 0;

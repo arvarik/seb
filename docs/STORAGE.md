@@ -488,3 +488,10 @@ Restore a database backup when you need historical snapshots.
 Move an unreadable database to a safe backup path when snapshots do not matter.
 
 Start Seb again to create a new database.
+
+## Forecast learning
+
+Seb stores optional football learning in `.cache/learning`, separately from source caches and usage telemetry.
+Revisions use scoring-profile directories, content checksums, and a bounded correction history.
+The override file controls whether future forecasts use learned or manual parameters.
+Read the [learning storage guide](ANALYSIS.md#storage-and-privacy) before changing these files.

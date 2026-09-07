@@ -1,0 +1,25 @@
+{
+  "node": "v22.23.2",
+  "measuredAt": "2026-09-07T22:01:24.999Z",
+  "platform": "darwin",
+  "learning": {
+    "rows": 18522,
+    "playerCount": 610,
+    "weeks": 18,
+    "durationMs": 85.81495900000004
+  },
+  "lineup": {
+    "players": 60,
+    "slots": 12,
+    "complete": true,
+    "durationMs": 68.13633400000003
+  },
+  "playoffs": {
+    "teams": 32,
+    "weeks": 15,
+    "simulations": 50000,
+    "allocatedSpots": 16,
+    "durationMs": 2836.901
+  },
+  "limitation": "Single local run after imports. Network fetch time is excluded. These values are observations, not portable latency guarantees."
+}

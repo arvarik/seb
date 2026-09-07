@@ -1,3 +1,4 @@
+import { compareProjections } from './comparison.js';
 import { tool } from 'ai';
 import { z } from 'zod';
 
@@ -15,9 +16,21 @@ export function createProjectionTools(
 ) {
   const service = new PlayerProjectionService(sleeper, nflverse, weather);
   return {
+    compareStartSit: tool({
+      description: 'Compare two through six players using league scoring, forecast uncertainty, and scheduled games. Flag close decisions and ineligible players.',
+      inputSchema: z.object({
+        leagueId: z.string().trim().regex(/^\d+$/),
+        playerNames: z.array(z.string().trim().min(2).max(100)).min(2).max(6),
+        slot: z.enum(['QB', 'RB', 'WR', 'TE', 'FLEX', 'SUPER_FLEX', 'REC_FLEX', 'WRRB_FLEX']).optional(),
+        season: seasonSchema, week: z.number().int().min(1).max(18),
+      }),
+      execute: async ({ playerNames, slot, ...request }) => compareProjections(await Promise.all(
+        playerNames.map((playerName) => service.project({ ...request, playerName })),
+      ), slot),
+    }),
     projectPlayer: tool({
       description:
-        'Project one player with the selected Sleeper league scoring rules. The result includes a median, floor, ceiling, confidence, adjustments, and limits.',
+        'Project one player with the selected Sleeper league scoring rules. The result includes expected points, an 80% target interval, evidence completeness, adjustments, and limits.',
       inputSchema: z.object({
         leagueId: z.string().trim().regex(/^\d+$/),
         playerName: z.string().trim().min(2).max(100),

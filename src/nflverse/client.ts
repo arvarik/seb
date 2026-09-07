@@ -39,6 +39,7 @@ const MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 128 * 1024 * 1024;
 const MAX_ERROR_BYTES = 4 * 1024;
 const CACHE_SCHEMA_VERSION = 'v2';
+const STATS_SCHEMA_VERSION = 'v3';
 const SCHEDULE_TTL_MS = 6 * 60 * 60 * 1_000;
 const STATS_TTL_MS = 6 * 60 * 60 * 1_000;
 const STALE_IF_ERROR_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -290,14 +291,14 @@ export class NflverseClient {
     season: number,
     sourceUrl: string,
   ): Promise<ResourceResult<NflversePlayerWeek[]>> {
-    const key = `player-stats-${CACHE_SCHEMA_VERSION}-${season}`;
+    const key = `player-stats-${STATS_SCHEMA_VERSION}-${season}`;
     const resource = new CachedResource<NflversePlayerWeek[]>(
       this.database,
       'nflverse',
       key,
       sourceUrl,
       {
-        schemaVersion: CACHE_SCHEMA_VERSION,
+        schemaVersion: STATS_SCHEMA_VERSION,
         snapshotKind: 'nflverse-player-stats',
         snapshotRetention: 4,
         staleIfErrorMs: STALE_IF_ERROR_MS,
@@ -373,6 +374,15 @@ function parseGame(row: CsvRow): NflverseGame {
 
 function parsePlayerWeek(row: CsvRow): NflversePlayerWeek {
   return {
+    specialTeamsTouchdowns: nullableNumber(row.special_teams_tds),
+    fumbleRecoveryTouchdowns: nullableNumber(row.fumble_recovery_tds),
+
+    fumbles: nullableNumber(row.fumbles_total),
+    fumblesLost: nullableNumber(row.fumbles_lost_total),
+    passingTwoPointConversions: nullableNumber(row.passing_2pt_conversions),
+    rushingTwoPointConversions: nullableNumber(row.rushing_2pt_conversions),
+    receivingTwoPointConversions: nullableNumber(row.receiving_2pt_conversions),
+
     playerId: requiredText(row.player_id, 'player_id'),
     playerDisplayName: requiredText(row.player_display_name ?? row.player_name, 'player_display_name'),
     position: requiredText(row.position, 'position'),

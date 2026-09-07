@@ -718,3 +718,12 @@ Run this command from the project folder.
 ```bash
 npm unlink -g seb
 ```
+
+## Forecast learning and evaluation
+
+Use `seb learn status --season YEAR` to inspect local learning.
+Use `seb learn update --season YEAR` after completed weeks to select and validate forecast parameters.
+Add `--league ID` for the exact league scoring profile.
+Use `seb evaluate --season YEAR` to compare the previous, ensemble, and adaptive forecast models.
+The commands support `--json` and require no language-model call.
+Read the [analysis guide](ANALYSIS.md) for examples, cutoffs, override files, and benchmark limits.

@@ -213,3 +213,11 @@ The NWS hourly forecast covers about seven days.
 nflverse weekly player files can lag the latest game while a release updates.
 
 Run `/sources` after an answer to inspect the source URLs.
+
+## Weekly learning
+
+Use `/skill weekly-learning` to review completed-week errors and local player or team trends.
+Add a request to update the selected league after all games finish and the reporting buffer passes.
+The tool validates parameters before it saves a revision.
+The skill does not start a background schedule or edit files from language-model guesses.
+Read the [analysis guide](ANALYSIS.md#update-local-learning) for the complete workflow.

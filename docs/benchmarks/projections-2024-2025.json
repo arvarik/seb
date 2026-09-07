@@ -1,0 +1,436 @@
+{
+  "modelVersion": "ensemble-v1",
+  "reviewedAt": "2026-09-07",
+  "parameters": {
+    "recentWeight": 0.25,
+    "halfLife": 4,
+    "priorGames": 0.5
+  },
+  "scoring": {
+    "pass_yd": 0.04,
+    "pass_td": 4,
+    "pass_int": -2,
+    "rush_yd": 0.1,
+    "rush_td": 6,
+    "rec": 1,
+    "rec_yd": 0.1,
+    "rec_td": 6,
+    "fum_lost": -2,
+    "pass_2pt": 2,
+    "rush_2pt": 2,
+    "rec_2pt": 2
+  },
+  "seasons": [
+    {
+      "season": 2024,
+      "throughWeek": 18,
+      "dataChecksum": "a05f2ea662017c141acac620dacb2c1f4d5ec37cb5f2d0b9aaf78711f82cb833",
+      "missingOutcomes": 1990,
+      "promotedUpdates": 0,
+      "models": {
+        "legacy": {
+          "sampleSize": 4227,
+          "mae": 4.654906235811675,
+          "rmse": 6.482950404624855,
+          "meanError": -0.2865287636524951,
+          "coverage": 0.5237757274662882,
+          "meanIntervalWidth": 7.855477172075297,
+          "intervalScore": 26.12545837846675,
+          "spearmanCorrelation": 0.5653983390927301,
+          "pairwiseAccuracy": 0.7375036463785026,
+          "meanAbsoluteRankError": 16.049680624556423
+        },
+        "ensemble": {
+          "sampleSize": 4227,
+          "mae": 4.640231139291199,
+          "rmse": 6.411345569686675,
+          "meanError": -0.3893191248932084,
+          "coverage": 0.8057724154246511,
+          "meanIntervalWidth": 15.219378645768634,
+          "intervalScore": 23.346269433941433,
+          "spearmanCorrelation": 0.5662114085345831,
+          "pairwiseAccuracy": 0.7380212891306461,
+          "meanAbsoluteRankError": 16.053465814998816
+        },
+        "adaptive": {
+          "sampleSize": 4227,
+          "mae": 4.640231139291199,
+          "rmse": 6.411345569686675,
+          "meanError": -0.3893191248932084,
+          "coverage": 0.8057724154246511,
+          "meanIntervalWidth": 15.219378645768634,
+          "intervalScore": 23.346269433941433,
+          "spearmanCorrelation": 0.5662114085345831,
+          "pairwiseAccuracy": 0.7380212891306461,
+          "meanAbsoluteRankError": 16.053465814998816
+        }
+      },
+      "byPosition": {
+        "QB": {
+          "legacy": {
+            "sampleSize": 452,
+            "mae": 6.493621589199276,
+            "rmse": 8.341855491935373,
+            "meanError": -0.8601487130525568,
+            "coverage": 0.4823008849557522,
+            "meanIntervalWidth": 10.179889468129067,
+            "intervalScore": 38.20910881588791,
+            "spearmanCorrelation": 0.3822527323642645,
+            "pairwiseAccuracy": 0.6389138240574507,
+            "meanAbsoluteRankError": 7.542035398230088
+          },
+          "ensemble": {
+            "sampleSize": 452,
+            "mae": 6.447541181913651,
+            "rmse": 8.271800858867483,
+            "meanError": -1.2163724451734534,
+            "coverage": 0.7942477876106194,
+            "meanIntervalWidth": 21.288130657756824,
+            "intervalScore": 30.00831628596939,
+            "spearmanCorrelation": 0.3779999484107671,
+            "pairwiseAccuracy": 0.6398862956313585,
+            "meanAbsoluteRankError": 7.630530973451328
+          },
+          "adaptive": {
+            "sampleSize": 452,
+            "mae": 6.447541181913651,
+            "rmse": 8.271800858867483,
+            "meanError": -1.2163724451734534,
+            "coverage": 0.7942477876106194,
+            "meanIntervalWidth": 21.288130657756824,
+            "intervalScore": 30.00831628596939,
+            "spearmanCorrelation": 0.3779999484107671,
+            "pairwiseAccuracy": 0.6398862956313585,
+            "meanAbsoluteRankError": 7.630530973451328
+          }
+        },
+        "RB": {
+          "legacy": {
+            "sampleSize": 1132,
+            "mae": 4.523600398254568,
+            "rmse": 6.276818671343541,
+            "meanError": 0.006708699283147792,
+            "coverage": 0.5397526501766784,
+            "meanIntervalWidth": 7.726975541097934,
+            "intervalScore": 24.70786079142223,
+            "spearmanCorrelation": 0.6835090229982846,
+            "pairwiseAccuracy": 0.7565579623899071,
+            "meanAbsoluteRankError": 13.175795053003533
+          },
+          "ensemble": {
+            "sampleSize": 1132,
+            "mae": 4.545268587680781,
+            "rmse": 6.189583017541325,
+            "meanError": 0.02389901778057076,
+            "coverage": 0.8021201413427562,
+            "meanIntervalWidth": 14.544175645461483,
+            "intervalScore": 22.461949639719048,
+            "spearmanCorrelation": 0.6821963345787924,
+            "pairwiseAccuracy": 0.7571292549393002,
+            "meanAbsoluteRankError": 13.159010600706713
+          },
+          "adaptive": {
+            "sampleSize": 1132,
+            "mae": 4.545268587680781,
+            "rmse": 6.189583017541325,
+            "meanError": 0.02389901778057076,
+            "coverage": 0.8021201413427562,
+            "meanIntervalWidth": 14.544175645461483,
+            "intervalScore": 22.461949639719048,
+            "spearmanCorrelation": 0.6821963345787924,
+            "pairwiseAccuracy": 0.7571292549393002,
+            "meanAbsoluteRankError": 13.159010600706713
+          }
+        },
+        "WR": {
+          "legacy": {
+            "sampleSize": 1775,
+            "mae": 4.66986827467369,
+            "rmse": 6.59077348218567,
+            "meanError": -0.21361339329997034,
+            "coverage": 0.5385915492957747,
+            "meanIntervalWidth": 8.08456570156435,
+            "intervalScore": 26.28026273664793,
+            "spearmanCorrelation": 0.6384409715826161,
+            "pairwiseAccuracy": 0.7411003077165076,
+            "meanAbsoluteRankError": 22.016338028169013
+          },
+          "ensemble": {
+            "sampleSize": 1775,
+            "mae": 4.645785238666685,
+            "rmse": 6.517699203581915,
+            "meanError": -0.30541991731788587,
+            "coverage": 0.8061971830985916,
+            "meanIntervalWidth": 15.310736407360421,
+            "intervalScore": 24.118955008155147,
+            "spearmanCorrelation": 0.638505500481097,
+            "pairwiseAccuracy": 0.7408938525516875,
+            "meanAbsoluteRankError": 22.068732394366197
+          },
+          "adaptive": {
+            "sampleSize": 1775,
+            "mae": 4.645785238666685,
+            "rmse": 6.517699203581915,
+            "meanError": -0.30541991731788587,
+            "coverage": 0.8061971830985916,
+            "meanIntervalWidth": 15.310736407360421,
+            "intervalScore": 24.118955008155147,
+            "spearmanCorrelation": 0.638505500481097,
+            "pairwiseAccuracy": 0.7408938525516875,
+            "meanAbsoluteRankError": 22.068732394366197
+          }
+        },
+        "TE": {
+          "legacy": {
+            "sampleSize": 868,
+            "mae": 3.83806435724414,
+            "rmse": 5.312790222643015,
+            "meanError": -0.5193552305765151,
+            "coverage": 0.4942396313364055,
+            "meanIntervalWidth": 6.3441837948944375,
+            "intervalScore": 21.36524263543486,
+            "spearmanCorrelation": 0.557390629425755,
+            "pairwiseAccuracy": 0.7167280917280917,
+            "meanAbsoluteRankError": 12.026497695852534
+          },
+          "ensemble": {
+            "sampleSize": 868,
+            "mae": 3.811584759989526,
+            "rmse": 5.264279508755978,
+            "meanError": -0.6691070628957908,
+            "coverage": 0.815668202764977,
+            "meanIntervalWidth": 12.752896917778026,
+            "intervalScore": 19.45028779305906,
+            "spearmanCorrelation": 0.566143850667676,
+            "pairwiseAccuracy": 0.7200450450450451,
+            "meanAbsoluteRankError": 11.913594470046084
+          },
+          "adaptive": {
+            "sampleSize": 868,
+            "mae": 3.811584759989526,
+            "rmse": 5.264279508755978,
+            "meanError": -0.6691070628957908,
+            "coverage": 0.815668202764977,
+            "meanIntervalWidth": 12.752896917778026,
+            "intervalScore": 19.45028779305906,
+            "spearmanCorrelation": 0.566143850667676,
+            "pairwiseAccuracy": 0.7200450450450451,
+            "meanAbsoluteRankError": 11.913594470046084
+          }
+        }
+      },
+      "source": "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2024.csv.gz"
+    },
+    {
+      "season": 2025,
+      "throughWeek": 18,
+      "dataChecksum": "1036556d8f2d70989d75f9374bfa3680c1e1d7bc07c39015c19f21cb51b53826",
+      "missingOutcomes": 2088,
+      "promotedUpdates": 0,
+      "models": {
+        "legacy": {
+          "sampleSize": 4325,
+          "mae": 4.5976844236197465,
+          "rmse": 6.512592699067335,
+          "meanError": -0.08872917278641065,
+          "coverage": 0.5419653179190751,
+          "meanIntervalWidth": 7.657137114941816,
+          "intervalScore": 26.008693524829987,
+          "spearmanCorrelation": 0.5476812122748059,
+          "pairwiseAccuracy": 0.734160921306868,
+          "meanAbsoluteRankError": 16.67398843930636
+        },
+        "ensemble": {
+          "sampleSize": 4325,
+          "mae": 4.5665140761648955,
+          "rmse": 6.4050173001196695,
+          "meanError": -0.1469427434959637,
+          "coverage": 0.8020809248554913,
+          "meanIntervalWidth": 14.835494936856065,
+          "intervalScore": 23.473012536923157,
+          "spearmanCorrelation": 0.5497014855893146,
+          "pairwiseAccuracy": 0.7344298919725979,
+          "meanAbsoluteRankError": 16.716531791907514
+        },
+        "adaptive": {
+          "sampleSize": 4325,
+          "mae": 4.5665140761648955,
+          "rmse": 6.4050173001196695,
+          "meanError": -0.1469427434959637,
+          "coverage": 0.8020809248554913,
+          "meanIntervalWidth": 14.835494936856065,
+          "intervalScore": 23.473012536923157,
+          "spearmanCorrelation": 0.5497014855893146,
+          "pairwiseAccuracy": 0.7344298919725979,
+          "meanAbsoluteRankError": 16.716531791907514
+        }
+      },
+      "byPosition": {
+        "QB": {
+          "legacy": {
+            "sampleSize": 438,
+            "mae": 6.8395297548310445,
+            "rmse": 8.68541603478375,
+            "meanError": 0.13331014047786377,
+            "coverage": 0.4863013698630137,
+            "meanIntervalWidth": 11.42652298262744,
+            "intervalScore": 38.723036236304914,
+            "spearmanCorrelation": 0.2681141649180542,
+            "pairwiseAccuracy": 0.6009262216544236,
+            "meanAbsoluteRankError": 7.95662100456621
+          },
+          "ensemble": {
+            "sampleSize": 438,
+            "mae": 6.8129060641956745,
+            "rmse": 8.534402994093377,
+            "meanError": 0.016319565113810042,
+            "coverage": 0.7968036529680366,
+            "meanIntervalWidth": 22.5331801133774,
+            "intervalScore": 30.471318050339097,
+            "spearmanCorrelation": 0.2715660564413785,
+            "pairwiseAccuracy": 0.6018843819865858,
+            "meanAbsoluteRankError": 8.006849315068493
+          },
+          "adaptive": {
+            "sampleSize": 438,
+            "mae": 6.8129060641956745,
+            "rmse": 8.534402994093377,
+            "meanError": 0.016319565113810042,
+            "coverage": 0.7968036529680366,
+            "meanIntervalWidth": 22.5331801133774,
+            "intervalScore": 30.471318050339097,
+            "spearmanCorrelation": 0.2715660564413785,
+            "pairwiseAccuracy": 0.6018843819865858,
+            "meanAbsoluteRankError": 8.006849315068493
+          }
+        },
+        "RB": {
+          "legacy": {
+            "sampleSize": 1152,
+            "mae": 4.6476984391428395,
+            "rmse": 6.797005531544743,
+            "meanError": -0.34691998422343406,
+            "coverage": 0.5581597222222222,
+            "meanIntervalWidth": 7.686502228008436,
+            "intervalScore": 26.465011512383203,
+            "spearmanCorrelation": 0.70560633414152,
+            "pairwiseAccuracy": 0.7649271816650126,
+            "meanAbsoluteRankError": 12.95486111111111
+          },
+          "ensemble": {
+            "sampleSize": 1152,
+            "mae": 4.5902858718347055,
+            "rmse": 6.675297466289629,
+            "meanError": -0.46181806305464257,
+            "coverage": 0.7986111111111112,
+            "meanIntervalWidth": 14.816354529417957,
+            "intervalScore": 25.054906836189822,
+            "spearmanCorrelation": 0.7077923557853399,
+            "pairwiseAccuracy": 0.7660927366307383,
+            "meanAbsoluteRankError": 12.99826388888889
+          },
+          "adaptive": {
+            "sampleSize": 1152,
+            "mae": 4.5902858718347055,
+            "rmse": 6.675297466289629,
+            "meanError": -0.46181806305464257,
+            "coverage": 0.7986111111111112,
+            "meanIntervalWidth": 14.816354529417957,
+            "intervalScore": 25.054906836189822,
+            "spearmanCorrelation": 0.7077923557853399,
+            "pairwiseAccuracy": 0.7660927366307383,
+            "meanAbsoluteRankError": 12.99826388888889
+          }
+        },
+        "WR": {
+          "legacy": {
+            "sampleSize": 1826,
+            "mae": 4.408043168969779,
+            "rmse": 6.1528899788737075,
+            "meanError": 0.11893363670151458,
+            "coverage": 0.5399780941949617,
+            "meanIntervalWidth": 7.376913284149955,
+            "intervalScore": 24.632966719993167,
+            "spearmanCorrelation": 0.6267198421644313,
+            "pairwiseAccuracy": 0.7341060416903114,
+            "meanAbsoluteRankError": 23.26013143483023
+          },
+          "ensemble": {
+            "sampleSize": 1826,
+            "mae": 4.408942427662467,
+            "rmse": 6.068161779430189,
+            "meanError": 0.11225124420945133,
+            "coverage": 0.8055859802847755,
+            "meanIntervalWidth": 14.287717415671265,
+            "intervalScore": 22.47013878854575,
+            "spearmanCorrelation": 0.6255026573624737,
+            "pairwiseAccuracy": 0.7336520637082434,
+            "meanAbsoluteRankError": 23.350492880613363
+          },
+          "adaptive": {
+            "sampleSize": 1826,
+            "mae": 4.408942427662467,
+            "rmse": 6.068161779430189,
+            "meanError": 0.11225124420945133,
+            "coverage": 0.8055859802847755,
+            "meanIntervalWidth": 14.287717415671265,
+            "intervalScore": 22.47013878854575,
+            "spearmanCorrelation": 0.6255026573624737,
+            "pairwiseAccuracy": 0.7336520637082434,
+            "meanAbsoluteRankError": 23.350492880613363
+          }
+        },
+        "TE": {
+          "legacy": {
+            "sampleSize": 909,
+            "mae": 3.8350227404929105,
+            "rmse": 5.554848080386014,
+            "meanError": -0.2856595298372936,
+            "coverage": 0.5522552255225522,
+            "meanIntervalWidth": 6.366564061836115,
+            "intervalScore": 22.067567800236702,
+            "spearmanCorrelation": 0.5902845078752191,
+            "pairwiseAccuracy": 0.7158071122695959,
+            "meanAbsoluteRankError": 12.357535753575357
+          },
+          "ensemble": {
+            "sampleSize": 909,
+            "mae": 3.7704976083941255,
+            "rmse": 5.445699957778087,
+            "meanError": -0.3472295912292666,
+            "coverage": 0.801980198019802,
+            "meanIntervalWidth": 12.251012423913325,
+            "intervalScore": 20.11068846311304,
+            "spearmanCorrelation": 0.5939448727680666,
+            "pairwiseAccuracy": 0.7173152113200522,
+            "meanAbsoluteRankError": 12.2992299229923
+          },
+          "adaptive": {
+            "sampleSize": 909,
+            "mae": 3.7704976083941255,
+            "rmse": 5.445699957778087,
+            "meanError": -0.3472295912292666,
+            "coverage": 0.801980198019802,
+            "meanIntervalWidth": 12.251012423913325,
+            "intervalScore": 20.11068846311304,
+            "spearmanCorrelation": 0.5939448727680666,
+            "pairwiseAccuracy": 0.7173152113200522,
+            "meanAbsoluteRankError": 12.2992299229923
+          }
+        }
+      },
+      "source": "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2025.csv.gz"
+    }
+  ],
+  "limitations": [
+    "The target pool uses players with at least three earlier games. Missing outcomes remain missing, not zero.",
+    "Metrics condition on observed player outcomes. Byes and absent stat rows do not measure lineup availability accuracy.",
+    "The replay uses revised historical statistics. It does not reconstruct original injury reports or source publication delays.",
+    "Production context adjustments and live news are excluded. This report measures the statistical base forecast.",
+    "Rank metrics compare players within the same position and week.",
+    "Neighbor decision tests pair adjacent projected ranks within each week and position. These are synthetic choices, not saved user decisions.",
+    "Each model selects its own neighbor pairs. Regret values are diagnostics, not a shared-decision comparison. Tied outcomes do not enter probability scores.",
+    "Legacy reproduces the previous point formula and heuristic range with corrected scoring. New ranges use prior-week errors only.",
+    "Interval scores use an 80% target level. Coverage under changing season conditions has no per-player guarantee."
+  ]
+}

@@ -1,3 +1,7 @@
+import { positionPrior } from '../learning/engine.js';
+import { normalizePlayerName } from '../identity/normalize.js';
+import { optimizeLineup } from '../analysis/lineup.js';
+import { forecastMean, type ProjectionParameters } from '../projection/statistics.js';
 import type { NflversePlayerWeek } from '../nflverse/types.js';
 import {
   inspectPlayerScoringSettings,
@@ -55,10 +59,12 @@ export interface TradeImpactAnalysis {
   };
   throughWeek: number;
   valueDelta: number;
-  verdict: 'close' | 'gives-more-weekly-value' | 'receives-more-weekly-value';
+  lineupImpact: { scope: 'offensive-starters'; before: ReturnType<typeof optimizeLineup>; after: ReturnType<typeof optimizeLineup>; delta: number } | null;
+  verdict: 'insufficient-lineup-data' | 'close' | 'gives-more-weekly-value' | 'receives-more-weekly-value';
 }
 
 export interface AnalyzeTradeImpactInput {
+  parameters?: ProjectionParameters;
   analysisSeason: number;
   givePlayers: SleeperPlayer[];
   league: SleeperLeague;
@@ -69,6 +75,8 @@ export interface AnalyzeTradeImpactInput {
   throughWeek: number;
 }
 
+const OFFENSIVE_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
+const OFFENSIVE_SLOTS = new Set(['QB', 'RB', 'WR', 'TE', 'FLEX', 'SUPER_FLEX', 'REC_FLEX', 'WRTE_FLEX', 'WRRB_FLEX', 'WRRBTE_FLEX']);
 const NON_STARTER_SLOTS = new Set(['BN', 'BENCH', 'FLEX', 'SUPER_FLEX', 'REC_FLEX', 'IDP_FLEX', 'IR', 'RESERVE', 'TAXI']);
 
 export function analyzeTradeImpact(
@@ -77,10 +85,27 @@ export function analyzeTradeImpact(
   if (input.givePlayers.length === 0 || input.receivePlayers.length === 0) {
     throw new Error('A trade analysis needs at least one player on each side.');
   }
-  const rowsByName = groupRowsByName(input.rows, input.throughWeek);
-  const give = tradeSide(input.givePlayers, rowsByName, input.league);
-  const receive = tradeSide(input.receivePlayers, rowsByName, input.league);
+  if ([...input.givePlayers, ...input.receivePlayers].some((player) => !OFFENSIVE_POSITIONS.has(player.position?.toUpperCase() ?? ''))) throw new Error('Trade forecasts support QB, RB, WR, and TE players.');
+  const rowsByName = groupRowsByName(input.rows.filter((row) => row.season === input.analysisSeason && row.seasonType === 'REG'), input.throughWeek);
+  const give = tradeSide(input.givePlayers, rowsByName, input.league, input.parameters);
+  const receive = tradeSide(input.receivePlayers, rowsByName, input.league, input.parameters);
+  const giveIds = new Set(input.givePlayers.map((player) => player.player_id));
+  const afterPlayers = [...input.rosterPlayers.filter((player) => !giveIds.has(player.player_id)), ...input.receivePlayers];
+  let lineupImpact: TradeImpactAnalysis['lineupImpact'] = null;
+  try {
+    const knownSlots = new Set([...OFFENSIVE_SLOTS, 'K', 'DEF', 'DL', 'DE', 'DT', 'LB', 'DB', 'CB', 'S', 'IDP_FLEX', 'BN', 'BENCH', 'IR', 'RESERVE', 'TAXI']);
+    if (input.league.roster_positions.some((slot) => !knownSlots.has(slot.toUpperCase()))) throw new Error('Unsupported starter slot.');
+    const lineup = (players: SleeperPlayer[]) => optimizeLineup(
+      tradeSide(players.filter((player) => OFFENSIVE_POSITIONS.has(player.position?.toUpperCase() ?? '')), rowsByName, input.league, input.parameters).players.map((player) => ({
+        id: player.playerId, name: player.name, positions: [player.position], points: player.estimatedWeeklyValue,
+      })), input.league.roster_positions.filter((slot) => OFFENSIVE_SLOTS.has(slot.toUpperCase())));
+    if ((input.roster.players ?? []).some((id) => !input.rosterPlayers.some((player) => player.player_id === id))) throw new Error('Missing roster identity.');
+    const before = lineup(input.rosterPlayers);
+    const after = lineup(afterPlayers);
+    if (before.complete && after.complete && before.assignments.length > 0) lineupImpact = { scope: 'offensive-starters', before, after, delta: round(after.expectedPoints - before.expectedPoints) };
+  } catch { /* Missing or ambiguous bench evidence prevents a lineup verdict. */ }
   const valueDelta = round(receive.totalWeeklyValue - give.totalWeeklyValue);
+  const decisionDelta = lineupImpact?.delta ?? 0;
   const scoring = inspectPlayerScoringSettings(input.league.scoring_settings);
   const closeThreshold = Math.max(2, (give.totalWeeklyValue + receive.totalWeeklyValue) * 0.05);
   const rosterFit = rosterFitChanges(
@@ -99,7 +124,10 @@ export function analyzeTradeImpact(
       name: input.league.name,
       season: input.league.season,
     },
+    lineupImpact,
     limitations: [
+      'The verdict measures the change in the best legal offensive starting lineup. Unchanged kicker and defense slots cancel from the comparison.',
+      ...(!lineupImpact ? ['The full lineup lacks resolved production or supported starter slots. Seb cannot give a lineup value verdict.'] : []),
       'The value uses completed weekly production and the selected league scoring rules.',
       'The value excludes draft picks, contract values, and unverified market rankings.',
       'The Sleeper injury field is not an official injury report.',
@@ -115,9 +143,9 @@ export function analyzeTradeImpact(
     scoring,
     throughWeek: input.throughWeek,
     valueDelta,
-    verdict: Math.abs(valueDelta) <= closeThreshold
+    verdict: !lineupImpact ? 'insufficient-lineup-data' : Math.abs(decisionDelta) <= closeThreshold
       ? 'close'
-      : valueDelta > 0
+      : decisionDelta > 0
         ? 'receives-more-weekly-value'
         : 'gives-more-weekly-value',
   };
@@ -127,10 +155,15 @@ function tradeSide(
   players: readonly SleeperPlayer[],
   rowsByName: ReadonlyMap<string, NflversePlayerWeek[]>,
   league: SleeperLeague,
+  parameters?: ProjectionParameters,
 ): TradeSideImpact {
   const impacts = players.map((player) => {
     const name = playerName(player);
-    const rows = rowsByName.get(normalizeName(name)) ?? [];
+    const matches = (rowsByName.get(normalizeName(name)) ?? []).filter((row) => row.position === player.position?.toUpperCase());
+    const ids = new Set(matches.map((row) => row.playerId));
+    if (ids.size > 1) throw new Error(`The historical identity for ${name} is ambiguous.`);
+    const rows = matches;
+    if (new Set(rows.map((row) => row.week)).size !== rows.length) throw new Error('Duplicate player-week statistics cannot support a trade.');
     if (rows.length === 0) {
       throw new Error(`nflverse found no completed weekly statistics for ${name}.`);
     }
@@ -139,15 +172,15 @@ function tradeSide(
     const seasonAverage = average(values);
     const recentAverage = average(recent);
     const availabilityFactor = playerAvailabilityFactor(
-      player.injury_status ?? player.status ?? null,
+      [player.injury_status, player.status].filter(Boolean).join(' ') || null,
     );
     return {
       availabilityFactor,
       estimatedWeeklyValue: round(
-        (seasonAverage * 0.55 + recentAverage * 0.45) * availabilityFactor,
+        forecastMean(values, positionPrior([...rowsByName.values()].flat(), player.position ?? '', rows[0]!.playerId, league.scoring_settings), parameters) * availabilityFactor,
       ),
       games: rows.length,
-      injuryStatus: player.injury_status ?? player.status ?? null,
+      injuryStatus: [player.injury_status, player.status].filter(Boolean).join(' ') || null,
       name,
       playerId: player.player_id,
       position: player.position?.toUpperCase() ?? 'UNKNOWN',
@@ -221,7 +254,7 @@ function groupRowsByName(
 
 function playerAvailabilityFactor(status: string | null): number {
   const value = status?.trim().toLowerCase() ?? '';
-  if (['out', 'ir', 'pup', 'suspended', 'inactive'].includes(value)) return 0;
+  if (/\b(out|ir|pup|nfi|suspended|inactive|injured reserve)\b/.test(value)) return 0;
   if (value.includes('doubt')) return 0.4;
   if (value.includes('question')) return 0.85;
   return 1;
@@ -234,7 +267,7 @@ function playerName(player: SleeperPlayer): string {
 }
 
 function normalizeName(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return normalizePlayerName(value);
 }
 
 function average(values: readonly number[]): number {

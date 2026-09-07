@@ -1,6 +1,7 @@
+import { forecastMean, type ProjectionParameters } from '../projection/statistics.js';
 import { normalizePlayerName } from '../identity/normalize.js';
 import type { NflversePlayerWeek } from '../nflverse/types.js';
-import { scorePlayerWeek } from '../projection/player-projection.js';
+import { scorePlayerWeek, inspectPlayerScoringSettings } from '../projection/player-projection.js';
 import type {
   SleeperLeague,
   SleeperPlayer,
@@ -13,6 +14,7 @@ export type WaiverRiskLevel = 'low' | 'medium' | 'high';
 export type WaiverNeedLevel = 'critical' | 'high' | 'medium' | 'depth';
 
 export interface WaiverProduction {
+  expectedPoints: number;
   analysisSeason: number;
   games: number;
   latestWeek: number;
@@ -115,6 +117,7 @@ export interface WaiverAssistantResult {
 }
 
 export interface RankWaiverTargetsInput {
+  parameters?: ProjectionParameters;
   analysisSeason: number;
   league: SleeperLeague;
   lookbackHours: number;
@@ -148,22 +151,6 @@ const ACTIVE_PLAYER_POSITIONS = new Set([
   'DB',
 ]);
 const NON_STARTER_SLOTS = new Set(['BN', 'BENCH', 'IR', 'RESERVE', 'TAXI']);
-const SUPPORTED_SCORING_KEYS = new Set([
-  'pass_yd',
-  'pass_td',
-  'pass_int',
-  'rush_yd',
-  'rush_td',
-  'rec',
-  'rec_yd',
-  'rec_td',
-  'bonus_pass_yd_300',
-  'bonus_pass_yd_400',
-  'bonus_rush_yd_100',
-  'bonus_rush_yd_200',
-  'bonus_rec_yd_100',
-  'bonus_rec_yd_200',
-]);
 const PRODUCTION_REFERENCE_POINTS = new Map([
   ['QB', 24],
   ['RB', 16],
@@ -184,12 +171,13 @@ export function rankWaiverTargets(
   const ownedPlayerIds = collectOwnedPlayerIds(input.rosters);
   const eligiblePositions = collectEligiblePositions(input.league.roster_positions);
   const rosterPlayers = collectRosterPlayers(input.selectedRoster, input.players);
-  const rowsByPlayer = resolveNflverseRows(input.trendingAdds, input.players, input.nflverseRows);
+  const uniqueTrends = [...new Map(input.trendingAdds.map((trend) => [trend.player_id, trend])).values()];
+  const rowsByPlayer = resolveNflverseRows(uniqueTrends, input.players, input.nflverseRows.filter((row) => row.season === input.analysisSeason && row.seasonType === 'REG' && row.week <= input.throughWeek));
   let skippedInactive = 0;
   let skippedRostered = 0;
   let skippedUnsupportedPosition = 0;
 
-  const prepared = input.trendingAdds.flatMap((trend): PreparedCandidate[] => {
+  const prepared = uniqueTrends.flatMap((trend): PreparedCandidate[] => {
     if (ownedPlayerIds.has(trend.player_id)) {
       skippedRostered += 1;
       return [];
@@ -210,6 +198,7 @@ export function rankWaiverTargets(
       input.league,
       input.analysisSeason,
       input.throughWeek,
+      input.parameters,
     );
     const rosterNeed = calculateRosterNeed(
       position,
@@ -295,12 +284,18 @@ function resolveNflverseRows(
   rows: readonly NflversePlayerWeek[],
 ): Map<string, NflversePlayerWeek[]> {
   const groups = new Map<string, NflversePlayerWeek[]>();
+  const byName = new Map<string, NflversePlayerWeek[]>();
+  for (const row of rows) {
+    const key = normalizePlayerName(row.playerDisplayName);
+    const group = byName.get(key) ?? [];
+    group.push(row); byName.set(key, group);
+  }
   for (const trend of trendingAdds) {
     const player = players[trend.player_id];
     if (!player) continue;
     const name = normalizePlayerName(playerName(player));
     const position = playerPosition(player);
-    const matches = rows.filter((row) =>
+    const matches = (byName.get(name) ?? []).filter((row) =>
       normalizePlayerName(row.playerDisplayName) === name &&
       (!position || row.position.toUpperCase() === position),
     );
@@ -334,6 +329,7 @@ function summarizeProduction(
   league: SleeperLeague,
   analysisSeason: number,
   throughWeek: number,
+  parameters?: ProjectionParameters,
 ): WaiverProduction | null {
   const selected = rows
     .filter((row) =>
@@ -343,7 +339,7 @@ function summarizeProduction(
     )
     .sort((left, right) => left.week - right.week);
   const latest = selected.at(-1);
-  if (!latest) return null;
+  if (!latest || new Set(selected.map((row) => row.week)).size !== selected.length) return null;
   const weeklyPoints = selected.map((row) => ({
     points: scorePlayerWeek(row, league.scoring_settings),
     week: row.week,
@@ -356,6 +352,7 @@ function summarizeProduction(
   return {
     analysisSeason,
     games: weeklyPoints.length,
+    expectedPoints: forecastMean(weeklyPoints.map((value) => value.points), null, parameters),
     latestWeek: latest.week,
     recentAverage,
     seasonAverage,
@@ -508,7 +505,7 @@ function faabRange(
   risk: WaiverRiskLevel,
   faab: Omit<FaabRange, 'lower' | 'lowerPercent' | 'rationale' | 'upper' | 'upperPercent'> | null,
 ): FaabRange | null {
-  if (!faab) return null;
+  if (!faab || faab.remaining < faab.minimumBid) return null;
   let [lowerPercent, upperPercent] = rankScore >= 80
     ? [18, 30]
     : rankScore >= 65
@@ -522,7 +519,7 @@ function faabRange(
   }
   let lower = Math.min(faab.remaining, Math.round(faab.budget * lowerPercent / 100));
   let upper = Math.min(faab.remaining, Math.round(faab.budget * upperPercent / 100));
-  if (faab.remaining >= faab.minimumBid && upper > 0) {
+  if (faab.remaining >= faab.minimumBid) {
     lower = Math.max(lower, faab.minimumBid);
     upper = Math.max(upper, lower);
   }
@@ -540,6 +537,8 @@ function leagueFaab(
   league: SleeperLeague,
   roster: SleeperRoster,
 ): Omit<FaabRange, 'lower' | 'lowerPercent' | 'rationale' | 'upper' | 'upperPercent'> | null {
+  const type = numericSetting(league.settings.waiver_type);
+  if (type !== null && type !== 2) return null;
   const budget = numericSetting(league.settings.waiver_budget);
   if (budget === null || budget < 0) return null;
   const used = Math.max(0, roster.settings.waiver_budget_used ?? 0);
@@ -556,20 +555,14 @@ function waiverMode(
   faab: ReturnType<typeof leagueFaab>,
 ): 'faab' | 'priority' | 'unknown' {
   const waiverType = numericSetting(league.settings.waiver_type);
-  if (waiverType === 2 || faab) return 'faab';
-  if (waiverType !== null) return 'priority';
+  if (waiverType !== null) return waiverType === 2 ? 'faab' : 'priority';
+  if (faab) return 'faab';
   return 'unknown';
 }
 
 function inspectScoring(league: SleeperLeague): { ignored: string[]; used: string[] } {
-  const activeKeys = Object.entries(league.scoring_settings)
-    .filter(([, value]) => typeof value === 'number' && value !== 0)
-    .map(([key]) => key)
-    .sort();
-  return {
-    ignored: activeKeys.filter((key) => !SUPPORTED_SCORING_KEYS.has(key)),
-    used: activeKeys.filter((key) => SUPPORTED_SCORING_KEYS.has(key)),
-  };
+  const scoring = inspectPlayerScoringSettings(league.scoring_settings);
+  return { ignored: scoring.ignoredSettings, used: scoring.usedSettings };
 }
 
 function collectOwnedPlayerIds(rosters: readonly SleeperRoster[]): Set<string> {

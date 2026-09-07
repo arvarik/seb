@@ -74,7 +74,7 @@ describe('waiver and FAAB assistant', () => {
     });
     expect(result.methodology.rankFormula).toContain('45% recent production');
     expect(result.methodology.scoringKeysUsed).toContain('rec');
-    expect(result.methodology.scoringKeysIgnored).toContain('fum_lost');
+    expect(result.methodology.scoringKeysUsed).toContain('fum_lost');
   });
 
   it('reduces the FAAB range when status and missing production create high risk', () => {
@@ -340,6 +340,7 @@ function stat(
     attempts: 0,
     carries: 0,
     completions: 0,
+    fumblesLost: 0,
     fantasyPoints: 0,
     fantasyPointsPpr: 0,
     gameId: `game-${playerId}-${week}`,
@@ -365,3 +366,32 @@ function stat(
     ...overrides,
   };
 }
+
+describe('waiver budget boundaries', () => {
+  const input = () => ({ analysisSeason: 2026, league: league(), lookbackHours: 24, nflverseRows: [], players: players(),
+    resultLimit: 10, rosters: rosters(), selectedRoster: rosters()[0]!, throughWeek: 3, trendingAdds: trends() });
+  it('does not infer FAAB from a leftover budget in a priority waiver league', () => {
+    const base = input(); base.league.settings.waiver_type = 1;
+    const result = rankWaiverTargets(base);
+    expect(result.faab.mode).toBe('priority');
+    expect(result.targets.every((target) => target.faab === null)).toBe(true);
+  });
+  it('withholds a bid when the remaining budget is below the league minimum', () => {
+    const base = input(); base.league.settings.waiver_bid_min = 70;
+    const result = rankWaiverTargets(base);
+    expect(result.targets.every((target) => target.faab === null)).toBe(true);
+  });
+  it('does not repeat a player when the trending source repeats a row', () => {
+    const base = input(); base.trendingAdds.push(...base.trendingAdds);
+    const result = rankWaiverTargets(base);
+    expect(new Set(result.targets.map((target) => target.player.playerId)).size).toBe(result.targets.length);
+  });
+});
+
+it('raises a rounded zero-dollar suggestion to the affordable minimum bid', () => {
+  const settings = league(); settings.settings.waiver_budget = 1; settings.settings.waiver_bid_min = 1;
+  const roster = { ...rosters()[0]!, settings: { waiver_budget_used: 0 } };
+  const result = rankWaiverTargets({ analysisSeason: 2026, league: settings, lookbackHours: 24, nflverseRows: [], players: players(),
+    resultLimit: 10, rosters: [roster], selectedRoster: roster, throughWeek: 3, trendingAdds: trends() });
+  expect(result.targets.every((target) => target.faab?.lower === 1 && target.faab?.upper === 1)).toBe(true);
+});

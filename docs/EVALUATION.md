@@ -181,3 +181,11 @@ It does not model injuries, depth charts, weather, or news.
 It does not use player correlations or roster constraints.
 
 Use this report as a reference baseline, not as a production projection model.
+
+## Compare the production forecast models
+
+The separate `seb evaluate --season YEAR` command tests the statistical forecast used by player projections.
+It compares the previous formula, fixed ensemble, and weekly adaptive ensemble using corrected league-style PPR scoring.
+It reports point error, interval quality, rank quality, and synthetic decision diagnostics.
+Its target pool differs from `seb replay`, so the headline values cannot serve as a direct comparison.
+Read the [analysis guide](ANALYSIS.md#verify-forecast-quality) for methods, measured results, and limitations.

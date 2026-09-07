@@ -24,11 +24,14 @@ Seb keeps the active subject between questions. You do not need to repeat the pl
 | **Player research** | Profiles, game logs, usage, production, news, and injury context. |
 | **Team research** | Schedules, results, offensive trends, defensive matchups, and game conditions. |
 | **My Fantasy** | Automatic discovery of your current Sleeper leagues, rosters, settings, and weekly needs. |
-| **Decisions** | Start-sit, waiver, trade, matchup, and playoff analysis with explicit limits. |
+| **Decisions** | Scoring-aware projections, starter comparisons, legal trade lineups, waiver ranks, and playoff simulations. |
+| **Weekly learning** | Local player trends, team errors, bounded parameter updates, and historical accuracy reports. |
 | **Weather** | Kickoff forecasts and alerts from the National Weather Service for United States venues. |
 | **Evidence** | Numbered sources with live, cached, or stale retrieval details. |
 
-Seb only reads data. It never changes a lineup, waiver claim, trade, or league setting.
+Seb reads your fantasy leagues. It never changes a lineup, waiver claim, trade, or league setting.
+
+Optional weekly learning updates local forecast parameters after completed games and validation.
 
 ## Quick start
 
@@ -254,6 +257,8 @@ Seb states these limits in the answer when they affect a conclusion.
 - [Chat connectors](docs/CONNECTORS.md)
 
 ### Understand the evidence
+
+- [Analysis, forecast accuracy, and weekly learning](docs/ANALYSIS.md)
 
 - [Data sources and limits](docs/DATA_SOURCES.md)
 - [Provenance and replay](docs/PROVENANCE.md)

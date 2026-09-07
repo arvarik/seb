@@ -6,7 +6,25 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Scoring-aware forecast ensembles, explicit uncertainty intervals, and legal-slot start-sit comparisons.
+- Exact offensive lineup comparison for trades and seeded playoff simulations with schedule checks.
+- Local weekly learning with separate training and validation, bounded overrides, checksummed revisions, and player and team summaries.
+- A weekly-learning skill, learning inspection tools, `seb learn`, and `seb evaluate`.
+- Historical benchmark reports and a research-backed analysis guide.
+
 ### Fixed
+
+- Sleeper yardage bonuses no longer stack across exclusive scoring tiers.
+- Offensive scoring includes fumbles, two-point conversions, reception premiums, and supported special-teams scores.
+- Player and trade calculations reject ambiguous identities, duplicate weeks, future inputs, and regular-season/postseason mixing.
+- Historical league analysis reconstructs standings from the requested weeks. Median matchups no longer reduce weekly scoring averages.
+- Starter comparisons reject players whose games already started. Historical projections exclude recorded target-game weather.
+- Starter comparisons require news for every relevant player and retain failed eligibility checks.
+- Priority waivers no longer inherit a leftover FAAB budget. Bid ranges require enough budget for the league minimum.
+- Doctor validates local forecast overrides. Playoff simulations permit cancellation between batches.
+
 
 - Player searches retain the position filter when they include inactive players.
 - Sleeper evidence retains separate citations for different player filters and trending windows.

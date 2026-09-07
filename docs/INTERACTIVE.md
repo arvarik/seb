@@ -761,4 +761,3 @@ Sleeper player records are not an official NFL roster source.
 ```text
 /fantasy Rank the top trending adds by recent opportunity and schedule.
 ```
-

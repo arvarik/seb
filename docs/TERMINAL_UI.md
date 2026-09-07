@@ -383,4 +383,3 @@ If `/copy` does not change the clipboard, enable OSC 52 in the terminal settings
 Use `/select` when the terminal blocks in-app selection or clipboard access.
 
 Run `seb doctor` when a model or data request fails.
-

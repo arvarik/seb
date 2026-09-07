@@ -36,6 +36,7 @@ export function friendlyToolName(toolName: string): string {
     getGameEnvironment: 'Analyze the game environment',
     getGameWeather: 'Assess kickoff weather',
     getLeagueMatchups: 'Read league matchups',
+    getLeagueTeams: 'Read league team names',
     getLeagueOverview: 'Read the league',
     getLeagueTransactions: 'Read league transactions',
     getNflSchedule: 'Read the nflverse schedule',

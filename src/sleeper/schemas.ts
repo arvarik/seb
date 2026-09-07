@@ -66,7 +66,7 @@ export const sleeperUserSchema: z.ZodType<SleeperUser> = z.object({
   display_name: z.string().optional(),
   avatar: nullableString,
   metadata: z.record(z.string(), z.string().nullable()).nullable().optional(),
-  is_owner: z.boolean().optional(),
+  is_owner: z.boolean().nullable().optional(),
 }).passthrough();
 
 export const sleeperLeagueSchema: z.ZodType<SleeperLeague> = z.object({

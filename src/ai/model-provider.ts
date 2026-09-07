@@ -13,6 +13,18 @@ export const MODEL_PROVIDER_IDS = [
 
 export type ModelProviderId = (typeof MODEL_PROVIDER_IDS)[number];
 
+/** Family names follow stable text models only. Exact IDs bypass discovery. */
+export const MODEL_FAMILIES: Readonly<Record<ModelProviderId, readonly string[]>> = {
+  google: ['gemini-flash', 'gemini-flash-lite', 'gemini-pro'],
+  anthropic: ['claude-sonnet', 'claude-haiku', 'claude-opus', 'claude-fable'],
+  openai: ['gpt', 'gpt-mini', 'gpt-nano', 'gpt-pro', 'gpt-luna', 'gpt-sol', 'gpt-terra', 'gpt-astra'],
+  'openai-compatible': [],
+};
+
+export function isModelFamily(provider: ModelProviderId, model: string): boolean {
+  return MODEL_FAMILIES[provider].includes(model);
+}
+
 export interface ModelProviderCredentials {
   anthropic?: string;
   google?: string;
@@ -29,16 +41,16 @@ export const DEFAULT_PROVIDER_MODELS: Readonly<
   Record<ModelProviderId, ProviderModelDefaults>
 > = {
   google: {
-    fallbackModel: 'gemini-3.6-flash',
-    model: 'gemini-3.7-flash',
+    fallbackModel: 'gemini-flash-lite',
+    model: 'gemini-flash',
   },
   anthropic: {
-    fallbackModel: 'claude-haiku-4-5',
-    model: 'claude-sonnet-5',
+    fallbackModel: 'claude-haiku',
+    model: 'claude-sonnet',
   },
   openai: {
-    fallbackModel: 'gpt-5.4-mini',
-    model: 'gpt-5.6-luna',
+    fallbackModel: 'gpt-mini',
+    model: 'gpt-luna',
   },
   'openai-compatible': {
     fallbackModel: null,
@@ -143,7 +155,7 @@ export function discoverConfiguredModelProviders(
   return configured;
 }
 
-/** Resolves one provider, its model IDs, and its private credential. */
+/** Resolves provider configuration. Use resolveModelFamilies before requesting a family model. */
 export function resolveModelProvider(
   options: ResolveModelProviderOptions = {},
 ): ResolvedModelProvider {
@@ -288,6 +300,11 @@ export function createProviderLanguageModel(
   requestedModel = selection.model,
 ): ProviderLanguageModel {
   const model = modelForSelectedProvider(requestedModel, selection.provider);
+  if (isModelFamily(selection.provider, model)) {
+    throw new ModelProviderConfigurationError(
+      'Resolve the model family with resolveModelFamilies before creating a language model.',
+    );
+  }
   switch (selection.provider) {
     case 'google':
       return createGoogle({ apiKey: requiredSelectionApiKey(selection) })(model);

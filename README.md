@@ -144,6 +144,7 @@ seb
 ```
 
 Seb shows provider reasoning separately from the answer when the provider supplies it.
+Evidence uses one blue summary line. Run `/sources` to view full source details.
 Progress labels show thinking, reasoning, and answer writing.
 Press Escape to stop a request, including during startup. Use `/retry` to try again.
 Scroll with PgUp/PgDn or the mouse wheel. Seb preserves your reading position when the answer finishes.
@@ -158,8 +159,12 @@ Select a configured provider or model for one run.
 
 ```bash
 seb ask --provider anthropic "Show the current NFL state."
-seb chat --provider openai --model gpt-5.6-luna
+seb chat --provider openai --model gpt-luna
 ```
+
+Use a model family such as `gemini-flash`, `claude-sonnet`, or `gpt-luna` to select its newest stable version.
+Enter a family in `seb configure` to save that choice. Exact model IDs stay pinned.
+See [model selection](docs/MODELS.md) for families, defaults, and discovery behavior.
 
 `--provider` keeps the configured fallback. An explicit `--model` uses that model as its own fallback.
 

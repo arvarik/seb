@@ -1320,9 +1320,11 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(uiState.latestAnswer).toContain('Weekly points');
   });
 
-  it('keeps the evidence panel inside the current Seb response', async () => {
+  it.each([40, 80, 120])('shows evidence on one line at %i columns and keeps full copy text', async (columns) => {
     const terminal = createTerminal();
-    const renderer = createRenderer(terminal);
+    terminal.output.columns = columns;
+    const uiState = new InteractiveUiState();
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), uiState);
     const chunks: UIMessageChunk[] = [
       { type: 'start', messageId: 'answer-with-sources' },
       { type: 'start-step' },
@@ -1360,9 +1362,45 @@ describe('SebTerminalRenderer prompt input', () => {
     const frame = terminal.output.text().split('\x1b[H').at(-1) ?? '';
     expect(frame.match(/◆ Seb/gu)).toHaveLength(1);
     expect(frame).toContain('Model answer.');
-    expect(frame).toContain('EVIDENCE');
-    expect(frame).toContain('NFL report');
-    expect(frame).toContain('LIVE');
+    expect(frame).toContain('Evidence · /sources for details');
+    expect(frame).not.toContain('NFL report');
+    expect(frame).not.toContain('accessed now');
+    expect(stripAnsi(frame).split('\r\n').filter((line) => line.includes('Evidence'))).toHaveLength(1);
+    expect(uiState.latestAnswer).toContain('NFL report');
+    expect(uiState.latestAnswer).toContain('LIVE');
+    renderer.close();
+  });
+
+  it('colors the one-line evidence summary and leaves requested details expanded', async () => {
+    const terminal = createTerminal();
+    terminal.output.columns = 40;
+    const uiState = new InteractiveUiState();
+    uiState.recordAnswerEvidence({ answerId: 'evidence-color', capturedAt: new Date().toISOString(),
+      sources: Array.from({ length: 7 }, (_, index) => ({
+        id: `source-${index}`, label: `Source ${index}`, url: `https://example.com/${index}`,
+        accessedAt: new Date().toISOString(),
+      })) });
+    const renderer = new SebTerminalRenderer({
+      input: terminal.input, output: terminal.output, environment: {}, history: new MemoryPromptHistory(),
+      model: 'test-model', session: createSessionState(), sources: new SourceTracker(), uiState, version: 'test',
+    });
+    await renderer.renderStream({ uiMessageStream: new ReadableStream({ start(controller) {
+      controller.enqueue({ type: 'start', messageId: 'evidence-color' });
+      controller.enqueue({ type: 'text-start', id: 'answer' });
+      controller.enqueue({ type: 'text-delta', id: 'answer', delta: 'Answer.' });
+      controller.enqueue({ type: 'text-end', id: 'answer' });
+      controller.enqueue({ type: 'text-start', id: 'evidence' });
+      controller.enqueue({ type: 'text-delta', id: 'evidence', delta: '## Evidence\n\n1. Long source details' });
+      controller.enqueue({ type: 'text-end', id: 'evidence' });
+      controller.enqueue({ type: 'finish', finishReason: 'stop' });
+      controller.close();
+    } }) });
+    const frame = terminal.output.text().split('\x1b[H').at(-1) ?? '';
+    expect(frame).toContain('\x1b[94m  Evidence: 7 sources · /sources');
+    expect(stripAnsi(frame).split('\r\n').every((line) => visibleLength(line) <= 40)).toBe(true);
+    await renderText(renderer, '## Evidence for the latest answer\n\nFull source details stay visible.');
+    expect(stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '')).toContain('Full source details stay visible.');
+    renderer.close();
   });
 
   it('keeps errors from separate streams in the transcript', async () => {

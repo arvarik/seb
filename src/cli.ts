@@ -297,7 +297,7 @@ export async function runCli(
       let modelProvider: ResolvedModelProvider | undefined;
       let modelConfigurationError: unknown;
       try {
-        modelProvider = (await loadModelConfiguration({ environment })).selection;
+        modelProvider = (await loadModelConfiguration({ environment, discoverModels: !command.offline })).selection;
       } catch (error) {
         modelConfigurationError = error;
       }
@@ -1082,6 +1082,7 @@ async function selectModels(
 ): Promise<ModelSelection> {
   const configuration = await loadModelConfiguration({
     environment,
+    signal: currentRequestSignalWithTimeout(10_000),
     ...(modelOverride ? { model: modelOverride } : {}),
     ...(providerOverride ? { provider: providerOverride } : {}),
   });

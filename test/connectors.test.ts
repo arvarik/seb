@@ -175,12 +175,12 @@ describe('connector model provider selection', () => {
     },
   );
 
-  it('keeps the established Google defaults', () => {
+  it('uses Google model families by default', () => {
     expect(resolveConnectorModelProvider({
       GOOGLE_GENERATIVE_AI_API_KEY: 'google-key',
     })).toMatchObject({
-      fallbackModel: 'gemini-3.6-flash',
-      model: 'gemini-3.7-flash',
+      fallbackModel: 'gemini-flash-lite',
+      model: 'gemini-flash',
       provider: 'google',
     });
   });

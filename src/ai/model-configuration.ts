@@ -19,6 +19,7 @@ import {
   type SebSetupCredentials,
   type SetupCredentialStore,
 } from '../setup/credentials.js';
+import { resolveModelFamilies, type ModelFamilyResolutionOptions } from './model-families.js';
 
 const PROVIDER_MODEL_ENVIRONMENT: Readonly<
   Record<ModelProviderId, { fallback: string; model: string }>
@@ -41,7 +42,8 @@ const PROVIDER_MODEL_ENVIRONMENT: Readonly<
   },
 };
 
-export interface LoadModelProviderOptions {
+export interface LoadModelProviderOptions extends ModelFamilyResolutionOptions {
+  discoverModels?: boolean;
   baseURL?: string;
   credentialStore?: SetupCredentialStore;
   environment?: NodeJS.ProcessEnv;
@@ -70,7 +72,7 @@ export async function loadModelConfiguration(
     credentialStore.load(),
     settingsStore.load(),
   ]);
-  const selection = resolveLoadedModelProvider({
+  const configured = resolveLoadedModelProvider({
     ...(options.baseURL === undefined ? {} : { baseURL: options.baseURL }),
     credentials,
     environment,
@@ -81,6 +83,7 @@ export async function loadModelConfiguration(
     ...(options.provider === undefined ? {} : { provider: options.provider }),
     settings,
   });
+  const selection = options.discoverModels === false ? configured : await resolveModelFamilies(configured, options);
   return { credentials, selection, settings };
 }
 

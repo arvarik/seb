@@ -159,6 +159,9 @@ Do not place an API key or another secret in a prompt.
 
 Tool activity uses one compact row per call. Consecutive successful calls to the same tool share a count and total duration. Failures retain their error text.
 
+Evidence occupies one blue line with a source count and `/sources`. Run `/sources` to show full details.
+Copy commands and transcript exports retain the evidence text.
+
 ## Reuse an answer or prompt
 
 Run `/retry` to submit the latest non-command prompt again.
@@ -218,6 +221,7 @@ Run `/context` for the full context.
 Run `/provider` or `/model` to show the active model selection.
 
 Run `/provider NAME` or `/model MODEL` to verify and switch the session model.
+A model family such as `/model gemini-flash` selects its newest stable version. The header shows the resolved ID.
 
 The interface starts a fresh model context after a successful switch.
 

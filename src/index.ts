@@ -1,3 +1,4 @@
+export { MODEL_FAMILIES, isModelFamily, latestModelInFamily, resolveModelFamilies } from './ai/model-families.js';
 export {
   createFantasyFootballAgent,
   createFantasyFootballAnalysisAgent,

@@ -21,6 +21,7 @@ import {
   type SebModelSettings,
 } from '../ai/model-settings.js';
 import { formatModelErrorForUser } from '../model-capacity-error.js';
+import { MODEL_FAMILIES, resolveModelFamilies } from '../ai/model-families.js';
 import {
   createSetupCredentials,
   type SetupCredentialStore,
@@ -161,7 +162,7 @@ export async function runModelConfigurationWizard(
     savedProviderSettings?.fallbackModel,
     model,
   );
-  const selection = resolveModelProvider({
+  const configured = resolveModelProvider({
     ...(baseURL ? { baseURL } : {}),
     credentials,
     environment: options.environment,
@@ -169,8 +170,9 @@ export async function runModelConfigurationWizard(
     model,
     provider,
   });
+  const selection = await resolveModelFamilies(configured, options);
 
-  options.write?.(`Testing ${MODEL_PROVIDER_LABELS[provider]} with ${model}...\n`);
+  options.write?.(`Testing ${MODEL_PROVIDER_LABELS[provider]} with ${model === selection.model ? model : `${model} → ${selection.model}`}...\n`);
   let verification: ModelConfigurationVerification;
   try {
     verification = await options.verify(
@@ -542,7 +544,10 @@ async function readModel(
   }
 
   const defaultModel = savedModel ?? DEFAULT_PROVIDER_MODELS[provider].model ?? undefined;
-  const value = await options.prompt.text('Primary model ID', {
+  if (MODEL_FAMILIES[provider].length > 0) {
+    options.write?.(`Model families: ${MODEL_FAMILIES[provider].join(', ')}. Seb selects the newest stable version at startup. Exact IDs stay pinned.\n`);
+  }
+  const value = await options.prompt.text('Primary model family or exact ID', {
     ...(defaultModel ? { defaultValue: defaultModel } : {}),
     required: true,
   });
@@ -570,7 +575,7 @@ async function readFallbackModel(
     DEFAULT_PROVIDER_MODELS[provider].fallbackModel ??
     model;
   const value = await options.prompt.text(
-    'Fallback model ID. Use the primary model to disable fallback',
+    'Fallback model family or exact ID. Use the primary model to disable fallback',
     { defaultValue: defaultFallback, required: true },
   );
   return validateModelId(value, 'The fallback model');

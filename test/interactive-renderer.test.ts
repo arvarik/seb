@@ -6,12 +6,135 @@ import type { UIMessageChunk } from 'ai';
 import { MemoryPromptHistory } from '../src/interactive/history.js';
 import type { PromptHistory } from '../src/interactive/history.js';
 import { SebTerminalRenderer } from '../src/interactive/renderer.js';
-import { stripAnsi } from '../src/interactive/presentation.js';
+import { stripAnsi, visibleLength } from '../src/interactive/presentation.js';
 import { createSessionState } from '../src/interactive/session.js';
 import { InteractiveUiState } from '../src/interactive/ui-state.js';
 import { SourceTracker } from '../src/sources.js';
 
 describe('SebTerminalRenderer prompt input', () => {
+  it('shows reasoning and keeps the writing status through timer updates', async () => {
+    const terminal = createTerminal();
+    const uiState = new InteractiveUiState();
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), uiState);
+    let controller!: ReadableStreamDefaultController<UIMessageChunk>;
+    const rendered = renderer.renderStream({
+      uiMessageStream: new ReadableStream({ start(value) { controller = value; } }),
+    });
+    const frame = () => stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    controller.enqueue({ type: 'reasoning-start', id: 'reason' });
+    controller.enqueue({ type: 'reasoning-delta', id: 'reason', delta: 'Checking the available sources.' });
+    await expect.poll(frame).toContain('Reasoning · in progress');
+    expect(frame()).toContain('Checking the available sources.');
+    controller.enqueue({ type: 'reasoning-end', id: 'reason' });
+    controller.enqueue({ type: 'text-start', id: 'answer' });
+    controller.enqueue({ type: 'text-delta', id: 'answer', delta: 'Here is the answer.' });
+    await expect.poll(frame).toContain('Writing answer');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(frame()).toContain('Writing answer');
+    expect(frame()).not.toContain('Reasoning · in progress');
+    controller.enqueue({ type: 'text-end', id: 'answer' });
+    controller.enqueue({ type: 'finish', finishReason: 'stop' });
+    controller.close();
+    await rendered;
+    expect(uiState.latestAnswer).toBe('Here is the answer.');
+    expect(frame()).toContain('Ready');
+    renderer.close();
+  });
+
+  it('cancels a stalled source even when the provider ignores abort', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    let cancelled = false;
+    let aborted = false;
+    const rendered = renderer.renderStream({
+      abort: () => { aborted = true; },
+      uiMessageStream: new ReadableStream({
+        cancel() { cancelled = true; },
+      }),
+    });
+    terminal.input.type('\x1b');
+    await expect.poll(() => cancelled).toBe(true);
+    await expect(rendered).resolves.toBeUndefined();
+    expect(aborted).toBe(true);
+    const prompt = renderer.readPrompt();
+    terminal.input.type('Try again\r');
+    await expect(prompt).resolves.toBe('Try again');
+    renderer.close();
+  });
+
+  it('keeps the reading position when an answer finishes after scrolling', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    let controller!: ReadableStreamDefaultController<UIMessageChunk>;
+    const rendered = renderer.renderStream({
+      uiMessageStream: new ReadableStream({ start(value) { controller = value; } }),
+    });
+    controller.enqueue({ type: 'text-start', id: 'answer' });
+    controller.enqueue({ type: 'text-delta', id: 'answer', delta:
+      Array.from({ length: 80 }, (_, index) => `Unique answer row ${index}`).join('\n') });
+    const frame = () => stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    await expect.poll(frame).toContain('Unique answer row 79');
+    terminal.input.type('\x1b[5~');
+    await expect.poll(frame).toContain('Viewing earlier transcript');
+    const before = frame().match(/Unique answer row \d+/gu);
+    controller.enqueue({ type: 'text-end', id: 'answer' });
+    controller.enqueue({ type: 'finish', finishReason: 'stop' });
+    controller.close();
+    await rendered;
+    expect(frame().match(/Unique answer row \d+/gu)).toEqual(before);
+    renderer.close();
+  });
+
+  it.each([40, 80, 120])('wraps reasoning within a %i-column terminal', async (columns) => {
+    const terminal = createTerminal();
+    terminal.output.columns = columns;
+    const renderer = createRenderer(terminal);
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'reasoning-start', id: 'reason' });
+          controller.enqueue({ type: 'reasoning-delta', id: 'reason', delta:
+            'Check the matchup 🏈 and the sources. '.repeat(4) + '\x1b[2J' });
+          controller.enqueue({ type: 'reasoning-end', id: 'reason' });
+          controller.enqueue({ type: 'text-start', id: 'answer' });
+          controller.enqueue({ type: 'text-delta', id: 'answer', delta: '## Result\nA readable answer.' });
+          controller.enqueue({ type: 'text-end', id: 'answer' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
+          controller.close();
+        },
+      }),
+    });
+    const rawFrame = terminal.output.text().split('\x1b[H').at(-1) ?? '';
+    expect(rawFrame).not.toContain('\x1b[2J');
+    const frame = stripAnsi(rawFrame);
+    expect(frame).toContain('Reasoning');
+    expect(frame).toContain('A readable answer.');
+    expect(frame.split('\n').every((line) => visibleLength(line) <= columns)).toBe(true);
+    renderer.close();
+  });
+
+  it('marks an interrupted tool as stopped and restores prompt input', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    const rendered = renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'tool-input-available', toolCallId: 'search',
+            toolName: 'searchCurrentNews', input: {} });
+        },
+      }),
+    });
+    await expect.poll(() => terminal.output.text()).toContain('Response in progress');
+    terminal.input.type('\x1b');
+    await rendered;
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame).toContain('stopped');
+    expect(frame).toContain('This response is incomplete');
+    expect(frame).not.toContain('Working');
+    expect(frame).not.toContain('Response in progress');
+    renderer.close();
+  });
+
   it('retains consecutive answers when streams omit message IDs', async () => {
     const terminal = createTerminal();
     const renderer = createRenderer(terminal);

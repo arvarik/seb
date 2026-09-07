@@ -140,6 +140,11 @@ Start the full terminal interface.
 seb
 ```
 
+Seb shows provider reasoning separately from the answer when the provider supplies it.
+Progress labels show thinking, reasoning, and answer writing.
+Press Escape to stop a request, including during startup. Use `/retry` to try again.
+Scroll with PgUp/PgDn or the mouse wheel. Seb preserves your reading position when the answer finishes.
+
 Ask one question from a script.
 
 ```bash

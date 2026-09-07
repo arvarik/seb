@@ -6,13 +6,21 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-07
+
 ### Fixed
+
+- Escape stops stalled requests, including requests that still wait for provider setup. Cancelled responses show an incomplete-response notice.
+- Completed answers preserve the reading position when the user scrolls through the transcript.
 
 - New prompts keep earlier answers in the terminal transcript. Approval continuations retain the same answer ID.
 - Sleeper league users accept a null commissioner flag. This restores league overview, analysis, and matchup estimates for affected leagues.
 - Tool errors distinguish invalid inputs, unavailable tools, and Sleeper failures from model provider failures.
 
 ### Changed
+
+- Provider reasoning appears in a separate, muted transcript section. Progress labels distinguish thinking, reasoning, and answer writing.
+- The busy prompt shows that a response is in progress. Tool indicators stop when a request ends.
 
 - Prompt entry draws one frame per input chunk, restores drafts after history navigation, and ignores duplicate submission keys.
 - Long prompts use at most five editor rows to keep the transcript visible.

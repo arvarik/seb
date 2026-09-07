@@ -105,7 +105,7 @@ export interface SebRendererOptions {
   version: string;
 }
 
-type SectionKind = 'assistant' | 'error' | 'tool' | 'user';
+type SectionKind = 'assistant' | 'error' | 'reasoning' | 'tool' | 'user';
 
 interface Section {
   content: string;
@@ -260,8 +260,14 @@ export class SebTerminalRenderer {
     this.interrupted = false;
     this.streamStartedAt = Date.now();
     this.activeStartedAt = this.streamStartedAt;
-    this.status = 'Thinking';
-    this.streamStop = result.abort;
+    this.updateStreamStatus(undefined);
+    this.streamMessage = undefined;
+    this.activeToolIds.clear();
+    const sourceReader = toReadableStream(result.uiMessageStream).getReader();
+    this.streamStop = () => {
+      result.abort?.();
+      void sourceReader.cancel().catch(() => undefined);
+    };
     this.startTicker();
     this.onData = (chunk) => {
       this.dispatchInput(chunk, (key) => this.handleStreamKey(key));
@@ -273,7 +279,14 @@ export class SebTerminalRenderer {
     let response = result.message;
     let streamFailed = false;
     const streamErrorId = `stream-error-${++this.streamSequence}`;
-    const stream = toReadableStream(result.uiMessageStream);
+    const stream = new ReadableStream<UIMessageChunk>({
+      async pull(controller) {
+        const next = await sourceReader.read();
+        if (next.done) controller.close();
+        else controller.enqueue(next.value);
+      },
+    });
+    this.paint();
     try {
       const messages = readUIMessageStream({
         message: initialMessage,
@@ -291,8 +304,7 @@ export class SebTerminalRenderer {
       for await (const message of messages) {
         response = message;
         this.streamMessage = message;
-        this.renderMessage(message);
-        if (this.interrupted) break;
+        if (!this.interrupted) this.renderMessage(message);
       }
     } catch (error) {
       if (!this.interrupted) {
@@ -300,10 +312,18 @@ export class SebTerminalRenderer {
         this.upsert({ content: errorMessage(error), id: streamErrorId, kind: 'error', title: 'Error' });
       }
     } finally {
-      if (this.interrupted) result.abort?.();
+      sourceReader.releaseLock();
       this.stopTicker();
       this.detachInput();
-      if (!this.interrupted && response) this.renderMessage(response, true);
+      if (response) this.renderMessage(response, true);
+      if (this.interrupted) {
+        this.upsert({
+          content: 'This response is incomplete. Use /retry to try the prompt again.',
+          id: streamErrorId,
+          kind: 'error',
+          title: 'Request stopped',
+        });
+      }
       this.activeToolIds.clear();
       this.status = this.interrupted
         ? 'Request stopped'
@@ -316,10 +336,15 @@ export class SebTerminalRenderer {
       ) === true;
       if (!this.interrupted && !streamFailed && !awaitsApproval) {
         this.captureAnswer(response);
-        this.focusLatestAnswer();
+        if (this.scrollOffset === 0) this.focusLatestAnswer();
       }
       this.paint();
       this.streamStop = undefined;
+      this.streamMessage = undefined;
+      if (!awaitsApproval) {
+        this.toolStartedAt.clear();
+        this.toolDurations.clear();
+      }
     }
     if (this.exitRequested) throw new Error('Interrupted');
     return this.interrupted || streamFailed ? undefined : response;
@@ -835,6 +860,14 @@ export class SebTerminalRenderer {
           active.add(id);
           this.upsert({ content: part.text, id, kind: 'assistant', title: 'Seb' });
         }
+      } else if (part.type === 'reasoning' && part.text.trim()) {
+        active.add(id);
+        this.upsert({
+          content: part.text,
+          id,
+          kind: 'reasoning',
+          title: final || part.state === 'done' ? 'Reasoning' : 'Reasoning · in progress',
+        });
       } else if (isToolUIPart(part)) {
         const state = part.state;
         const name = getToolName(part);
@@ -844,7 +877,8 @@ export class SebTerminalRenderer {
         }
         active.add(id);
         const retrying = state === 'output-error' && !final;
-        const running = retrying || state === 'input-streaming' || state === 'input-available' || state === 'approval-requested';
+        const unfinished = state === 'input-streaming' || state === 'input-available';
+        const running = !final && (retrying || unfinished || state === 'approval-requested');
         if (running) {
           this.activeToolIds.add(id);
           if (!this.toolStartedAt.has(id)) this.toolStartedAt.set(id, Date.now());
@@ -855,13 +889,15 @@ export class SebTerminalRenderer {
             this.toolDurations.set(id, Date.now() - startedAt);
           }
         }
-        const failed = state === 'output-denied' || (state === 'output-error' && final);
+        const failed = state === 'output-denied' || (final && (state === 'output-error' || unfinished));
         const marker = failed ? symbol(this.theme, 'danger') : running ? this.spinner() : symbol(this.theme, 'done');
         const startedAt = this.toolStartedAt.get(id) ?? this.activeStartedAt;
         const elapsed = formatElapsed(running
           ? Date.now() - startedAt
           : this.toolDurations.get(id) ?? Date.now() - startedAt);
-        const detail = failed && 'errorText' in part ? ` · ${part.errorText}` : '';
+        const detail = final && unfinished
+          ? this.interrupted ? ' · stopped' : ' · incomplete'
+          : failed && 'errorText' in part ? ` · ${part.errorText}` : '';
         this.upsert({
           content: `${marker} ${friendlyToolName(name)} · ${retrying ? 'retrying' : elapsed}${detail}`,
           id,
@@ -875,6 +911,7 @@ export class SebTerminalRenderer {
         }
       }
     }
+    if (!final && this.activeToolIds.size === 0) this.updateStreamStatus(message);
     this.sections = this.sections.filter((section) =>
       !section.id.startsWith(`${message.id}:`) || active.has(section.id));
     if (previousBodyLength !== null) {
@@ -1066,11 +1103,22 @@ export class SebTerminalRenderer {
     this.ticker = setInterval(() => {
       if (this.activeToolIds.size > 0) this.renderMessage(this.streamMessage ?? { id: '', role: 'assistant', parts: [] });
       else {
-        this.status = `Thinking · ${formatElapsed(Date.now() - this.streamStartedAt)}`;
+        if (!this.interrupted) this.updateStreamStatus(this.streamMessage);
         this.requestPaint();
       }
     }, 250);
     this.ticker.unref?.();
+  }
+
+  private updateStreamStatus(message: UIMessage | undefined): void {
+    const latestPart = message?.parts.findLast((part) =>
+      part.type === 'text' || part.type === 'reasoning' || isToolUIPart(part));
+    const phase = latestPart?.type === 'text' && latestPart.state === 'streaming'
+      ? 'Writing answer'
+      : latestPart?.type === 'reasoning' && latestPart.state === 'streaming'
+        ? 'Reasoning'
+        : 'Thinking';
+    this.status = `${this.spinner()} ${phase} · ${formatElapsed(Date.now() - this.streamStartedAt)} · Escape stops`;
   }
 
   private stopTicker(): void {
@@ -1398,7 +1446,7 @@ export class SebTerminalRenderer {
     }
     const rows: BodyRow[] = [];
     for (const section of this.sections) {
-      const color = section.kind === 'error' ? 'danger' : section.kind === 'tool' ? 'tool' : section.kind === 'assistant' ? 'assistant' : 'accent';
+      const color = section.kind === 'reasoning' ? 'dim' : section.kind === 'error' ? 'danger' : section.kind === 'tool' ? 'tool' : section.kind === 'assistant' ? 'assistant' : 'accent';
       const lines = [paint(this.theme, color, `${section.kind === 'assistant' ? symbol(this.theme, 'assistant') : symbol(this.theme, 'bullet')} ${sanitizeTerminalText(section.title)}`)];
       const rendered = section.kind === 'assistant'
         ? renderAnalysisText(
@@ -1408,7 +1456,8 @@ export class SebTerminalRenderer {
         )
         : sanitizeTerminalText(section.content);
       for (const line of rendered.split('\n')) {
-        lines.push(...wrapTerminalLine(line, Math.max(20, width - 2)).map((part) => `  ${part}`));
+        lines.push(...wrapTerminalLine(line, Math.max(20, width - 2)).map((part) =>
+          section.kind === 'reasoning' ? paint(this.theme, 'dim', `  ${part}`) : `  ${part}`));
       }
       if (!this.theme.compact) lines.push('');
       rows.push(...lines.map((text, sectionRowIndex) => ({
@@ -1445,6 +1494,9 @@ export class SebTerminalRenderer {
     const promptLines = this.overlay === 'none'
       ? renderEditor(this.editor, width - 4, this.theme, maximumPromptRows)
       : [];
+    if (this.ticker && this.overlay === 'none') {
+      promptLines.splice(0, promptLines.length, paint(this.theme, 'dim', 'Response in progress'));
+    }
     const status = this.overlay !== 'none'
       ? 'Panel open · PgUp/PgDn or the mouse wheel scrolls · Escape closes'
       : this.answerFocus
@@ -1458,7 +1510,7 @@ export class SebTerminalRenderer {
         paint(this.theme, 'source', fit(` ${index + 1}  ${sanitizeTerminalText(value)}`, width))),
       paint(this.theme, 'dim', '─'.repeat(width)),
       ...promptLines.map((line, index) => `${index === 0 ? `${symbol(this.theme, 'prompt')} ` : '  '}${line}`),
-      paint(this.theme, 'dim', fit(` ${sanitizeTerminalText(status)} · Ctrl+G context · Ctrl+K commands · ? help`, width)),
+      paint(this.theme, 'dim', fit(` ${sanitizeTerminalText(status)}${this.ticker ? ' · Ctrl+C exits · PgUp/PgDn scrolls' : ' · Ctrl+G context · Ctrl+K commands · ? help'}`, width)),
     ];
   }
 

@@ -102,22 +102,21 @@ export class SebConversationRunner {
 
       const abortController = new AbortController();
       const previousAssistant = lastAssistantMessage(messages);
-      let uiMessageStream: ReadableStream<UIMessageChunk>;
-      try {
-        uiMessageStream = await this.transport.sendMessages({
-          abortSignal: abortController.signal,
-          chatId: this.chatId,
-          messageId: undefined,
-          messages: [...messages],
-          trigger: 'submit-message',
-        });
-      } catch (error) {
-        if (isInterruptedError(error)) return;
-        uiMessageStream = requestSetupErrorStream(
-          error,
-          this.modelErrorContext?.(),
-        );
-      }
+      const uiMessageStream = pendingRequestStream(
+        async () => {
+          try {
+            return await this.transport.sendMessages({
+              abortSignal: abortController.signal,
+              chatId: this.chatId,
+              messageId: undefined,
+              messages: [...messages],
+              trigger: 'submit-message',
+            });
+          } catch (error) {
+            return requestSetupErrorStream(error, this.modelErrorContext?.());
+          }
+        },
+      );
       const result: SebRendererStreamResult = {
         abort: () => abortController.abort(),
         ...(previousAssistant ? { message: previousAssistant } : {}),
@@ -294,6 +293,55 @@ function requestSetupErrorStream(
       controller.enqueue({ type: 'error', errorText });
       controller.enqueue({ type: 'finish', finishReason: 'error' });
       controller.close();
+    },
+  });
+}
+
+// Keep terminal input available while the transport starts the request.
+function pendingRequestStream(
+  start: () => Promise<ReadableStream<UIMessageChunk>>,
+): ReadableStream<UIMessageChunk> {
+  let cancelled = false;
+  let reader: ReadableStreamDefaultReader<UIMessageChunk> | undefined;
+  const ready = start().then((stream) => {
+    if (cancelled) {
+      void stream.cancel().catch(() => undefined);
+    } else {
+      reader = stream.getReader();
+    }
+  });
+  return new ReadableStream({
+    async pull(controller) {
+      await ready;
+      if (cancelled || !reader) return;
+      const currentReader = reader;
+      let next: ReadableStreamReadResult<UIMessageChunk>;
+      try {
+        next = await currentReader.read();
+      } catch (error) {
+        if (!cancelled) {
+          currentReader.releaseLock();
+          reader = undefined;
+          throw error;
+        }
+        return;
+      }
+      if (cancelled) return;
+      if (next.done) {
+        reader.releaseLock();
+        reader = undefined;
+        controller.close();
+      } else {
+        controller.enqueue(next.value);
+      }
+    },
+    cancel() {
+      cancelled = true;
+      if (reader) {
+        const currentReader = reader;
+        reader = undefined;
+        void currentReader.cancel().catch(() => undefined).finally(() => currentReader.releaseLock());
+      }
     },
   });
 }

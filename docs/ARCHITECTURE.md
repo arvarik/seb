@@ -96,11 +96,19 @@ The gate removes an ineligible recommendation after schema validation.
 
 ## Interactive renderer and transport
 
-AI SDK controls the message loop and calls the custom chat transport.
+Seb controls the message loop and calls the custom AI SDK chat transport.
 
 Seb owns the terminal renderer.
 
 The renderer supplies prompt input, tool approval, stream display, and terminal cleanup.
+
+The runner starts the renderer before transport setup completes. Escape aborts the request and cancels its source reader.
+A late transport stream closes after cancellation. It cannot enter the next conversation turn.
+
+The renderer shows provider reasoning in a muted section and keeps it out of the copied answer.
+Progress labels follow the latest text, reasoning, or tool event. Timer updates preserve the current phase.
+The renderer combines rapid stream updates into frames at most once per animation interval.
+A completed answer preserves the reading position when the user scrolls away from the latest output.
 
 Seb supplies a custom `ChatTransport` around `DirectChatTransport`.
 

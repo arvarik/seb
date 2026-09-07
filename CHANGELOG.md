@@ -8,6 +8,12 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Player searches retain the position filter when they include inactive players.
+- Sleeper evidence retains separate citations for different player filters and trending windows.
+- Player touch averages count carries and receptions instead of carries and targets.
+- Game weather requires a forecast period that contains kickoff. Nearby periods cannot supply a game risk rating.
+- Failed refreshes cannot return cached data after its stale fallback deadline expires.
+
 - CLI and connector answers now require a successful model finish. Truncated, cancelled, and incomplete responses cannot become completed recommendations.
 - JSON research must finish before the formatter runs. JSON evidence validation now retains the executed tool inputs and checks the requested league.
 - Interactive streams report a missing finish event. Denied tools no longer leave a pending approval behind.

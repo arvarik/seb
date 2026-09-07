@@ -250,6 +250,29 @@ describe('SebDatabase', () => {
 });
 
 describe('CachedResource', () => {
+  it('rejects stale data that expires while a refresh fails', async () => {
+    const database = createDatabase();
+    const startedAt = Date.now();
+    database.putCache({
+      cachedAt: new Date(startedAt - 1500).toISOString(),
+      key: 'expiring', namespace: 'weather', schemaVersion: 'v1',
+      sourceUrl: 'https://weather.test/expiring',
+      ttlMs: 1000, staleIfErrorMs: 1000, value: ['old forecast'],
+    });
+    const resource = new CachedResource(database, 'weather', 'expiring',
+      'https://weather.test/expiring',
+      { schemaVersion: 'v1', ttlMs: 1000, staleIfErrorMs: 1000 });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+    try {
+      await expect(resource.read(async () => {
+        clock.mockReturnValue(startedAt + 501);
+        throw new Error('refresh failed');
+      })).rejects.toThrow('refresh failed');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('revalidates with conditional metadata', async () => {
     const database = createDatabase();
     database.putCache({

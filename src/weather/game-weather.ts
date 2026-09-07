@@ -179,17 +179,7 @@ function selectPeriod(
   if (exact) {
     return exact;
   }
-  const ordered = periods
-    .map((period) => ({
-      period,
-      difference: Math.abs(Date.parse(period.startTime) - kickoff.getTime()),
-    }))
-    .filter((candidate) => Number.isFinite(candidate.difference))
-    .sort((left, right) => left.difference - right.difference);
-  const nearest = ordered[0];
-  return nearest && nearest.difference <= 3 * 60 * 60 * 1_000
-    ? nearest.period
-    : null;
+  return null;
 }
 
 function assessWeather(

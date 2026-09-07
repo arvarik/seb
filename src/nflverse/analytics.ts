@@ -126,11 +126,11 @@ function summarizePlayer(rows: readonly NflversePlayerWeek[]): PlayerTrendSummar
     averageTargets: average(sum(ordered, (row) => row.targets), ordered.length),
     recentAverageTargets: average(sum(recent, (row) => row.targets), recent.length),
     averageTouches: average(
-      sum(ordered, (row) => row.targets + row.carries),
+      sum(ordered, (row) => row.receptions + row.carries),
       ordered.length,
     ),
     recentAverageTouches: average(
-      sum(recent, (row) => row.targets + row.carries),
+      sum(recent, (row) => row.receptions + row.carries),
       recent.length,
     ),
     targetShare: averageNullable(ordered.map((row) => row.targetShare)),

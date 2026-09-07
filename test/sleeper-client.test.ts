@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { SourceTracker } from '../src/sources.js';
+
 import { SleeperApiError, SleeperClient } from '../src/sleeper/client.js';
 
 describe('SleeperClient', () => {
@@ -55,6 +57,33 @@ describe('SleeperClient', () => {
     expect(requestedUrl).toContain('active=true');
     expect(requestedUrl).toContain('position=QB');
     expect(players.map((player) => player.player_id)).toEqual(['1']);
+  });
+
+  it('keeps the position filter when inactive players are included', async () => {
+    const client = new SleeperClient({
+      database: false,
+      fetch: async () => jsonResponse({
+        '1': { player_id: '1', full_name: 'Test Player', position: 'WR', active: false },
+        '2': { player_id: '2', full_name: 'Test Player', position: 'QB', active: true },
+      }),
+    });
+    const players = await client.findPlayers('Test Player', { active: false, position: 'wr' });
+    expect(players.map((player) => player.player_id)).toEqual(['1']);
+  });
+
+  it('retains citations for different player filters and trending windows', async () => {
+    const sources = new SourceTracker();
+    const client = new SleeperClient({
+      database: false,
+      onSource: sources.record,
+      fetch: async (url) => jsonResponse(String(url).includes('trending') ? [] : {}),
+    });
+    await client.getPlayers({ position: 'QB' });
+    await client.getPlayers({ position: 'WR' });
+    await client.getTrendingPlayers('add', 24);
+    await client.getTrendingPlayers('add', 48);
+    expect(sources.list()).toHaveLength(4);
+    expect(new Set(sources.list().map((source) => source.url)).size).toBe(4);
   });
 
   it('keeps provider context when a failed response body exceeds the limit', async () => {

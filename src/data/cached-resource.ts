@@ -352,7 +352,7 @@ export class CachedResource<T> {
     signal: AbortSignal,
   ): ResourceResult<T> {
     signal.throwIfAborted();
-    if (conditional?.freshness === 'stale') {
+    if (conditional?.freshness === 'stale' && Date.now() <= Date.parse(conditional.staleUntil)) {
       return {
         cache: conditional,
         error: errorMessage(error),

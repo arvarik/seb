@@ -10,17 +10,17 @@ import type { NflverseGame, NflversePlayerWeek } from '../src/nflverse/types.js'
 describe('nflverse analytics', () => {
   it('summarizes recent player usage and volatility', () => {
     const trends = summarizePlayerTrends([
-      stat({ week: 1, fantasyPointsPpr: 10, targets: 4, carries: 8 }),
-      stat({ week: 2, fantasyPointsPpr: 20, targets: 6, carries: 10 }),
-      stat({ week: 3, fantasyPointsPpr: 30, targets: 8, carries: 12 }),
-      stat({ week: 4, fantasyPointsPpr: 40, targets: 10, carries: 14 }),
+      stat({ week: 1, fantasyPointsPpr: 10, targets: 4, receptions: 2, carries: 8 }),
+      stat({ week: 2, fantasyPointsPpr: 20, targets: 6, receptions: 3, carries: 10 }),
+      stat({ week: 3, fantasyPointsPpr: 30, targets: 8, receptions: 4, carries: 12 }),
+      stat({ week: 4, fantasyPointsPpr: 40, targets: 10, receptions: 6, carries: 14 }),
     ]);
 
     expect(trends[0]).toMatchObject({
       averagePprPoints: 25,
       recentAveragePprPoints: 30,
-      averageTouches: 18,
-      recentAverageTouches: 20,
+      averageTouches: 14.75,
+      recentAverageTouches: 16.33,
     });
     expect(trends[0]?.volatility).toBeGreaterThan(11);
   });

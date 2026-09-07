@@ -154,7 +154,7 @@ export function resolveModelProvider(
   const explicitReference = explicitModel
     ? parseQualifiedModelReference(explicitModel)
     : null;
-  const environmentReference = environmentModel
+  const environmentReference = environmentModel && !explicitModel
     ? parseQualifiedModelReference(environmentModel)
     : null;
   const requestedProvider = firstNonEmpty([
@@ -163,7 +163,9 @@ export function resolveModelProvider(
     options.baseURL ? 'openai-compatible' : undefined,
     environment.SEB_MODEL_PROVIDER,
     environment.SEB_PROVIDER,
-    environmentReference?.provider,
+    environmentReference?.provider ?? MODEL_PROVIDER_IDS.find(
+      (candidate) => environmentModel?.startsWith(`${candidate}:`),
+    ),
   ]);
   const provider = requestedProvider
     ? validateModelProviderId(requestedProvider)
@@ -231,7 +233,9 @@ export function resolveModelProvider(
   const fallbackReference = explicitFallback && !useLiteralModelIds
     ? parseQualifiedModelReference(explicitFallback)
     : null;
-  const environmentFallback = nonEmpty(environment.SEB_FALLBACK_MODEL);
+  const environmentFallback = explicitFallback || explicitModel
+    ? undefined
+    : nonEmpty(environment.SEB_FALLBACK_MODEL);
   const environmentFallbackReference = environmentFallback && !useLiteralModelIds
     ? parseQualifiedModelReference(environmentFallback)
     : null;

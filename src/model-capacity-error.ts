@@ -5,6 +5,7 @@ export type ModelErrorCategory =
   | 'authentication'
   | 'cancelled'
   | 'capacity'
+  | 'incomplete'
   | 'invalid-request'
   | 'provider'
   | 'provider-timeout'
@@ -38,6 +39,8 @@ export function isModelCapacityError(error: unknown, depth = 0): boolean {
   }
 
   const value = error as Record<string, unknown>;
+  const name = normalizedCode(value.name);
+  if (name === 'aborterror' || name === 'timeouterror') return false;
   const status = numericStatus(value.statusCode ?? value.status);
   if (status === 429 || status === 503) {
     return true;
@@ -65,6 +68,9 @@ export function classifyModelError(
   const status = numericStatus(value.statusCode ?? value.status);
   const code = normalizedCode(value.code);
   const name = normalizedCode(value.name);
+  if (name === 'incompletemodelresponseerror') return 'incomplete';
+  if (name === 'timeouterror') return 'timeout';
+  if (name === 'aborterror') return 'cancelled';
   if (
     status === 400 ||
     code === 'invalid-argument' ||
@@ -86,8 +92,6 @@ export function classifyModelError(
   if (status === 408 || status === 504) return 'provider-timeout';
   if (status === 429 || status === 503) return 'capacity';
   if (isModelCapacityError(error)) return 'capacity';
-  if (name === 'timeouterror') return 'timeout';
-  if (name === 'aborterror') return 'cancelled';
   if (
     name === 'apicallerror' ||
     name === 'ai-apicallerror' ||
@@ -130,6 +134,8 @@ export function formatModelErrorForUser(
       return `The request stopped before ${context.providerLabel} finished.`;
     case 'capacity':
       return `${context.providerLabel} has no available capacity. Try the request again or select another model.`;
+    case 'incomplete':
+      return `${context.providerLabel} stopped before it completed the answer. Ask a narrower question, then retry.`;
     case 'invalid-request':
       return `${context.providerLabel} rejected the request as invalid. ${diagnostics}, then retry.`;
     case 'provider-timeout':

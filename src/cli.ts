@@ -28,6 +28,7 @@ import {
   type ModelProviderId,
   type ResolvedModelProvider,
 } from './ai/model-provider.js';
+import { assertModelCompleted, observeCompletedModelStream } from './ai/stream-completion.js';
 import { currentRequestSignalWithTimeout } from './ai/request-signal.js';
 import { FileModelSettingsStore, formatModelSettings } from './ai/model-settings.js';
 import {
@@ -770,6 +771,7 @@ async function generateWithModel(
     })],
   });
   const research = await researchAgent.generate({ prompt });
+  assertModelCompleted(research.finishReason);
   for (const source of research.sources) {
     if (source.sourceType === 'url') sources.recordUrlSource(source);
   }
@@ -786,6 +788,7 @@ async function generateWithModel(
   const result = await analysisAgent.generate({
     prompt: buildAnalysisPrompt(prompt, research.text, sources.list()),
   });
+  assertModelCompleted(result.finishReason);
   const sourceRecords = sources.list();
   const enforced = enforceRecommendationEligibility(
     result.output,
@@ -796,6 +799,7 @@ async function generateWithModel(
       toolResults: research.toolResults
         .filter((toolResult) => toolResult !== undefined)
         .map((toolResult) => ({
+          input: toolResult.input,
           output: toolResult.output,
           toolName: toolResult.toolName,
         })),
@@ -904,7 +908,7 @@ async function streamAnswer(
     });
     const result = await agent.stream({ prompt });
 
-    for await (const part of observeUsageStreamErrors(result.fullStream, usageTelemetry)) {
+    for await (const part of observeUsageStreamErrors(observeCompletedModelStream(result.fullStream), usageTelemetry)) {
         if (part.type === 'text-delta') {
           if (decisionRequested) bufferedText += part.text;
           else {
@@ -940,9 +944,6 @@ async function streamAnswer(
             toolName: part.toolName,
           });
           decisionToolInputs.delete(part.toolCallId);
-        } else if (part.type === 'error') {
-          usageTelemetry.closeUnfinished(part.error);
-          throw part.error;
         }
     }
   };

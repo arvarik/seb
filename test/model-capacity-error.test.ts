@@ -7,6 +7,14 @@ import {
 } from '../src/model-capacity-error.js';
 
 describe('isModelCapacityError', () => {
+  it.each(['AbortError', 'TimeoutError'])('does not retry %s with a capacity-error cause', (name) => {
+    const error = Object.assign(new Error('Stopped after service unavailable'), {
+      name, cause: { statusCode: 503 },
+    });
+    expect(isModelCapacityError(error)).toBe(false);
+    expect(classifyModelError(error)).toBe(name === 'AbortError' ? 'cancelled' : 'timeout');
+  });
+
   it('detects the Gemini high-demand message', () => {
     expect(
       isModelCapacityError(

@@ -72,6 +72,16 @@ Connector replies use one two-minute deadline for the primary and fallback model
 
 Connector shutdown cancels all active reply signals.
 
+CLI and connector answers require a final `stop` event. An output limit, content filter, cancellation, or missing finish event produces an error.
+
+Decision responses remain buffered until this completion check passes. Partial ordinary text can remain visible, but Seb reports the failed response.
+
+Interactive approval requests can pause with `tool-calls`. A denied tool clears its pending approval. Other incomplete interactive responses produce an error.
+
+Capacity fallback runs only before visible output. Cancellation and timeout errors never trigger capacity fallback.
+
+Connector fallback uses the original request deadline and cannot start after cancellation.
+
 The tools perform read-only actions.
 
 The direct data tools cap large row results.
@@ -89,6 +99,8 @@ The decision gate never relies on the model's claim about which tool ran.
 The first request gathers evidence and grounded source records.
 
 The second tool-free request converts that evidence into the validated schema.
+
+Both requests must finish successfully. The decision gate receives each executed tool input and result, including the requested league ID.
 
 Seb formats that object into the compatible `answer` field.
 

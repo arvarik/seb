@@ -8,6 +8,23 @@ import { createModelSettings } from '../src/ai/model-settings.js';
 import { createSetupCredentials } from '../src/setup/credentials.js';
 
 describe('resolveLoadedModelProvider', () => {
+  it('selects an explicit compatible endpoint before a saved active provider', () => {
+    const selection = resolveLoadedModelProvider({
+      baseURL: 'http://localhost:4321/v1', model: 'local-model',
+      environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'google-key' },
+      settings: createModelSettings('google', { google: { model: 'google-model' } }),
+    });
+    expect(selection).toMatchObject({ provider: 'openai-compatible', baseURL: 'http://localhost:4321/v1', model: 'local-model' });
+    expect(selection).not.toHaveProperty('apiKey');
+  });
+
+  it('rejects a custom endpoint paired with a different explicit provider', () => {
+    expect(() => resolveLoadedModelProvider({
+      baseURL: 'http://localhost:4321/v1', provider: 'google',
+      environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'google-key' },
+    })).toThrow('custom base URL requires');
+  });
+
   it('keeps Google as the first provider for an existing Gemini environment', () => {
     const selection = resolveLoadedModelProvider({
       environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'google-key' },

@@ -1188,6 +1188,37 @@ describe('SebInteractiveTransport', () => {
     expect(output).not.toContain('Start Example Player with high confidence');
   });
 
+  it.each([false, true])('marks an unfinished interactive stream as failed when aborted=%s', async (aborted) => {
+    const uiState = new InteractiveUiState();
+    uiState.latestAnswer = 'Previous complete answer';
+    const onError = vi.fn();
+    const chunks = [];
+    const source = new ReadableStream<UIMessageChunk>({ start(controller) {
+      controller.enqueue({ type: 'text-start', id: 'partial' });
+      controller.enqueue({ type: 'text-delta', id: 'partial', delta: 'Partial response' });
+      if (aborted) controller.enqueue({ type: 'abort' });
+      controller.close();
+    } });
+    for await (const chunk of decorateResponseStream(source, createSessionState(), new SourceTracker(), uiState, 'Read the NFL state', undefined, onError)) chunks.push(chunk);
+    expect(chunks).toContainEqual(expect.objectContaining({ type: 'error' }));
+    expect(onError).toHaveBeenCalledOnce();
+    expect(uiState.latestAnswer).toBe('Previous complete answer');
+    expect(uiState.latestEvidence()).toBeNull();
+  });
+
+  it('does not treat a denied tool as a pending approval', async () => {
+    const chunks = [];
+    const source = new ReadableStream<UIMessageChunk>({ start(controller) {
+      controller.enqueue({ type: 'tool-input-available', toolName: 'getNflState', toolCallId: 'call', input: {} });
+      controller.enqueue({ type: 'tool-approval-request', approvalId: 'approval', toolCallId: 'call' });
+      controller.enqueue({ type: 'tool-output-denied', toolCallId: 'call' });
+      controller.enqueue({ type: 'finish', finishReason: 'tool-calls' });
+      controller.close();
+    } });
+    for await (const chunk of decorateResponseStream(source, createSessionState(), new SourceTracker(), new InteractiveUiState(), 'Read the NFL state')) chunks.push(chunk);
+    expect(chunks).toContainEqual(expect.objectContaining({ type: 'error' }));
+  });
+
   it('uses earlier approval-stage evidence for the final decision', async () => {
     const sources = new SourceTracker();
     sources.record({

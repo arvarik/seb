@@ -1126,6 +1126,7 @@ export function decorateResponseStream(
   let answerId = `answer-${crypto.randomUUID()}`;
   let consumerCancelRecorded = false;
   let streamFailed = false;
+  let streamFinished = false;
   let streamErrorRecorded = false;
   const recordConsumerCancel = (reason: unknown): void => {
     if (consumerCancelRecorded) return;
@@ -1148,6 +1149,12 @@ export function decorateResponseStream(
   const decorated = stream.pipeThrough(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
       transform(chunk, controller) {
+        if (chunk.type === 'abort') {
+          streamFailed = true;
+          const errorText = 'The request stopped before the model completed the answer.';
+          recordStreamError(new DOMException(errorText, 'AbortError'));
+          controller.enqueue({ type: 'error', errorText });
+        }
         if (chunk.type === 'error') {
           streamFailed = true;
           recordStreamError(new Error(chunk.errorText));
@@ -1197,7 +1204,7 @@ export function decorateResponseStream(
             toolCalls.delete(chunk.toolCallId);
           }
         }
-        if (chunk.type === 'tool-output-error') {
+        if (chunk.type === 'tool-output-error' || chunk.type === 'tool-output-denied') {
           deletePendingApproval(pendingApprovals, chunk.toolCallId);
           toolCalls.delete(chunk.toolCallId);
         }
@@ -1211,6 +1218,7 @@ export function decorateResponseStream(
           if (url) sources.recordUrlSource(source);
         }
         if (chunk.type === 'finish') {
+          streamFinished = true;
           const awaitsApproval = chunk.finishReason === 'tool-calls' &&
             pendingApprovals.size > 0;
           if (!streamFailed && chunk.finishReason !== 'stop' && !awaitsApproval) {
@@ -1294,6 +1302,13 @@ export function decorateResponseStream(
           return;
         }
         controller.enqueue(chunk);
+      },
+      flush(controller) {
+        if (!streamFinished && !streamFailed) {
+          const errorText = incompleteFinishMessage(undefined);
+          recordStreamError(new Error(errorText));
+          controller.enqueue({ type: 'error', errorText });
+        }
       },
     }),
   );

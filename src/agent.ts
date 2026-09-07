@@ -1,3 +1,5 @@
+import { createPlayoffTools } from './analysis/playoff-tools.js';
+import { createLearningTools } from './learning/tools.js';
 import { createGoogle } from '@ai-sdk/google';
 import {
   addToolInputExamplesMiddleware,
@@ -222,8 +224,10 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
     : 'direct';
   const tools = bindToolRequestSignals({
     ...createSleeperTools(sleeperClient),
+    ...createPlayoffTools(sleeperClient),
     ...createNflverseTools(nflverseClient),
     ...createWeatherTools(weatherClient, nflverseClient),
+    ...createLearningTools(sleeperClient),
     ...createProjectionTools(sleeperClient, nflverseClient, weatherClient),
     ...createWaiverTools(sleeperClient, nflverseClient),
     ...createTradeTools(sleeperClient, nflverseClient),
@@ -528,6 +532,12 @@ Use a Sleeper tool for every current fact about a Sleeper user, league, roster, 
 Use an nflverse tool for every schedule, game result, player game log, usage trend, team performance, or defense-by-position fact.
 Use a National Weather Service tool for every current United States forecast or weather alert.
 Use projectPlayer for a scoring-aware player projection in a selected Sleeper league.
+Use compareStartSit to compare starters. Supply the legal starter slot for players at different positions.
+Explain expected points and the uncertainty interval. Flag close choices and all failed eligibility checks.
+Use simulatePlayoffOdds only with a complete future fantasy schedule. State its simulation and model limits.
+Use inspectLearning to explain local learned trends and parameters. Use learnCompletedWeek only when the user requests an update.
+A learning update uses recorded football results and validation tests. It does not change the model provider or its weights.
+Learned player and team trends describe past results. They do not replace current news or injury reports.
 Use rankWaiverTargets for every waiver ranking or FAAB recommendation in a selected Sleeper league.
 Give a FAAB range only when rankWaiverTargets confirms a league FAAB budget.
 Use analyzeTradeImpact for every league-specific trade comparison.

@@ -515,3 +515,41 @@ function firstClassNewsSource(): DataSourceRecord {
     url: 'https://example.com/news/report',
   };
 }
+
+describe('comparison evidence for every player', () => {
+  const projections = ['Aaron Smith', 'Brian Smith'].map((name, index) => ({ player: { name, playerId: `p${index}` },
+    league: { leagueId: '123456' }, limitations: [], scoring: { usedSettings: ['rec'], ignoredSettings: [] }, recommendationEligible: true }));
+  const comparison = { toolName: 'compareStartSit', input: { leagueId: '123456', playerNames: ['Aaron Smith', 'Brian Smith'] },
+    output: { projections, recommendationEligible: true } };
+  const build = (news: string, result = comparison) => buildRecommendationEvidence({ analysis: exampleAnalysis(),
+    question: 'Should I start Aaron Smith or Brian Smith in league 123456?', sources: [directSource(), webSource()],
+    toolResults: [result, { toolName: 'searchCurrentNews', output: { result: news } }] });
+  it('requires current reporting for both players even when they share a last name', () => {
+    expect(build('Aaron Smith is healthy.').injury).toBe('missing');
+    expect(build('Aaron Smith and Brian Smith are healthy.').injury).toBe('present');
+  });
+  it('blocks an incomplete comparison result', () => {
+    expect(build('Aaron Smith and Brian Smith are healthy.', { ...comparison, output: { ...comparison.output, projections: [projections[0]!] } }).projection).toBe('ineligible');
+  });
+  it('preserves a failed comparison slot check', () => {
+    expect(build('Aaron Smith and Brian Smith are healthy.', { ...comparison, output: { ...comparison.output, recommendationEligible: false } }).projection).toBe('ineligible');
+  });
+});
+
+it('requires evidence for a second player in an explicit starter comparison', () => {
+  const result = buildRecommendationEvidence({ analysis: exampleAnalysis(), question: 'Should I start Aaron Smith or Brian Smith?', sources: [directSource(), webSource()],
+    toolResults: [{ toolName: 'projectPlayer', input: { playerName: 'Aaron Smith' }, output: {
+      player: { name: 'Aaron Smith', playerId: 'p1' }, recommendationEligible: true, limitations: [],
+      scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+    } }, { toolName: 'searchCurrentNews', output: { result: 'Aaron Smith is healthy.' } }] });
+  expect(result.projection).toBe('ineligible');
+});
+
+it('matches player initials across punctuation differences in current news', () => {
+  const result = buildRecommendationEvidence({ analysis: exampleAnalysis(), question: 'Should I start A.J. Brown?', sources: [directSource(), webSource()],
+    toolResults: [{ toolName: 'projectPlayer', input: { playerName: 'A.J. Brown' }, output: {
+      player: { name: 'A.J. Brown', playerId: 'p1' }, recommendationEligible: true, limitations: [],
+      scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+    } }, { toolName: 'searchCurrentNews', output: { result: 'AJ Brown is healthy.' } }] });
+  expect(result.injury).toBe('present');
+});

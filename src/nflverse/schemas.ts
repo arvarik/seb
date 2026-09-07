@@ -30,6 +30,15 @@ export const nflverseGameSchema: z.ZodType<NflverseGame> = z.object({
 });
 
 export const nflversePlayerWeekSchema: z.ZodType<NflversePlayerWeek> = z.object({
+  specialTeamsTouchdowns: nullableNumber.optional(),
+  fumbleRecoveryTouchdowns: nullableNumber.optional(),
+
+  fumbles: nullableNumber.optional(),
+  fumblesLost: nullableNumber.optional(),
+  passingTwoPointConversions: nullableNumber.optional(),
+  rushingTwoPointConversions: nullableNumber.optional(),
+  receivingTwoPointConversions: nullableNumber.optional(),
+
   airYardsShare: nullableNumber,
   attempts: z.number().finite(),
   carries: z.number().finite(),

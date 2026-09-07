@@ -559,6 +559,14 @@ The local viewer reads trace files from `.devtools/`.
 
 Read the [AI SDK guide](AI_SDK.md) before you enable trace recording.
 
+## Analysis and local learning
+
+The forecast engine combines historical scoring, exponential recency, and a bounded position prior.
+The trade optimizer assigns legal offensive starters exactly. The playoff simulator uses known remaining matchups.
+Local weekly learning writes separate, versioned football revisions after chronological validation.
+Projections read compatible revisions only before the requested cutoff.
+The [analysis guide](ANALYSIS.md) defines the formulas, storage contracts, research basis, and measured limits.
+
 ## Historical evaluation
 
 The replay runner converts nflverse weekly records into a versioned evaluation dataset.

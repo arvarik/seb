@@ -40,7 +40,7 @@ describe('trade impact analysis', () => {
     expect(result.receive.totalWeeklyValue).toBeGreaterThan(result.give.totalWeeklyValue);
     expect(result.analysisSeason).toBe(2026);
     expect(result.valueDelta).toBeGreaterThan(0);
-    expect(result.verdict).toBe('receives-more-weekly-value');
+    expect(result.verdict).toBe('insufficient-lineup-data');
     expect(result.rosterFit).toContainEqual({
       after: 2,
       before: 1,
@@ -233,7 +233,7 @@ function stat(
     passingYards: 0,
     playerDisplayName,
     playerId,
-    position: 'FLEX',
+    position: playerDisplayName.includes('Receiver') ? 'WR' : 'RB',
     receivingAirYards: 0,
     receivingTouchdowns: 0,
     receivingYards: 0,

@@ -1,8 +1,9 @@
+import { normalizePlayerName } from '../identity/normalize.js';
+import { LearningStore } from '../learning/store.js';
+import { resolveCompletedAnalysisWindow } from '../analysis/window.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import type {
-  SleeperLeague,
-  SleeperNflState,
   SleeperPlayer,
   SleeperPlayerMap,
 } from '../sleeper/types.js';
@@ -24,6 +25,7 @@ export class TradeImpactService {
   constructor(
     private readonly sleeper: SleeperClient,
     private readonly nflverse: NflverseClient,
+    private readonly learning: LearningStore | false = new LearningStore(),
   ) {}
 
   async analyze(request: TradeImpactRequest): Promise<TradeImpactAnalysis> {
@@ -33,7 +35,7 @@ export class TradeImpactService {
       this.sleeper.getPlayers(),
       this.sleeper.getNflState(),
     ]);
-    let window = resolveAnalysisWindow(league, state, request);
+    let window = resolveCompletedAnalysisWindow(league.season, state, request);
     let rows = await this.readStats(window.analysisSeason, window.throughWeek);
     if (
       rows.length === 0 &&
@@ -72,7 +74,9 @@ export class TradeImpactService {
     if (counterparties.length === 0) {
       throw new Error('Every received player must belong to the same opposing roster.');
     }
+    const learned = this.learning ? await this.learning.context(window.analysisSeason, window.throughWeek, league.scoring_settings) : null;
     return analyzeTradeImpact({
+      ...(learned?.parameters ? { parameters: learned.parameters } : {}),
       analysisSeason: window.analysisSeason,
       givePlayers,
       league,
@@ -106,47 +110,6 @@ function assertUniquePlayers(
   }
 }
 
-function resolveAnalysisWindow(
-  league: SleeperLeague,
-  state: SleeperNflState,
-  request: TradeImpactRequest,
-): { analysisSeason: number; throughWeek: number } {
-  const leagueSeason = parseSeason(league.season);
-  if (request.analysisSeason !== undefined || request.throughWeek !== undefined) {
-    return {
-      analysisSeason: request.analysisSeason ?? leagueSeason,
-      throughWeek: request.throughWeek ?? 18,
-    };
-  }
-  const stateSeason = parseSeason(state.season);
-  if (leagueSeason < stateSeason) {
-    return { analysisSeason: leagueSeason, throughWeek: 18 };
-  }
-  const phase = state.season_type.trim().toLowerCase();
-  if (phase === 'regular' && state.week > 1) {
-    return { analysisSeason: leagueSeason, throughWeek: state.week - 1 };
-  }
-  if (phase === 'post' || phase === 'postseason') {
-    return { analysisSeason: leagueSeason, throughWeek: 18 };
-  }
-  return {
-    analysisSeason: parseOptionalSeason(state.previous_season) ?? leagueSeason - 1,
-    throughWeek: 18,
-  };
-}
-
-function parseSeason(value: string): number {
-  const season = Number(value);
-  if (!Number.isInteger(season) || season < 1999 || season > 2100) {
-    throw new Error(`The season ${value} is invalid.`);
-  }
-  return season;
-}
-
-function parseOptionalSeason(value: string | undefined): number | null {
-  return value ? parseSeason(value) : null;
-}
-
 function resolvePlayers(
   players: SleeperPlayerMap,
   names: readonly string[],
@@ -169,5 +132,5 @@ function playerName(player: SleeperPlayer): string {
 }
 
 function normalizeName(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return normalizePlayerName(value);
 }

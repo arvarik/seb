@@ -67,6 +67,17 @@ describe('NflverseClient', () => {
     expect(requested[0]).toContain('stats_player_week_2025.csv.gz');
   });
 
+  it('preserves scoring components and marks missing columns as unavailable', async () => {
+    const lines = statsCsv.trim().split('\n');
+    const extended = lines.map((line, index) => line + (index === 0
+      ? ',fumbles_total,fumbles_lost_total,passing_2pt_conversions,rushing_2pt_conversions,receiving_2pt_conversions,special_teams_tds,fumble_recovery_tds'
+      : ',2,1,1,0,0,1,0')).join('\n');
+    const client = new NflverseClient({ database: false, fetch: async () => csvResponse(extended) });
+    expect((await client.getPlayerWeeklyStats({ season: 2025 }))[0]).toMatchObject({ fumbles: 2, fumblesLost: 1, passingTwoPointConversions: 1, specialTeamsTouchdowns: 1 });
+    const oldSource = new NflverseClient({ database: false, fetch: async () => csvResponse(statsCsv) });
+    expect((await oldSource.getPlayerWeeklyStats({ season: 2025 }))[0]?.fumblesLost).toBeNull();
+  });
+
   it('maps the POST filter to nflverse postseason stage values', async () => {
     const client = new NflverseClient({
       cacheDirectory: false,

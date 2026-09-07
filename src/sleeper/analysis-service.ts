@@ -1,3 +1,4 @@
+import { completedNflWeek } from '../analysis/window.js';
 import {
   analyzeLeague,
   predictMatchup,
@@ -6,7 +7,7 @@ import {
   type WeeklyMatchups,
 } from './analytics.js';
 import { SleeperClient } from './client.js';
-import type { SleeperPlayer, SleeperRoster } from './types.js';
+import type { SleeperPlayer, SleeperRoster, SleeperNflState } from './types.js';
 
 export interface RosterDetails {
   roster: SleeperRoster;
@@ -33,8 +34,7 @@ export class SleeperAnalysisService {
       league.status,
       league.settings.leg,
       rosters,
-      state.season,
-      state.week,
+      state,
       requestedThroughWeek,
     );
     const weeklyMatchups: WeeklyMatchups[] = await Promise.all(
@@ -95,17 +95,20 @@ function chooseThroughWeek(
   leagueStatus: string,
   leagueLeg: string | number | boolean | null | undefined,
   rosters: SleeperRoster[],
-  currentSeason: string,
-  currentWeek: number,
+  state: SleeperNflState,
   requestedThroughWeek?: number,
 ): number {
+  const currentSeason = state.season;
+  const maximum = Number(leagueSeason) < Number(currentSeason) ? 18
+    : Number(leagueSeason) > Number(currentSeason) ? 0
+    : completedNflWeek(state);
   if (requestedThroughWeek !== undefined) {
     if (
       !Number.isInteger(requestedThroughWeek) ||
       requestedThroughWeek < 0 ||
-      requestedThroughWeek > 18
+      requestedThroughWeek > maximum
     ) {
-      throw new RangeError('The analysis week must be an integer from 0 through 18.');
+      throw new RangeError(`The analysis week must be an integer from 0 through ${maximum} completed weeks.`);
     }
     return requestedThroughWeek;
   }
@@ -114,9 +117,7 @@ function chooseThroughWeek(
     return 0;
   }
 
-  if (leagueSeason === currentSeason && currentWeek >= 1 && currentWeek <= 18) {
-    return Math.max(Math.floor(currentWeek) - 1, 0);
-  }
+  if (Number(leagueSeason) >= Number(currentSeason)) return maximum;
 
   if (typeof leagueLeg === 'number' && leagueLeg >= 1 && leagueLeg <= 18) {
     return leagueStatus === 'complete'

@@ -84,6 +84,7 @@ describe('runDoctor', () => {
       'pass',
       'pass',
       'pass',
+      'pass',
       'skip',
       'skip',
       'skip',

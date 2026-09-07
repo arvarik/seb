@@ -1,3 +1,4 @@
+import { LearningStore } from './learning/store.js';
 import { createGoogle } from '@ai-sdk/google';
 import {
   generateText,
@@ -111,6 +112,7 @@ export interface DoctorOptions {
     timeZone: string | null;
   }>;
   verifyPermissions?: () => DoctorCheck;
+  verifyLearning?: () => Promise<{ enabled?: boolean; parameters?: unknown }>;
 }
 
 class ModelProviderVerificationError extends Error {
@@ -172,6 +174,16 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   checks.push(
     options.verifyPermissions?.() ?? checkLocalPermissions(environment),
   );
+
+  try {
+    const learning = await (options.verifyLearning ?? (() => new LearningStore().overrides()))();
+    checks.push({ name: 'Local forecast learning', status: 'pass', detail: learning.enabled === false
+      ? 'Local learning is disabled. Projections use the default parameters.'
+      : learning.parameters ? 'The local forecast override passes validation.' : 'The default forecast configuration passes validation.' });
+  } catch {
+    throwIfRequestAborted();
+    checks.push({ name: 'Local forecast learning', status: 'fail', detail: 'The local learning override is invalid or unreadable. Check .cache/learning/overrides.json.' });
+  }
 
   if (options.offline) {
     checks.push(

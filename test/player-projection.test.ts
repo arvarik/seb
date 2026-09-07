@@ -117,13 +117,13 @@ describe('scoring-aware player projections', () => {
         rushingYards: 0,
         week,
       })),
-      scoringSettings: { bonus_rec_te: 100, rec: 1 },
+      scoringSettings: { unsupported_rule: 100, rec: 1 },
       throughWeek: 3,
       week: 4,
     });
 
     expect(result.median).toBe(10);
-    expect(result.scoring.ignoredSettings).toEqual(['bonus_rec_te']);
+    expect(result.scoring.ignoredSettings).toEqual(['unsupported_rule']);
     expect(result.recommendationEligible).toBe(false);
   });
 
@@ -142,6 +142,7 @@ describe('scoring-aware player projections', () => {
   it('uses the prior season when the current season has no completed rows', async () => {
     const calls: Array<{ playerName?: string; position?: string; season: number }> = [];
     const sleeper = {
+      getNflState: async () => ({ season: '2026', season_type: 'regular', week: 2 }),
       findPlayers: async () => [{
         full_name: 'Test Player',
         injury_status: null,

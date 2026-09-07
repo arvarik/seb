@@ -1,4 +1,5 @@
 export type CliCommand =
+  | { name: 'learn'; action: 'status' | 'update'; season: number; throughWeek?: number; leagueId?: string; json: boolean }
   | { name: 'help' }
   | { name: 'version' }
   | { name: 'configure' }
@@ -21,7 +22,7 @@ export type CliCommand =
       limit: number;
     }
   | {
-      name: 'replay';
+      name: 'replay' | 'evaluate';
       json: boolean;
       output?: string;
       positions?: string[];
@@ -77,6 +78,8 @@ Usage:
   seb completion bash|fish|zsh
   seb cache [status|clear|prune] [--max-size-mb N] [--max-age-days N] [--retain N] [--json]
   seb snapshots [--kind KIND] [--entity KEY] [--id ID] [--limit N] [--json]
+  seb learn status|update --season YEAR [--through-week N] [--league ID] [--json]
+  seb evaluate --season YEAR [--through-week N] [--position POSITIONS] [--output FILE] [--json]
   seb replay --season YEAR [--through-week N] [--position POSITIONS] [--output FILE] [--json]
   seb usage [today|7d|30d|all] [--json]
   seb stats [today|7d|30d|all] [--json]
@@ -92,6 +95,8 @@ Commands:
   completion Print a shell completion script.
   cache      Inspect or clear the local SQLite cache.
   snapshots  List versioned source snapshots.
+  learn      Inspect or update local forecast learning from completed weeks.
+  evaluate   Compare legacy, ensemble, and weekly adaptive forecasts.
   replay     Measure historical nflverse baseline accuracy without future leakage.
   usage      Show concise, locally observed model API usage.
   stats      Show detailed token, latency, model, and tool analytics.
@@ -171,6 +176,12 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
       return parseCacheArguments(rest);
     case 'snapshots':
       return parseSnapshotArguments(rest);
+    case 'learn':
+      return parseLearningArguments(rest);
+    case 'evaluate': {
+      const parsed = parseReplayArguments(rest);
+      return parsed.name === 'replay' ? { ...parsed, name: 'evaluate' } : parsed;
+    }
     case 'replay':
       return parseReplayArguments(rest);
     case 'usage':
@@ -572,4 +583,29 @@ function requireNoArguments(arguments_: readonly string[], command: string): voi
   if (arguments_.length > 0) {
     throw new CliUsageError(`${command} does not accept more arguments.`);
   }
+}
+
+function parseLearningArguments(args: readonly string[]): CliCommand {
+  if (args.includes('--help')) return { name: 'help' };
+  const action = args[0];
+  if (action !== 'status' && action !== 'update') throw new CliUsageError('Use seb learn status|update --season YEAR.');
+  let season: number | undefined;
+  let throughWeek: number | undefined;
+  let leagueId: string | undefined;
+  let json = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--json') { json = true; continue; }
+    if (arg === '--season' || arg === '--through-week' || arg === '--league') {
+      const value = readOptionValue(args, index, arg); index += 1;
+      if (arg === '--season') season = Number(value);
+      else if (arg === '--through-week') throughWeek = Number(value);
+      else leagueId = value;
+    } else throw new CliUsageError(`Unknown learning option: ${arg}`);
+  }
+  if (!Number.isInteger(season) || season! < 1999 || season! > 2100 ||
+    (throughWeek !== undefined && (!Number.isInteger(throughWeek) || throughWeek < 1 || throughWeek > 18)) ||
+    (leagueId !== undefined && !/^\d+$/.test(leagueId))) throw new CliUsageError('Learning requires a season, an optional week from 1 through 18, and a numeric league ID.');
+  return { name: 'learn', action, season: season!, json,
+    ...(throughWeek === undefined ? {} : { throughWeek }), ...(leagueId ? { leagueId } : {}) };
 }

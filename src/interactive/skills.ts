@@ -22,6 +22,20 @@ export const SEB_SKILLS: readonly SebSkill[] = [
     suggestions: ['Show this week\'s schedule.', 'Compare two players.', 'Audit my league.'],
   },
   {
+    id: 'weekly-learning', title: 'Weekly learning', category: 'Research',
+    description: 'Review completed weeks, score forecasts, and update local learning after validation.',
+    instructions: [
+      'Use getNflState to identify the season and last completed week.',
+      'Use inspectLearning to review the active scoring profile, learned week, errors, and player or team trends.',
+      'When the user requests an update, use learnCompletedWeek with the selected league scoring rules.',
+      'The tool rejects an update until all games have results and 24 hours pass after kickoff.',
+      'Explain whether validation promoted parameters or retained the default parameters.',
+      'Keep small samples, revised historical data, and uncertain coverage explicit.',
+      'Never edit learned files from model guesses. Never treat an error summary as an injury report.',
+    ].join(' '),
+    suggestions: ['Review the latest completed week and update local learning.', 'Show what Seb learned about <Player>.', 'Explain the current forecast validation results.'],
+  },
+  {
     id: 'player-info',
     title: 'Player information',
     category: 'NFL information',
@@ -89,7 +103,7 @@ export const SEB_SKILLS: readonly SebSkill[] = [
     title: 'Start and sit',
     category: 'Fantasy',
     description: 'Compare lineup choices with usage, matchup, venue, and weather evidence.',
-    instructions: 'Compare recent opportunities, PPR output, opponent strength, game environment, and weather. Give one recommendation and one risk.',
+    instructions: 'Use compareStartSit with the selected league and week. Explain expected points, uncertainty, and close decisions. Check current news for every player. Withhold recommendations for ineligible players.',
     suggestions: ['Compare two starters.', 'Check the weather risk.', 'Explain the safer floor.'],
   },
   {
@@ -255,7 +269,7 @@ export function parseSkillInvocation(value: string): SebSkillInvocation | null {
 }
 
 export function getSkill(id: string): SebSkill {
-  return findSkill(id) ?? SEB_SKILLS[0]!;
+  return findSkill(id) ?? findSkill('general')!;
 }
 
 export function formatSkillList(): string {

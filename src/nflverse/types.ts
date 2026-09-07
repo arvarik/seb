@@ -25,6 +25,15 @@ export interface NflverseGame {
 }
 
 export interface NflversePlayerWeek {
+  specialTeamsTouchdowns?: number | null | undefined;
+  fumbleRecoveryTouchdowns?: number | null | undefined;
+
+  fumbles?: number | null | undefined;
+  fumblesLost?: number | null | undefined;
+  passingTwoPointConversions?: number | null | undefined;
+  rushingTwoPointConversions?: number | null | undefined;
+  receivingTwoPointConversions?: number | null | undefined;
+
   airYardsShare: number | null;
   attempts: number;
   carries: number;

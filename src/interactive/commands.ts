@@ -618,7 +618,7 @@ _seb_completion() {
   current="\${COMP_WORDS[COMP_CWORD]}"
   previous="\${COMP_WORDS[COMP_CWORD-1]}"
   if [[ "\${COMP_CWORD}" -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "chat ask doctor configure setup cache snapshots replay usage stats completion help version" -- "\${current}") )
+    COMPREPLY=( $(compgen -W "chat ask doctor configure setup cache snapshots replay evaluate learn usage stats completion help version" -- "\${current}") )
     return
   fi
   if [[ "\${previous}" == "--provider" || "\${previous}" == "-p" ]]; then
@@ -637,7 +637,8 @@ _seb_completion() {
     doctor) COMPREPLY=( $(compgen -W "--offline --json --help" -- "\${current}") ) ;;
     cache) COMPREPLY=( $(compgen -W "status clear prune --max-size-mb --max-age-days --retain --json --help" -- "\${current}") ) ;;
     snapshots) COMPREPLY=( $(compgen -W "--kind --entity --id --limit --json --help" -- "\${current}") ) ;;
-    replay) COMPREPLY=( $(compgen -W "--season --through-week --position --output --json --help" -- "\${current}") ) ;;
+    learn) COMPREPLY=( $(compgen -W "status update --season --through-week --league --json --help" -- "\${current}") ) ;;
+    replay|evaluate) COMPREPLY=( $(compgen -W "--season --through-week --position --output --json --help" -- "\${current}") ) ;;
     usage)
       if [[ -n "\${range}" ]]; then
         COMPREPLY=( $(compgen -W "--json --help" -- "\${current}") )
@@ -675,6 +676,10 @@ complete -c seb -n '__fish_use_subcommand' -a setup -d 'Configure a Sleeper prof
 complete -c seb -n '__fish_use_subcommand' -a cache -d 'Inspect or clear the SQLite cache'
 complete -c seb -n '__fish_use_subcommand' -a snapshots -d 'List source snapshots'
 complete -c seb -n '__fish_use_subcommand' -a replay -d 'Measure historical baseline accuracy'
+complete -c seb -n '__fish_use_subcommand' -a evaluate -d 'Compare forecast models'
+complete -c seb -n '__fish_use_subcommand' -a learn -d 'Inspect or update forecast learning'
+complete -c seb -n '__fish_seen_subcommand_from learn' -a 'status update'
+complete -c seb -n '__fish_seen_subcommand_from learn' -l league -r -d 'Use league scoring'
 complete -c seb -n '__fish_use_subcommand' -a usage -d 'Show local model API usage'
 complete -c seb -n '__fish_use_subcommand' -a stats -d 'Show detailed model and tool analytics'
 complete -c seb -n '__fish_use_subcommand' -a completion -d 'Print shell completion'
@@ -689,7 +694,7 @@ complete -c seb -n '__fish_seen_subcommand_from cache' -a 'status clear prune'
 complete -c seb -n '__fish_seen_subcommand_from cache' -l max-size-mb -r -d 'Set the snapshot size limit'
 complete -c seb -n '__fish_seen_subcommand_from cache' -l max-age-days -r -d 'Delete older snapshots'
 complete -c seb -n '__fish_seen_subcommand_from cache' -l retain -r -d 'Retain snapshots per source key'
-complete -c seb -n '__fish_seen_subcommand_from cache snapshots replay usage stats' -l json -d 'Print JSON'
+complete -c seb -n '__fish_seen_subcommand_from cache snapshots replay evaluate learn usage stats' -l json -d 'Print JSON'
 complete -c seb -n '__fish_seen_subcommand_from usage; and not __fish_seen_subcommand_from today 7d 30d all' -a 'today 7d 30d all'
 complete -c seb -n '__fish_seen_subcommand_from stats; and not __fish_seen_subcommand_from today 7d 30d all clear prune' -a 'today 7d 30d all'
 complete -c seb -n '__fish_seen_subcommand_from stats; and not __fish_seen_subcommand_from today 7d 30d all clear prune; and test (count (commandline -opc)) -eq 2' -a 'clear prune'
@@ -699,10 +704,10 @@ complete -c seb -n '__fish_seen_subcommand_from snapshots' -l kind -r -d 'Filter
 complete -c seb -n '__fish_seen_subcommand_from snapshots' -l entity -r -d 'Filter entity key'
 complete -c seb -n '__fish_seen_subcommand_from snapshots' -l id -r -d 'Inspect snapshot provenance'
 complete -c seb -n '__fish_seen_subcommand_from snapshots' -l limit -r -d 'Limit results'
-complete -c seb -n '__fish_seen_subcommand_from replay' -l season -r -d 'Select the season'
-complete -c seb -n '__fish_seen_subcommand_from replay' -l through-week -r -d 'Select the final week'
-complete -c seb -n '__fish_seen_subcommand_from replay' -l position -r -d 'Filter positions'
-complete -c seb -n '__fish_seen_subcommand_from replay' -l output -r -d 'Save the report'
+complete -c seb -n '__fish_seen_subcommand_from replay evaluate learn' -l season -r -d 'Select the season'
+complete -c seb -n '__fish_seen_subcommand_from replay evaluate learn' -l through-week -r -d 'Select the final week'
+complete -c seb -n '__fish_seen_subcommand_from replay evaluate' -l position -r -d 'Filter positions'
+complete -c seb -n '__fish_seen_subcommand_from replay evaluate' -l output -r -d 'Save the report'
 complete -c seb -n '__fish_seen_subcommand_from completion' -a 'bash fish zsh'`;
 }
 
@@ -719,6 +724,8 @@ _seb() {
     'cache:Inspect or clear the SQLite cache'
     'snapshots:List source snapshots'
     'replay:Measure historical baseline accuracy'
+    'evaluate:Compare forecast models'
+    'learn:Inspect or update forecast learning'
     'usage:Show local model API usage'
     'stats:Show detailed model and tool analytics'
     'completion:Print shell completion'
@@ -737,7 +744,8 @@ _seb() {
         doctor) _arguments '--offline[Skip network checks]' '--json[Print JSON]' '--help[Show help]' ;;
         cache) _arguments '1:action:(status clear prune)' '--max-size-mb[Set the snapshot size limit]:megabytes:' '--max-age-days[Delete older snapshots]:days:' '--retain[Retain snapshots per source key]:count:' '--json[Print JSON]' '--help[Show help]' ;;
         snapshots) _arguments '--kind[Filter snapshot kind]:kind:' '--entity[Filter entity key]:key:' '--id[Inspect snapshot provenance]:id:' '--limit[Limit results]:number:' '--json[Print JSON]' '--help[Show help]' ;;
-        replay) _arguments '--season[Select the season]:year:' '--through-week[Select the final week]:week:' '--position[Filter positions]:positions:' '--output[Save the report]:file:_files' '--json[Print JSON]' '--help[Show help]' ;;
+        learn) _arguments '1:action:(status update)' '--season[Select the season]:year:' '--through-week[Select the final week]:week:' '--league[Use league scoring]:league:' '--json[Print JSON]' '--help[Show help]' ;;
+        replay|evaluate) _arguments '--season[Select the season]:year:' '--through-week[Select the final week]:week:' '--position[Filter positions]:positions:' '--output[Save the report]:file:_files' '--json[Print JSON]' '--help[Show help]' ;;
         usage) _arguments '1:range:(today 7d 30d all)' '--json[Print JSON]' '--help[Show help]' ;;
         stats)
           case "$words[3]" in

@@ -1,7 +1,8 @@
+import { LearningStore } from '../learning/store.js';
+import { resolveCompletedAnalysisWindow } from '../analysis/window.js';
 import { NflverseClient } from '../nflverse/client.js';
 import type { NflversePlayerWeek } from '../nflverse/types.js';
 import { SleeperClient } from '../sleeper/client.js';
-import type { SleeperLeague, SleeperNflState } from '../sleeper/types.js';
 import {
   rankWaiverTargets,
   type WaiverAssistantResult,
@@ -21,6 +22,7 @@ export class WaiverAssistantService {
   constructor(
     private readonly sleeper: SleeperClient,
     private readonly nflverse: NflverseClient,
+    private readonly learning: LearningStore | false = new LearningStore(),
   ) {}
 
   async rankTargets(
@@ -42,7 +44,7 @@ export class WaiverAssistantService {
         `Sleeper league ${request.leagueId} has no roster ${request.rosterId}.`,
       );
     }
-    const window = resolveAnalysisWindow(league, state, request);
+    const window = resolveCompletedAnalysisWindow(league.season, state, request);
     let rows = await this.readStats(window.analysisSeason, window.throughWeek);
     let analysisSeason = window.analysisSeason;
     let throughWeek = window.throughWeek;
@@ -55,7 +57,9 @@ export class WaiverAssistantService {
       throughWeek = 18;
       rows = await this.readStats(analysisSeason, throughWeek);
     }
+    const learned = this.learning ? await this.learning.context(analysisSeason, throughWeek, league.scoring_settings) : null;
     return rankWaiverTargets({
+      ...(learned?.parameters ? { parameters: learned.parameters } : {}),
       analysisSeason,
       league,
       lookbackHours,
@@ -79,45 +83,4 @@ export class WaiverAssistantService {
       throughWeek,
     });
   }
-}
-
-function resolveAnalysisWindow(
-  league: SleeperLeague,
-  state: SleeperNflState,
-  request: WaiverAssistantRequest,
-): { analysisSeason: number; throughWeek: number } {
-  const leagueSeason = parseSeason(league.season);
-  if (request.analysisSeason !== undefined || request.throughWeek !== undefined) {
-    return {
-      analysisSeason: request.analysisSeason ?? leagueSeason,
-      throughWeek: request.throughWeek ?? 18,
-    };
-  }
-  const stateSeason = parseSeason(state.season);
-  if (leagueSeason < stateSeason) {
-    return { analysisSeason: leagueSeason, throughWeek: 18 };
-  }
-  const phase = state.season_type.trim().toLowerCase();
-  if (phase === 'regular' && state.week > 1) {
-    return { analysisSeason: leagueSeason, throughWeek: state.week - 1 };
-  }
-  if (phase === 'post' || phase === 'postseason') {
-    return { analysisSeason: leagueSeason, throughWeek: 18 };
-  }
-  return {
-    analysisSeason: parseOptionalSeason(state.previous_season) ?? leagueSeason - 1,
-    throughWeek: 18,
-  };
-}
-
-function parseSeason(value: string): number {
-  const season = Number(value);
-  if (!Number.isInteger(season) || season < 1999 || season > 2200) {
-    throw new Error(`The season ${value} is invalid.`);
-  }
-  return season;
-}
-
-function parseOptionalSeason(value: string | undefined): number | null {
-  return value ? parseSeason(value) : null;
 }

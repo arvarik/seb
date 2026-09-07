@@ -1,3 +1,4 @@
+import { DEFAULT_PROJECTION_PARAMETERS, forecastMean, forecastInterval, rollingResiduals, PROJECTION_MODEL_VERSION, type ProjectionParameters } from './statistics.js';
 import type { NflversePlayerWeek } from '../nflverse/types.js';
 import type { SleeperSettings } from '../sleeper/types.js';
 import type { WeatherRisk } from '../weather/game-weather.js';
@@ -13,6 +14,7 @@ export interface ProjectionAdjustment {
 export interface ScoringAwarePlayerProjection {
   adjustments: ProjectionAdjustment[];
   analysisSeason: number;
+  season: number;
   ceiling: number;
   confidence: {
     label: ProjectionConfidence;
@@ -27,6 +29,10 @@ export interface ScoringAwarePlayerProjection {
   };
   limitations: string[];
   median: number;
+  expectedPoints: number;
+  interval: ReturnType<typeof forecastInterval>;
+  model: { version: string; parameters: ProjectionParameters; learningThroughWeek: number | null; learningSeason: number | null; manualOverride: boolean };
+
   opponent: string | null;
   player: {
     name: string;
@@ -45,6 +51,17 @@ export interface ScoringAwarePlayerProjection {
 
 export interface ProjectPlayerInput {
   analysisSeason: number;
+  projectionSeason?: number;
+  scheduled?: boolean;
+  gameStarted?: boolean;
+  kickoffKnown?: boolean;
+  currentProfileKnown?: boolean;
+  parameters?: ProjectionParameters;
+  priorMean?: number | null;
+  calibrationResiduals?: readonly number[];
+  learningThroughWeek?: number;
+  learningSeason?: number;
+  manualOverride?: boolean;
   currentTeam?: string | null;
   injuryStatus?: string | null;
   leagueId: string;
@@ -60,6 +77,9 @@ export interface ProjectPlayerInput {
 }
 
 const SUPPORTED_SETTINGS = new Set([
+  'st_td', 'fum_rec_td', 'fum', 'fum_lost', 'pass_2pt', 'rush_2pt', 'rec_2pt',
+  'pass_cmp', 'pass_att', 'pass_inc', 'rush_att', 'rec_tgt',
+  'bonus_rec_rb', 'bonus_rec_wr', 'bonus_rec_te',
   'pass_yd',
   'pass_td',
   'pass_int',
@@ -77,6 +97,8 @@ const SUPPORTED_SETTINGS = new Set([
 ]);
 
 const NON_PLAYER_SETTINGS = new Set([
+  'fgm', 'fgm_0_19', 'fgm_20_29', 'fgm_30_39', 'fgm_40_49', 'fgm_50p', 'fgmiss', 'xpm', 'xpmiss',
+  'def_st_ff', 'def_st_fum_rec', 'ff', 'fum_rec',
   'pts_allow_0',
   'pts_allow_1_6',
   'pts_allow_7_13',
@@ -93,8 +115,15 @@ const NON_PLAYER_SETTINGS = new Set([
 ]);
 
 export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProjection {
+  const projectionSeason = input.projectionSeason ?? input.analysisSeason;
+  if (![input.analysisSeason, projectionSeason].every((season) => Number.isInteger(season) && season >= 1999 && season <= 2100) ||
+    ![input.week, input.throughWeek].every((week) => Number.isInteger(week) && week >= 1 && week <= 18) ||
+    input.analysisSeason > projectionSeason ||
+    (input.analysisSeason === projectionSeason && input.throughWeek >= input.week)) {
+    throw new Error('Projection training must end before the projected week.');
+  }
   const ordered = [...input.rows]
-    .filter((row) => row.season === input.analysisSeason && row.week <= input.throughWeek)
+    .filter((row) => row.season === input.analysisSeason && row.seasonType === 'REG' && row.week <= input.throughWeek)
     .sort((left, right) => left.week - right.week);
   const latest = ordered.at(-1);
   if (!latest) {
@@ -105,18 +134,19 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
     throw new Error('A player projection needs one resolved player identity.');
   }
 
+  if (new Set(ordered.map((row) => row.week)).size !== ordered.length) {
+    throw new Error('A projection cannot count duplicate player weeks.');
+  }
   const scoring = inspectPlayerScoringSettings(input.scoringSettings);
   const scoredGames = ordered.map((row) => scorePlayerWeek(row, input.scoringSettings));
-  const recent = scoredGames.slice(-3);
-  const seasonAverage = average(scoredGames);
-  const recentAverage = average(recent);
-  const base = seasonAverage * 0.55 + recentAverage * 0.45;
+  const parameters = input.parameters ?? DEFAULT_PROJECTION_PARAMETERS;
+  const base = forecastMean(scoredGames, input.priorMean ?? null, parameters);
   const adjustments: ProjectionAdjustment[] = [];
 
   const matchup = matchupAdjustment(
     latest.position,
     input.opponent ?? null,
-    input.opponentRows ?? [],
+    (input.opponentRows ?? []).filter((row) => row.season === input.analysisSeason && row.seasonType === 'REG' && row.week <= input.throughWeek),
     input.scoringSettings,
   );
   if (matchup) adjustments.push(matchup);
@@ -132,9 +162,10 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
   if (availability) adjustments.push(availability);
 
   const factor = adjustments.reduce((value, adjustment) => value * adjustment.factor, 1);
-  const median = Math.max(0, base * factor);
-  const volatility = standardDeviation(scoredGames);
-  const width = Math.max(volatility * 0.85, median * 0.2, 1);
+  const median = base * factor;
+  const interval = forecastInterval(median,
+    input.calibrationResiduals ?? rollingResiduals(scoredGames, parameters), scoredGames);
+
   const limitations = projectionLimitations(
     input,
     latest.position,
@@ -144,23 +175,34 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
   );
   const confidence = projectionConfidence({
     games: ordered.length,
-    hasOpponent: Boolean(input.opponent),
+    hasOpponent: Boolean(matchup),
     ignoredSettings: scoring.ignoredSettings.length,
     injuryStatus: input.injuryStatus ?? null,
     weatherStatus: input.weatherStatus ?? null,
   });
   const inactive = availability?.factor === 0;
+  if (interval.method === 'uncalibrated-small-sample') limitations.push('The range lacks enough past prediction errors for calibration.');
+  limitations.push('The confidence score measures evidence completeness. It is not a probability of an accurate prediction.');
+  if (input.kickoffKnown === false) limitations.push('The schedule has no verified kickoff time. Seb cannot confirm that a lineup change remains available.');
+  if (input.currentProfileKnown === false) limitations.push('The current player profile has no verified active team. The estimate uses historical identity only.');
+  if (input.gameStarted) limitations.push('The scheduled game has started. Do not change this player into the starting lineup.');
+  if (input.scheduled === false) limitations.push('No game exists for this team in the requested week. Do not start a player on a bye.');
+
 
   return {
     adjustments,
     analysisSeason: input.analysisSeason,
-    ceiling: round(inactive ? 0 : median + width),
+    season: projectionSeason,
+    ceiling: round(inactive ? 0 : interval.upper),
     confidence,
-    floor: round(inactive ? 0 : Math.max(0, median - width)),
+    floor: round(inactive ? 0 : interval.lower),
     games: ordered.length,
     league: { leagueId: input.leagueId, name: input.leagueName },
     limitations,
     median: round(median),
+    expectedPoints: round(median),
+    interval: inactive ? { ...interval, lower: 0, upper: 0 } : interval,
+    model: { version: PROJECTION_MODEL_VERSION, parameters: { ...parameters }, learningThroughWeek: input.learningThroughWeek ?? null, learningSeason: input.learningSeason ?? null, manualOverride: input.manualOverride ?? false },
     opponent: input.opponent ?? null,
     player: {
       name: latest.playerDisplayName,
@@ -172,7 +214,11 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
       ordered.length >= 3 &&
       scoring.usedSettings.length > 0 &&
       scoring.ignoredSettings.length === 0 &&
-      latest.position !== 'K' &&
+      ['QB', 'RB', 'WR', 'TE'].includes(latest.position) &&
+      input.scheduled !== false &&
+      !input.gameStarted &&
+      input.kickoffKnown !== false &&
+      input.currentProfileKnown !== false &&
       !inactive,
     scoring,
     throughWeek: input.throughWeek,
@@ -185,6 +231,19 @@ export function scorePlayerWeek(
   settings: SleeperSettings,
 ): number {
   const points =
+    optionalScore(row.specialTeamsTouchdowns, settings, 'st_td') +
+    optionalScore(row.fumbleRecoveryTouchdowns, settings, 'fum_rec_td') +
+    optionalScore(row.fumbles, settings, 'fum') +
+    optionalScore(row.fumblesLost, settings, 'fum_lost') +
+    optionalScore(row.passingTwoPointConversions, settings, 'pass_2pt') +
+    optionalScore(row.rushingTwoPointConversions, settings, 'rush_2pt') +
+    optionalScore(row.receivingTwoPointConversions, settings, 'rec_2pt') +
+    row.completions * setting(settings, 'pass_cmp') +
+    row.attempts * setting(settings, 'pass_att') +
+    (row.attempts - row.completions) * setting(settings, 'pass_inc') +
+    row.carries * setting(settings, 'rush_att') +
+    row.targets * setting(settings, 'rec_tgt') +
+    row.receptions * setting(settings, `bonus_rec_${row.position.toLowerCase()}`) +
     row.passingYards * setting(settings, 'pass_yd') +
     row.passingTouchdowns * setting(settings, 'pass_td') +
     row.interceptions * setting(settings, 'pass_int') +
@@ -193,11 +252,11 @@ export function scorePlayerWeek(
     row.receptions * setting(settings, 'rec') +
     row.receivingYards * setting(settings, 'rec_yd') +
     row.receivingTouchdowns * setting(settings, 'rec_td') +
-    thresholdBonus(row.passingYards, settings, 'bonus_pass_yd_300', 300) +
+    thresholdBonus(row.passingYards, settings, 'bonus_pass_yd_300', 300, 400) +
     thresholdBonus(row.passingYards, settings, 'bonus_pass_yd_400', 400) +
-    thresholdBonus(row.rushingYards, settings, 'bonus_rush_yd_100', 100) +
+    thresholdBonus(row.rushingYards, settings, 'bonus_rush_yd_100', 100, 200) +
     thresholdBonus(row.rushingYards, settings, 'bonus_rush_yd_200', 200) +
-    thresholdBonus(row.receivingYards, settings, 'bonus_rec_yd_100', 100) +
+    thresholdBonus(row.receivingYards, settings, 'bonus_rec_yd_100', 100, 200) +
     thresholdBonus(row.receivingYards, settings, 'bonus_rec_yd_200', 200);
   return round(points);
 }
@@ -254,6 +313,7 @@ function weatherAdjustment(
   risk: WeatherRisk | null,
   status: ProjectPlayerInput['weatherStatus'] | null,
 ): ProjectionAdjustment | null {
+  if (status === 'historical') return null;
   if (status === 'indoor' || risk === 'low') {
     return {
       factor: 1,
@@ -285,7 +345,7 @@ function weatherAdjustment(
 function availabilityAdjustment(status: string | null): ProjectionAdjustment | null {
   const normalized = status?.trim().toLowerCase() ?? '';
   if (!normalized) return null;
-  if (['out', 'ir', 'pup', 'suspended', 'inactive'].includes(normalized)) {
+  if (/\b(out|ir|pup|nfi|suspended|inactive|injured reserve)\b/.test(normalized)) {
     return {
       factor: 0,
       label: 'Availability adjustment',
@@ -317,6 +377,7 @@ function projectionLimitations(
   games: number,
 ): string[] {
   const limitations: string[] = [];
+  if ((input.projectionSeason ?? input.analysisSeason) > input.analysisSeason) limitations.push('The baseline comes from a prior season. Player roles and team strength can change.');
   if (games < 3) limitations.push('The projection has fewer than three completed games.');
   if (scoring.usedSettings.length === 0) {
     limitations.push('The league has no supported offensive scoring settings.');
@@ -379,26 +440,29 @@ function setting(settings: SleeperSettings, key: string): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+function optionalScore(value: number | null | undefined, settings: SleeperSettings, key: string): number {
+  const weight = setting(settings, key);
+  if (!weight) return 0;
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    throw new Error(`The source lacks ${key} statistics required by this league. Do not treat missing values as zero.`);
+  }
+  return value * weight;
+}
+
 function thresholdBonus(
   value: number,
   settings: SleeperSettings,
   key: string,
   threshold: number,
+  exclusiveMaximum = Infinity,
 ): number {
-  return value >= threshold ? setting(settings, key) : 0;
+  return value >= threshold && value < exclusiveMaximum ? setting(settings, key) : 0;
 }
 
 function average(values: readonly number[]): number {
   return values.length === 0
     ? 0
     : values.reduce((total, value) => total + value, 0) / values.length;
-}
-
-function standardDeviation(values: readonly number[]): number {
-  if (values.length < 2) return 0;
-  const mean = average(values);
-  const variance = average(values.map((value) => (value - mean) ** 2));
-  return Math.sqrt(variance);
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

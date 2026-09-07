@@ -25,6 +25,8 @@ New users should read the setup and experience guides first.
 
 ## Trust and data
 
+- [Analysis and learning](ANALYSIS.md) covers forecasts, comparisons, trade lineups, playoff simulations, validation, and local learning.
+
 - [Data sources](DATA_SOURCES.md) lists each provider, supported facts, cache period, and known limit.
 - [Storage](STORAGE.md) explains model settings, SQLite caches, snapshots, permissions, and recovery.
 - [Identity](IDENTITIES.md) explains player and team mapping across sources.

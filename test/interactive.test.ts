@@ -1260,6 +1260,47 @@ describe('SebInteractiveTransport', () => {
     expect(output).not.toContain('Decision unavailable');
   });
 
+  it('assigns distinct response IDs through the real direct transport', async () => {
+    const clients = dataClients();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({ languageModel: streamingLanguageModel('Hello.'), ...clients }),
+      environment: {}, model: 'test-model',
+      nflverse: clients.nflverseClient, session: createSessionState(),
+      sleeper: clients.sleeperClient, sources: new SourceTracker(),
+      version: 'test', weather: clients.weatherClient,
+    });
+    const ids: string[] = [];
+    for (const index of [1, 2]) {
+      const stream = await transport.sendMessages({
+        abortSignal: undefined, chatId: 'ids', messageId: undefined,
+        messages: [{ id: `user-${index}`, role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
+        trigger: 'submit-message',
+      });
+      for await (const chunk of stream) {
+        if (chunk.type === 'start') ids.push(chunk.messageId ?? '');
+      }
+    }
+    expect(ids).toHaveLength(2);
+    expect(ids.every(Boolean)).toBe(true);
+    expect(new Set(ids).size).toBe(2);
+    const continued = await transport.sendMessages({
+      abortSignal: undefined, chatId: 'ids', messageId: undefined,
+      messages: [
+        { id: 'user-approval', role: 'user', parts: [{ type: 'text', text: 'Read the NFL state.' }] },
+        { id: 'assistant-approval', role: 'assistant', parts: [{
+          type: 'tool-getNflState', toolCallId: 'state-call', input: {},
+          state: 'approval-responded', approval: { id: 'approval', approved: true },
+        }] },
+      ],
+      trigger: 'submit-message',
+    });
+    const continuationIds: string[] = [];
+    for await (const chunk of continued) {
+      if (chunk.type === 'start') continuationIds.push(chunk.messageId ?? '');
+    }
+    expect(continuationIds).toEqual(['assistant-approval']);
+  });
+
   it('shows a safe provider error instead of the generic SDK message', async () => {
     const model = new MockLanguageModelV4({
       doStream: async () => ({

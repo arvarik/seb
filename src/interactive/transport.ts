@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -33,7 +34,7 @@ import {
   type DoctorReport,
   type GeminiVerificationTelemetryOptions,
 } from '../doctor.js';
-import { formatModelErrorForUser } from '../model-capacity-error.js';
+import { formatInteractiveStreamError } from './stream-error.js';
 import {
   formatReplaySummary,
   runNflverseBaselineReplay,
@@ -189,18 +190,23 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   }
 
   private createDelegate(agent: SebAgent): ChatTransport<UIMessage> {
-    return new DirectChatTransport({
-      agent,
-      onError: (error) => formatModelErrorForUser(
-        error,
-        'interactive',
-        {
-          providerLabel: this.uiState.activeModel?.providerLabel ??
-            'The model provider',
-        },
-      ),
-      sendSources: true,
-    }) as unknown as ChatTransport<UIMessage>;
+    return {
+      sendMessages: (options) => {
+        const transport = new DirectChatTransport({
+          agent,
+          generateMessageId: () => {
+            const lastMessage = options.messages.at(-1);
+            return lastMessage?.role === 'assistant' ? lastMessage.id : randomUUID();
+          },
+          onError: (error) => formatInteractiveStreamError(error, {
+            providerLabel: this.uiState.activeModel?.providerLabel ?? 'The model provider',
+          }),
+          sendSources: true,
+        }) as unknown as ChatTransport<UIMessage>;
+        return transport.sendMessages(options);
+      },
+      reconnectToStream: async () => null,
+    };
   }
 
   async sendMessages(

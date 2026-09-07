@@ -43,7 +43,7 @@ export interface SleeperUser {
   display_name?: string | undefined;
   avatar?: string | null | undefined;
   metadata?: Record<string, string | null> | null | undefined;
-  is_owner?: boolean | undefined;
+  is_owner?: boolean | null | undefined;
 }
 
 export interface SleeperLeague {

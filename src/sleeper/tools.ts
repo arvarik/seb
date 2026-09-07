@@ -146,6 +146,21 @@ export function createSleeperTools(client: SleeperClient) {
       },
     }),
 
+    getLeagueTeams: tool({
+      description:
+        'List fantasy team names and owner names for a Sleeper league. Use this for team-name or league-member questions.',
+      inputSchema: z.object({ leagueId: leagueIdSchema }),
+      execute: async ({ leagueId }) => ({
+        leagueId,
+        teams: (await client.getLeagueUsers(leagueId)).map((user) => ({
+          userId: user.user_id,
+          teamName: user.metadata?.team_name?.trim() || null,
+          displayName: user.display_name ?? user.username ?? null,
+          isCommissioner: user.is_owner ?? null,
+        })),
+      }),
+    }),
+
     getLeagueOverview: tool({
       description:
         'Get league settings, users, rosters, records, and roster player IDs for a Sleeper league.',

@@ -1116,6 +1116,7 @@ function describeTool(toolName: string): string {
     analyzeLeague: 'Analyzing the league',
     findPlayers: 'Finding Sleeper players',
     getLeagueMatchups: 'Reading league matchups',
+    getLeagueTeams: 'Read league team names',
     getLeagueOverview: 'Reading the league',
     getLeagueTransactions: 'Reading league transactions',
     getNflState: 'Reading the current NFL state',

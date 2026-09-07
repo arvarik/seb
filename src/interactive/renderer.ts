@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { spawn } from 'node:child_process';
 
@@ -177,6 +178,10 @@ export class SebTerminalRenderer {
   private exitRequested = false;
   private framePlainLines: string[] = [];
   private historyIndex = -1;
+  private historyDraft = '';
+  private dispatchingInput = false;
+  private inputPaintRequested = false;
+  private inputClearRequested = false;
   private interrupted = false;
   private keyParser = new TerminalKeyParser();
   private lastFrame = '';
@@ -262,13 +267,16 @@ export class SebTerminalRenderer {
       this.dispatchInput(chunk, (key) => this.handleStreamKey(key));
     };
     this.attachInput();
+    const initialMessage: UIMessage = result.message ?? {
+      id: randomUUID(), role: 'assistant', parts: [],
+    };
     let response = result.message;
     let streamFailed = false;
     const streamErrorId = `stream-error-${++this.streamSequence}`;
     const stream = toReadableStream(result.uiMessageStream);
     try {
       const messages = readUIMessageStream({
-        ...(result.message ? { message: result.message } : {}),
+        message: initialMessage,
         stream,
         onError: (error) => {
           streamFailed = true;
@@ -756,11 +764,12 @@ export class SebTerminalRenderer {
     }
     this.upsert({
       content: storedPrompt,
-      id: `user-${Date.now()}`,
+      id: `user-${randomUUID()}`,
       kind: 'user',
       title: 'You',
     });
     this.editor.set('');
+    this.resetMenu();
     this.detachInput();
     this.status = 'Thinking';
     this.paint();
@@ -945,8 +954,9 @@ export class SebTerminalRenderer {
   private recallHistory(direction: 1 | -1): void {
     const entries = this.options.history.list();
     if (entries.length === 0) return;
+    if (this.historyIndex === -1) this.historyDraft = this.editor.text();
     this.historyIndex = Math.max(-1, Math.min(entries.length - 1, this.historyIndex + direction));
-    this.editor.set(this.historyIndex < 0 ? '' : entries[this.historyIndex] ?? '');
+    this.editor.set(this.historyIndex < 0 ? this.historyDraft : entries[this.historyIndex] ?? '');
   }
 
   private reverseSearch(): void {
@@ -1024,7 +1034,20 @@ export class SebTerminalRenderer {
     accept: (key: TerminalKey) => void,
   ): void {
     this.cancelEscapeTimer();
-    for (const key of this.keyParser.parse(chunk)) accept(key);
+    this.dispatchingInput = true;
+    try {
+      for (const key of this.keyParser.parse(chunk)) {
+        if (!this.onData) break;
+        accept(key);
+      }
+    } finally {
+      this.dispatchingInput = false;
+      const repaint = this.inputPaintRequested;
+      const clear = this.inputClearRequested;
+      this.inputPaintRequested = false;
+      this.inputClearRequested = false;
+      if (repaint) this.paint(clear);
+    }
     if (!this.keyParser.hasPendingEscape()) return;
     this.escapeTimer = setTimeout(() => {
       this.escapeTimer = undefined;
@@ -1212,6 +1235,11 @@ export class SebTerminalRenderer {
   }
 
   private paint(clear = false): void {
+    if (this.dispatchingInput) {
+      this.inputPaintRequested = true;
+      this.inputClearRequested ||= clear;
+      return;
+    }
     this.cancelPaint();
     if (!this.active) return;
     const width = Math.max(1, this.options.output.columns ?? 80);
@@ -1412,7 +1440,7 @@ export class SebTerminalRenderer {
     }
     const maximumPromptRows = Math.max(
       1,
-      maximumHeight - menu.length - suggestions.length - 2,
+      Math.min(5, maximumHeight - menu.length - suggestions.length - 2),
     );
     const promptLines = this.overlay === 'none'
       ? renderEditor(this.editor, width - 4, this.theme, maximumPromptRows)

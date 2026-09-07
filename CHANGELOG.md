@@ -6,6 +6,18 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- New prompts keep earlier answers in the terminal transcript. Approval continuations retain the same answer ID.
+- Sleeper league users accept a null commissioner flag. This restores league overview, analysis, and matchup estimates for affected leagues.
+- Tool errors distinguish invalid inputs, unavailable tools, and Sleeper failures from model provider failures.
+
+### Changed
+
+- Prompt entry draws one frame per input chunk, restores drafts after history navigation, and ignores duplicate submission keys.
+- Long prompts use at most five editor rows to keep the transcript visible.
+- Team-name questions use a direct Sleeper league-member lookup without score analysis or web search.
+
 ## [0.2.0] - 2026-09-01
 
 ### Added

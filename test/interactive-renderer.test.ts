@@ -12,6 +12,83 @@ import { InteractiveUiState } from '../src/interactive/ui-state.js';
 import { SourceTracker } from '../src/sources.js';
 
 describe('SebTerminalRenderer prompt input', () => {
+  it('retains consecutive answers when streams omit message IDs', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    const responses = [];
+    for (const answer of ['First answer remains.', 'Second answer remains.']) {
+      const prompt = renderer.readPrompt();
+      terminal.input.type(`${answer}\r`);
+      await prompt;
+      responses.push(await renderer.renderStream({
+        uiMessageStream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'start' });
+            controller.enqueue({ type: 'text-start', id: 'text' });
+            controller.enqueue({ type: 'text-delta', id: 'text', delta: answer });
+            controller.enqueue({ type: 'text-end', id: 'text' });
+            controller.enqueue({ type: 'finish', finishReason: 'stop' });
+            controller.close();
+          },
+        }),
+      }));
+    }
+    expect(responses[0]?.id).toBeTruthy();
+    expect(responses[1]?.id).not.toBe(responses[0]?.id);
+    const frame = terminal.output.text().split('\x1b[H').at(-1) ?? '';
+    expect(frame.match(/First answer remains\./gu)).toHaveLength(2);
+    expect(frame.match(/Second answer remains\./gu)).toHaveLength(2);
+    renderer.close();
+  });
+
+  it('paints one frame per input chunk and restores the draft after history navigation', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(['old prompt']));
+    const prompt = renderer.readPrompt();
+    const before = terminal.output.chunks.length;
+    terminal.input.type('My unfinished question');
+    expect(terminal.output.chunks.length - before).toBe(1);
+    terminal.input.type('\x1b[A\x1b[B\r');
+    await expect(prompt).resolves.toBe('My unfinished question');
+    renderer.close();
+  });
+
+  it('keeps the prior answer visible while editing a long pasted prompt', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    await renderer.renderStream({
+      uiMessageStream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'text-start', id: 'answer' });
+          controller.enqueue({ type: 'text-delta', id: 'answer', delta: 'Keep this answer visible.' });
+          controller.enqueue({ type: 'text-end', id: 'answer' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
+          controller.close();
+        },
+      }),
+    });
+    const prompt = renderer.readPrompt();
+    const pasted = Array.from({ length: 40 }, (_, index) => `Draft line ${index}`).join('\n');
+    terminal.input.type(`\x1b[200~${pasted}\x1b[201~`);
+    const frame = terminal.output.text().split('\x1b[H').at(-1) ?? '';
+    expect(frame).toContain('Keep this answer visible.');
+    expect(frame).toContain('Draft line 39');
+    terminal.input.type('\r');
+    await expect(prompt).resolves.toBe(pasted);
+    renderer.close();
+  });
+
+  it('ignores duplicate Enter keys during one submission', async () => {
+    const terminal = createTerminal();
+    const history = new MemoryPromptHistory();
+    const renderer = createRenderer(terminal, history);
+    const prompt = renderer.readPrompt();
+    terminal.input.type('One question\r\r');
+    await expect(prompt).resolves.toBe('One question');
+    expect(history.list()).toEqual(['One question']);
+    renderer.close();
+  });
+
   it('supports cursor editing and multiline input', async () => {
     const terminal = createTerminal();
     const renderer = createRenderer(terminal);

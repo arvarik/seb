@@ -57,6 +57,27 @@ describe('GameWeatherService', () => {
     expect(result.stadium?.name).toContain('Arrowhead');
   });
 
+  it.each([
+    ['2026-09-10T21:00:00-04:00', '2026-09-10T22:00:00-04:00'],
+    ['2026-09-10T19:00:00-04:00', '2026-09-10T20:00:00-04:00'],
+  ])('rejects a forecast period outside kickoff: %s', async (startTime, endTime) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-05T12:00:00Z'));
+    const weather = {
+      getHourlyForecast: vi.fn().mockResolvedValue({ periods: [{
+        startTime, endTime, temperature: 70, temperatureUnit: 'F',
+        windSpeed: '5 mph', precipitationProbability: 0,
+      }] }),
+      getActiveAlerts: vi.fn().mockResolvedValue([]),
+    };
+    const service = new GameWeatherService(nflverseWithGame(game({})),
+      weather as unknown as WeatherClient);
+    const result = await service.getGameWeather({ season: 2026, week: 1, team: 'KC' });
+    expect(result.status).toBe('unavailable');
+    expect(result.forecast).toBeNull();
+    expect(result.risk).toBeNull();
+  });
+
   it('does not request weather outside the NWS forecast window', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-20T12:00:00Z'));

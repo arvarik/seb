@@ -178,6 +178,8 @@ export class SleeperClient {
 
     return Object.values(players)
       .filter((player) => playerMatches(player, normalizedQuery))
+      .filter((player) => !options.position ||
+        player.position?.toUpperCase() === options.position.trim().toUpperCase())
       .sort((left, right) => comparePlayerMatches(left, right, normalizedQuery))
       .slice(0, limit);
   }
@@ -277,7 +279,7 @@ export class SleeperClient {
       cacheOutcome: result.outcome,
       ...(result.error ? { error: result.error } : {}),
       ...(result.warnings ? { warnings: result.warnings } : {}),
-      id: `sleeper-${path.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}`,
+      id: `sleeper-${path.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}${url.search}`,
       label: 'Sleeper read-only API',
       retrievedAt: result.cache.cachedAt,
       url: url.href,

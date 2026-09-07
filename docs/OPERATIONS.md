@@ -112,11 +112,11 @@ Do not restart the service only because a model provider returns one capacity er
 
 Seb already retries the configured fallback model.
 
-## Live contract checks
+## Live contract commands
 
-The `Live contracts` GitHub Actions workflow runs each Monday and supports manual runs.
+Run these commands manually when you need to validate the external service contracts.
 
-The source job calls Sleeper, nflverse, and the National Weather Service without local cache data.
+The source contract calls Sleeper, nflverse, and the National Weather Service without local cache data.
 
 Run the same source contracts locally.
 
@@ -124,13 +124,13 @@ Run the same source contracts locally.
 npm run contract:sources
 ```
 
-The answer job sends a fixed evidence object to Google Gemini.
+The answer contract sends a fixed evidence object to Google Gemini.
 
 It also verifies one local tool result, one model continuation, and one grounded Google Search source.
 
-It requires the `GOOGLE_GENERATIVE_AI_API_KEY` repository secret.
+It requires `GOOGLE_GENERATIVE_AI_API_KEY` in the current environment.
 
-The job validates the structured answer schema, player identity, and recommendation limit.
+The command validates the structured answer schema, player identity, and recommendation limit.
 
 Run the same answer contract locally when the environment contains the key.
 

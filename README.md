@@ -9,15 +9,13 @@
 
 Seb unifies real-time NFL news, live Sleeper leagues, nflverse statistics, and kickoff weather into a single conversational agent. 
 
-Unlike generic chatbots that guess player stats or hallucinate lineups, Seb uses **deterministic math** for projections and rankings—safeguarding your start-sit, trade, and waiver decisions with verified evidence.
+Unlike generic chatbots that guess player stats or hallucinate lineups, Seb uses **deterministic math** for projections and rankings, safeguarding your start-sit, trade, and waiver decisions with verified evidence.
 
 ```text
 Show Derrick Henry's recent production and latest verified news.
 Look deeper into his usage.
 Compare him with Saquon Barkley for this week's matchup and weather.
 ```
-
-> **Context-Aware:** Seb maintains the active player, matchup, and league between questions—no need to repeat yourself.
 
 ---
 

@@ -1,5 +1,6 @@
 import { MODEL_FAMILIES, type ModelProviderId } from '../ai/model-provider.js';
 import { findSkill, SEB_SKILLS } from './skills.js';
+import { SYSTEM_TOPICS } from '../system/metadata.js';
 
 export type CompletionShell = 'bash' | 'fish' | 'zsh';
 
@@ -102,6 +103,17 @@ const COMMAND_CATEGORY_ORDER: readonly InteractiveCommandCategory[] = [
 
 export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('help', '/help', 'Show every interactive command.', 'Essentials', 'Print the complete command guide.', ['?'], undefined, undefined, 0),
+  command(
+    'about',
+    '/about [TOPIC]',
+    'Show Seb architecture, design, and capabilities.',
+    'Essentials',
+    'Explain how Seb is built, its deterministic models, data sources, and storage.',
+    ['architecture', 'arch'],
+    [...SYSTEM_TOPICS],
+    undefined,
+    1,
+  ),
   command('explore', '/explore [QUESTION]', 'Find player, team, league, statistic, and news information.', 'Explore', 'Open Explore or ask one Explore question.'),
   command('fantasy', '/fantasy [QUESTION]', 'Use connected Sleeper leagues, rosters, deadlines, and player news.', 'My Fantasy', 'Open My Fantasy or ask one account-aware question.', ['my']),
   command('analyze', '/analyze [QUESTION]', 'Compare players and add matchup, weather, usage, or roster context.', 'Analyze', 'Open Analyze or ask one analysis question.'),

@@ -37,17 +37,19 @@ Compare him with Saquon Barkley for this week's matchup and weather.
 
 ### 1. Install
 
-Choose your preferred way to run Seb (requires Node.js 22+):
+Requires Node.js 22+:
 
 ```bash
-# Zero-install execution
-npx @arvarik/seb
+# Clone the repository
+git clone https://github.com/arvarik/seb.git
+cd seb
+npm ci
 
-# Or install globally
-npm install -g @arvarik/seb
+# Option A: Run directly from source
+npm run seb
 
-# Or clone from source
-git clone https://github.com/arvarik/seb.git && cd seb && npm ci
+# Option B: Install globally from source (available anywhere as `seb`)
+npm install -g .
 ```
 
 <details>
@@ -123,6 +125,7 @@ Turn research into winning start-sit, trade, and waiver actions.
 | --- | --- |
 | `seb` | Launch the full interactive terminal interface. |
 | `seb ask "..."` | Ask one-shot questions from scripts or shell (supports `--json`). |
+| `/about [topic]` | Inside chat, inspect Seb's architecture, projection formulas, storage schemas, and design principles. |
 | `seb doctor` | Validate active model provider, local cache, and public APIs. |
 | `seb usage / stats`| Inspect local token usage, response latency, and run success rates. |
 | `seb learn` | Review adaptive forecast accuracy and completed-week parameter updates. |

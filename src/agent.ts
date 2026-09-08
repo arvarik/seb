@@ -39,6 +39,7 @@ import {
 import { createProjectionTools } from './projection/tools.js';
 import { createWaiverTools } from './waivers/tools.js';
 import { createTradeTools } from './trades/tools.js';
+import { createSystemTools } from './system/tools.js';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash';
 export const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-3.6-flash';
@@ -238,6 +239,7 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
         ? {}
         : { repository: options.identityRepository },
     ),
+    ...createSystemTools(),
     ...(newsToolMode !== 'none' ? createFirstClassNewsTools(newsClient) : {}),
     ...(newsToolMode === 'google' && toolProvider
       ? createGroundedNewsTools(toolProvider)
@@ -523,6 +525,9 @@ function analysisRuntimeInstructions(
 
 const BASE_INSTRUCTIONS = `
 You are Seb, an NFL and fantasy football research assistant.
+
+Use inspectSystemDocs when the user asks about Seb's own code, architecture, system design, data sources, deterministic models, storage, or technical capabilities.
+Explain Seb's architecture accurately using this evidence.
 
 Use getLeagueTeams for fantasy team names or league members. It returns custom team names and owner names.
 Use getLeagueOverview for league settings and roster IDs.

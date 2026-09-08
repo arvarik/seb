@@ -4,6 +4,23 @@ This file records each user-visible Seb release.
 
 The project follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- Preserve league identifiers in large prompts and cancel stalled one-shot model requests with Ctrl+C.
+- Warn about truncated answers and keep incomplete recommendations unavailable.
+- Cache one Sleeper player map and apply filters locally. Isolate request circuits by origin and preserve shared loads for remaining callers.
+- Support IDP starter slots, link unique active players across team changes, and explain league minimum FAAB bids.
+- Accept consistent CLI value options and help aliases. Show progress while checking buffered answers.
+- Split Discord and Telegram replies within platform limits and show sanitized model errors.
+
+### Added
+
+- Apache-2.0 licensing, public package metadata, contribution and security guides, and GitHub community templates.
+- Weekly dependency updates and Linux/macOS CI coverage with cancellation of outdated runs.
+- Setup guide version checks and documentation for learning and evaluation commands.
+
 ## [Unreleased]
 
 ### Added

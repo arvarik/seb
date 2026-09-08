@@ -151,11 +151,13 @@ export class SleeperClient {
   }
 
   async getPlayers(filters: PlayerFilters = {}): Promise<SleeperPlayerMap> {
-    const hasFilters = filters.active !== undefined || filters.position !== undefined;
-    return this.get('/players/nfl', sleeperPlayerMapSchema, {
-      active: filters.active,
-      position: filters.position?.toUpperCase(),
-    }, hasFilters ? sleeperPolicy('players-filtered') : sleeperPolicy('players'));
+    const players = await this.get('/players/nfl', sleeperPlayerMapSchema, {}, sleeperPolicy('players'));
+    const position = filters.position?.trim().toUpperCase();
+    return Object.fromEntries(Object.entries(players).filter(([, player]) =>
+      (filters.active === undefined || player.active === filters.active) &&
+      (!position || player.position?.toUpperCase() === position ||
+        player.fantasy_positions?.some((value) => value.toUpperCase() === position)),
+    ));
   }
 
   async findPlayers(
@@ -231,7 +233,9 @@ export class SleeperClient {
     const resource = new CachedResource<T>(
       this.database,
       'sleeper',
-      url.href,
+      path === '/players/nfl'
+        ? this.baseUrl === DEFAULT_BASE_URL ? 'sleeper:players:nfl:all' : `sleeper:players:nfl:all:${this.baseUrl}`
+        : url.href,
       url.href,
       { ...policy, validate: (value) => schema.parse(value) },
       this,

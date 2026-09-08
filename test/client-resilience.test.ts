@@ -15,6 +15,34 @@ afterEach(() => {
 });
 
 describe('source client resilience', () => {
+  it('caches one unfiltered player map across filters and client instances', async () => {
+    const database = createDatabase();
+    let calls = 0;
+    const fetch: typeof globalThis.fetch = async (url) => {
+      calls += 1;
+      expect(String(url)).toBe('https://api.sleeper.app/v1/players/nfl');
+      return new Response(JSON.stringify({
+        qb: { player_id: 'qb', active: true, position: 'QB' },
+        wr: { player_id: 'wr', active: true, position: 'WR', fantasy_positions: ['WR', 'RB'] },
+        old: { player_id: 'old', active: false, position: 'QB' },
+        unknown: { player_id: 'unknown', position: 'QB' },
+      }));
+    };
+    const client = new SleeperClient({ database, fetch });
+    const second = new SleeperClient({ database, fetch });
+    const [qbs, runners] = await Promise.all([
+      client.getPlayers({ active: true, position: 'qb' }),
+      second.getPlayers({ active: true, position: 'RB' }),
+    ]);
+    expect(Object.keys(qbs)).toEqual(['qb']);
+    expect(Object.keys(runners)).toEqual(['wr']);
+    expect(Object.keys(await client.getPlayers({ active: false }))).toEqual(['old']);
+    expect(Object.keys(await second.getPlayers())).toHaveLength(4);
+    expect(calls).toBe(1);
+    expect(database.getCache('sleeper', 'sleeper:players:nfl:all')?.value).toHaveProperty('old');
+    expect(database.status().cacheEntries).toBe(1);
+  });
+
   it('returns an eligible stale Sleeper value and records the failed refresh', async () => {
     const database = createDatabase();
     const url = 'https://api.sleeper.app/v1/league/123';

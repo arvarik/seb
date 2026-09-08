@@ -476,7 +476,7 @@ function waitForResourceFlight(
       finished = true;
       signal?.removeEventListener('abort', onAbort);
       flight.waiters.delete(waiter);
-      if (flight.waiters.size === 0 && !flight.settled) {
+      if (signal?.aborted && flight.waiters.size === 0 && !flight.settled) {
         if (flight.registry.get(flight.key) === flight) {
           flight.registry.delete(flight.key);
         }

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Setup and command help
+    url: https://github.com/arvarik/seb/blob/main/docs/CLI.md
+    about: Read the command guide before opening a support issue.
+  - name: Security reports
+    url: https://github.com/arvarik/seb/blob/main/SECURITY.md
+    about: Follow the private disclosure instructions. Do not open a public vulnerability issue.

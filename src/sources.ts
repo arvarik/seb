@@ -16,6 +16,7 @@ export interface SourceEvidenceSnapshot {
 }
 
 export interface EvidenceMarkdownOptions {
+  surface?: 'terminal' | 'connector';
   limit?: number;
   now?: Date;
 }
@@ -206,7 +207,7 @@ export function formatEvidenceMarkdown(
       `${index + 1}. [${safeMarkdownLabel(source.label)}](<${source.url}>) · **${sourceEvidenceBadge(source, now)}** · ${sourceRetrievalDetail(source, now)}`,
     ),
     ...(hidden > 0
-      ? [`${hidden} more source${hidden === 1 ? '' : 's'} · Run \`/sources\` for the exact set.`]
+      ? [`${hidden} more source${hidden === 1 ? '' : 's'}${options.surface === 'connector' ? '.' : ' · Run `/sources` for the exact set.'}`]
       : []),
   ].join('\n');
 }

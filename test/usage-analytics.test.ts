@@ -436,6 +436,7 @@ describe('usage analytics', () => {
     expect(nonfiniteNumberPaths(report)).toEqual([]);
   });
 
+  // This precision boundary needs 900,001 records, including on slower coverage runners.
   it('returns null when JSON cannot preserve a ratio to two decimals', () => {
     const repeated = step({ inputTokens: MAX_USAGE_TOKEN_COUNT, outputTokens: 0 });
     const steps = Array.from({ length: 900_000 }, () => repeated);
@@ -449,7 +450,7 @@ describe('usage analytics', () => {
       value: null,
     });
     expect(report.dataQuality.overflowedAggregates).toBe(true);
-  });
+  }, 30_000);
 
   it('builds deterministic model and tool breakdowns', () => {
     const report = analyzeUsage(dataset({

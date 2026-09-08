@@ -137,6 +137,17 @@ Interactive controls:
 `;
 
 export function parseCliArguments(arguments_: readonly string[]): CliCommand {
+  const valueOptions = new Set(['--model', '--provider', '--season', '--through-week', '--position',
+    '--output', '--league', '--max-size-mb', '--max-age-days', '--retain', '--kind', '--entity', '--id', '--limit', '--retain-days']);
+  let literal = false;
+  arguments_ = arguments_.flatMap((argument) => {
+    if (argument === '--') literal = true;
+    const equals = argument.indexOf('=');
+    if (!literal && equals > 0 && valueOptions.has(argument.slice(0, equals))) {
+      return [argument.slice(0, equals), argument.slice(equals + 1)];
+    }
+    return [argument];
+  });
   if (arguments_.length === 0) {
     return { name: 'chat' };
   }
@@ -188,9 +199,6 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
     case 'stats':
       return parseUsageArguments(first, rest);
     default:
-      if (first?.startsWith('-')) {
-        throw new CliUsageError(`Unknown option: ${first}`);
-      }
       return parseAskArguments(arguments_);
   }
 }
@@ -586,7 +594,7 @@ function requireNoArguments(arguments_: readonly string[], command: string): voi
 }
 
 function parseLearningArguments(args: readonly string[]): CliCommand {
-  if (args.includes('--help')) return { name: 'help' };
+  if (args.includes('--help') || args.includes('-h')) return { name: 'help' };
   const action = args[0];
   if (action !== 'status' && action !== 'update') throw new CliUsageError('Use seb learn status|update --season YEAR.');
   let season: number | undefined;

@@ -93,7 +93,7 @@ export function analyzeTradeImpact(
   const afterPlayers = [...input.rosterPlayers.filter((player) => !giveIds.has(player.player_id)), ...input.receivePlayers];
   let lineupImpact: TradeImpactAnalysis['lineupImpact'] = null;
   try {
-    const knownSlots = new Set([...OFFENSIVE_SLOTS, 'K', 'DEF', 'DL', 'DE', 'DT', 'LB', 'DB', 'CB', 'S', 'IDP_FLEX', 'BN', 'BENCH', 'IR', 'RESERVE', 'TAXI']);
+    const knownSlots = new Set([...OFFENSIVE_SLOTS, 'K', 'DEF', 'DL', 'DE', 'DT', 'LB', 'DB', 'CB', 'S', 'IDP_FLEX', 'IDP', 'BN', 'BENCH', 'IR', 'RESERVE', 'TAXI']);
     if (input.league.roster_positions.some((slot) => !knownSlots.has(slot.toUpperCase()))) throw new Error('Unsupported starter slot.');
     const lineup = (players: SleeperPlayer[]) => optimizeLineup(
       tradeSide(players.filter((player) => OFFENSIVE_POSITIONS.has(player.position?.toUpperCase() ?? '')), rowsByName, input.league, input.parameters).players.map((player) => ({

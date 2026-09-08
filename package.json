@@ -1,7 +1,7 @@
 {
   "name": "seb",
   "version": "0.2.3",
-  "private": true,
+  "private": false,
   "type": "module",
   "description": "A source-grounded NFL and fantasy football agent for league, player, team, weather, and news analysis.",
   "bin": {
@@ -64,5 +64,33 @@
     "oxlint": "^1.79.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
-  }
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arvarik/seb.git"
+  },
+  "homepage": "https://github.com/arvarik/seb#readme",
+  "bugs": {
+    "url": "https://github.com/arvarik/seb/issues"
+  },
+  "keywords": [
+    "cli",
+    "nfl",
+    "fantasy-football",
+    "sleeper",
+    "ai-agent"
+  ],
+  "author": "Arvind Arikatla",
+  "files": [
+    "bin/",
+    "src/",
+    "scripts/check-version.mjs",
+    "docs/",
+    "CHANGELOG.md",
+    ".env.example"
+  ]
 }

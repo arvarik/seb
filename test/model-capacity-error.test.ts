@@ -84,7 +84,7 @@ describe('model error presentation', () => {
     const error = { code: 'invalid_request' };
 
     expect(formatModelErrorForUser(error, 'interactive')).toContain('/doctor');
-    expect(formatModelErrorForUser(error, 'cli')).toContain('npm run doctor');
+    expect(formatModelErrorForUser(error, 'cli')).toContain('seb doctor');
     expect(formatModelErrorForUser(error, 'connector')).toContain(
       'connector service logs',
     );

@@ -116,12 +116,12 @@ export function formatModelErrorForUser(
   const healthCheck = surface === 'interactive'
     ? 'Run `/doctor`'
     : surface === 'cli'
-    ? 'Run `npm run doctor`'
+    ? 'Run `seb doctor`'
     : 'Run the Seb health check';
   const diagnostics = surface === 'interactive'
     ? 'Run `/doctor` and `/stats session`'
     : surface === 'cli'
-    ? 'Run `npm run doctor` and `seb stats`'
+    ? 'Run `seb doctor` and `seb stats`'
     : surface === 'connector'
     ? 'Run the Seb health check and inspect the connector service logs'
     : 'Run the Seb health check and inspect the local statistics';

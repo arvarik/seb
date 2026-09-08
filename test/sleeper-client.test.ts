@@ -30,18 +30,21 @@ describe('SleeperClient', () => {
           player_id: '1',
           full_name: 'Josh Allen',
           position: 'QB',
+          active: true,
           search_rank: 1,
         },
         '2': {
           player_id: '2',
           full_name: 'Josh Johnson',
           position: 'QB',
+          active: true,
           search_rank: 50,
         },
         '3': {
           player_id: '3',
           full_name: 'John Smith',
           position: 'QB',
+          active: true,
           search_rank: 2,
         },
       });
@@ -53,9 +56,7 @@ describe('SleeperClient', () => {
       limit: 5,
     });
 
-    expect(requestedUrl).toContain('/players/nfl?');
-    expect(requestedUrl).toContain('active=true');
-    expect(requestedUrl).toContain('position=QB');
+    expect(requestedUrl).toBe('https://api.sleeper.app/v1/players/nfl');
     expect(players.map((player) => player.player_id)).toEqual(['1']);
   });
 
@@ -82,8 +83,8 @@ describe('SleeperClient', () => {
     await client.getPlayers({ position: 'WR' });
     await client.getTrendingPlayers('add', 24);
     await client.getTrendingPlayers('add', 48);
-    expect(sources.list()).toHaveLength(4);
-    expect(new Set(sources.list().map((source) => source.url)).size).toBe(4);
+    expect(sources.list()).toHaveLength(3);
+    expect(new Set(sources.list().map((source) => source.url)).size).toBe(3);
   });
 
   it('keeps provider context when a failed response body exceeds the limit', async () => {

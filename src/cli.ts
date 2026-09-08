@@ -35,8 +35,8 @@ import {
   type ModelProviderId,
   type ResolvedModelProvider,
 } from './ai/model-provider.js';
-import { assertModelCompleted, observeCompletedModelStream } from './ai/stream-completion.js';
-import { currentRequestSignalWithTimeout } from './ai/request-signal.js';
+import { assertModelCompleted, observeCompletedModelStream, waitForModelOperation } from './ai/stream-completion.js';
+import { currentRequestSignal, currentRequestSignalWithTimeout, runWithRequestSignal } from './ai/request-signal.js';
 import { FileModelSettingsStore, formatModelSettings } from './ai/model-settings.js';
 import {
   CLI_HELP,
@@ -721,6 +721,23 @@ async function answerOneQuestion(
   streams: CliStreams,
   environment: NodeJS.ProcessEnv,
 ): Promise<void> {
+  const controller = new AbortController();
+  const cancel = (): void => controller.abort(new DOMException('The request stopped.', 'AbortError'));
+  process.on('SIGINT', cancel);
+  try {
+    await waitForModelOperation(runWithRequestSignal(controller.signal,
+      () => answerOneQuestionWithSignal(command, streams, environment)), controller.signal);
+  } finally {
+    controller.abort();
+    process.removeListener('SIGINT', cancel);
+  }
+}
+
+async function answerOneQuestionWithSignal(
+  command: Extract<CliCommand, { name: 'ask' }>,
+  streams: CliStreams,
+  environment: NodeJS.ProcessEnv,
+): Promise<void> {
   const prompt = command.prompt ?? (await readPrompt(streams.stdin));
   if (!prompt) {
     throw new CliUsageError(
@@ -733,6 +750,7 @@ async function answerOneQuestion(
     command.model,
     command.provider,
   );
+  currentRequestSignal()?.throwIfAborted();
   try {
     if (command.json) {
       const result = await generateAnswer(
@@ -801,6 +819,7 @@ async function generateWithModel(
     clients.sleeperClient,
   );
   sources.clear();
+  currentRequestSignal()?.throwIfAborted();
   const researchAgent = createFantasyFootballAgent({
     modelProvider: modelProviderForModel(selection.modelProvider, model),
     ...clients,
@@ -814,7 +833,10 @@ async function generateWithModel(
       surface: 'cli',
     })],
   });
-  const research = await researchAgent.generate({ prompt });
+  const signal = currentRequestSignal();
+  const research = await waitForModelOperation(researchAgent.generate({
+    prompt, ...(signal ? { abortSignal: signal } : {}),
+  }), signal);
   assertModelCompleted(research.finishReason);
   for (const source of research.sources) {
     if (source.sourceType === 'url') sources.recordUrlSource(source);
@@ -829,9 +851,10 @@ async function generateWithModel(
       surface: 'cli',
     })],
   });
-  const result = await analysisAgent.generate({
+  const result = await waitForModelOperation(analysisAgent.generate({
+    ...(signal ? { abortSignal: signal } : {}),
     prompt: buildAnalysisPrompt(prompt, research.text, sources.list()),
-  });
+  }), signal);
   assertModelCompleted(result.finishReason);
   const sourceRecords = sources.list();
   const enforced = enforceRecommendationEligibility(
@@ -914,6 +937,7 @@ async function streamAnswer(
   environment: NodeJS.ProcessEnv,
 ): Promise<void> {
   const decisionRequested = questionRequestsRecommendation(prompt);
+  let completionWarning: string | undefined;
   let bufferedText = '';
   let decisionToolResults: RecommendationToolResult[] = [];
   let decisionToolInputs = new Map<string, { input: unknown; toolName: string }>();
@@ -929,6 +953,7 @@ async function streamAnswer(
   });
 
   const run = async (model: string): Promise<void> => {
+    completionWarning = undefined;
     bufferedText = '';
     decisionToolResults = [];
     decisionToolInputs = new Map();
@@ -942,6 +967,7 @@ async function streamAnswer(
       environment,
       clients.sleeperClient,
     );
+    currentRequestSignal()?.throwIfAborted();
     const agent = createFantasyFootballAgent({
       modelProvider: modelProviderForModel(selection.modelProvider, model),
       ...clients,
@@ -950,12 +976,14 @@ async function streamAnswer(
       telemetryFunctionId: 'seb.cli.research',
       telemetryIntegrations: [usageTelemetry],
     });
-    const result = await agent.stream({ prompt });
+    const signal = currentRequestSignal();
+    const result = await waitForModelOperation(agent.stream({ prompt, ...(signal ? { abortSignal: signal } : {}) }), signal);
 
-    for await (const part of observeUsageStreamErrors(observeCompletedModelStream(result.fullStream), usageTelemetry)) {
+    for await (const part of observeUsageStreamErrors(observeCompletedModelStream(result.fullStream, signal, { onPartial: (warning) => { completionWarning = warning.message; } }), usageTelemetry)) {
         if (part.type === 'text-delta') {
           if (decisionRequested) bufferedText += part.text;
           else {
+            stopProgress();
             streams.stdout.write(part.text);
             wroteText = true;
           }
@@ -965,7 +993,7 @@ async function streamAnswer(
             toolName: part.toolName,
           });
           if (progressEnabled && streams.stderr.isTTY === true) {
-            streams.stderr.write(`• ${describeTool(part.toolName)}\n`);
+            streams.stderr.write(`\r\x1b[2K• ${describeTool(part.toolName)}\n`);
           }
         } else if (part.type === 'source' && part.sourceType === 'url') {
           const url = normalizeWebUrl(part.url);
@@ -992,18 +1020,33 @@ async function streamAnswer(
     }
   };
 
+  const stopProgress = startAnswerProgress(streams.stderr, progressEnabled);
   try {
-    await run(selection.modelProvider.model);
-  } catch (error) {
-    if (
-      wroteText ||
-      !isModelCapacityError(error) ||
-      selection.modelProvider.fallbackModel === selection.modelProvider.model
-    ) {
-      throw error;
+    try {
+      await run(selection.modelProvider.model);
+    } catch (error) {
+      usageTelemetry.closeUnfinished(error);
+      if (
+        currentRequestSignal()?.aborted ||
+        wroteText ||
+        !isModelCapacityError(error) ||
+        selection.modelProvider.fallbackModel === selection.modelProvider.model
+      ) {
+        throw error;
+      }
+      writeFallbackNotice(streams.stderr, selection);
+      await run(selection.modelProvider.fallbackModel);
     }
-    writeFallbackNotice(streams.stderr, selection);
-    await run(selection.modelProvider.fallbackModel);
+  } finally {
+    stopProgress();
+  }
+
+  if (completionWarning) {
+    streams.stderr.write(`Warning: ${completionWarning}\n`);
+    if (decisionRequested) {
+      streams.stdout.write('Decision unavailable. The model did not complete the recommendation. Retry the request.\n');
+      return;
+    }
   }
 
   if (decisionRequested) {
@@ -1264,4 +1307,21 @@ export async function launchCli(
 
 if (isMainModule()) {
   void launchCli();
+}
+
+function startAnswerProgress(stderr: CliOutput, enabled: boolean): () => void {
+  if (!enabled || stderr.isTTY !== true) return () => undefined;
+  const frames = ['|', '/', '-', '\\'];
+  let stopped = false;
+  let index = 0;
+  const render = (): void => { stderr.write(`\r${frames[index++ % frames.length]} Seb is checking the answer…`); };
+  render();
+  const timer = setInterval(render, 150);
+  timer.unref();
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+    stderr.write('\r\x1b[2K');
+  };
 }

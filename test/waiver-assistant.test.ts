@@ -394,4 +394,5 @@ it('raises a rounded zero-dollar suggestion to the affordable minimum bid', () =
   const result = rankWaiverTargets({ analysisSeason: 2026, league: settings, lookbackHours: 24, nflverseRows: [], players: players(),
     resultLimit: 10, rosters: [roster], selectedRoster: roster, throughWeek: 3, trendingAdds: trends() });
   expect(result.targets.every((target) => target.faab?.lower === 1 && target.faab?.upper === 1)).toBe(true);
+  expect(result.targets.every((target) => target.faab?.rationale.includes('league minimum bid is 1'))).toBe(true);
 });

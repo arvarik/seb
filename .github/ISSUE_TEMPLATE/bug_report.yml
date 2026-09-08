@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible problem in Seb.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: "For security issues, follow SECURITY.md. Remove keys and private league data."
+  - type: input
+    id: version
+    attributes:
+      label: Seb version
+      description: Paste the output of seb --version.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and Node.js version
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized diagnostic output
+    validations:
+      required: true

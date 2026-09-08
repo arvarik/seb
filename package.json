@@ -52,7 +52,7 @@
     "hono": "^4.13.3",
     "robots-parser": "^3.0.1",
     "string-width": "^8.2.2",
-    "tsx": "^4.23.12",
+    "tsx": "^4.23.13",
     "zod": "^4.4.3"
   },
   "devDependencies": {

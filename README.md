@@ -61,7 +61,7 @@ docker run -it --rm -v ~/.seb:/root/.seb seb
 ```
 </details>
 
-### 2. Configure (30 seconds)
+### 2. Configure
 
 Run the interactive setup to securely configure your AI provider:
 
@@ -70,7 +70,7 @@ seb configure
 ```
 *Keys are masked in the terminal and stored in a private local credentials file.*
 
-### 3. Connect Sleeper (Optional)
+### 3. Connect Sleeper
 
 Link your Sleeper username for personalized fantasy intelligence:
 

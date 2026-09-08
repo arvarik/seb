@@ -6,6 +6,8 @@ import { homedir } from 'node:os';
 
 const MAX_ENTRIES = 200;
 const MAX_ENTRY_LENGTH = 16 * 1024;
+// JSON can escape each character as six bytes, plus indentation and separators.
+const MAX_HISTORY_BYTES = MAX_ENTRIES * (MAX_ENTRY_LENGTH * 6 + 8) + 4;
 
 export interface PromptHistory {
   add(prompt: string): Promise<void>;
@@ -59,7 +61,7 @@ export class FilePromptHistory extends MemoryPromptHistory {
     const path = promptHistoryPath(environment);
     let content: string;
     try {
-      const loaded = await readBoundedUtf8File(path, MAX_ENTRIES * MAX_ENTRY_LENGTH * 6 + 1024,
+      const loaded = await readBoundedUtf8File(path, MAX_HISTORY_BYTES,
         () => new Error('The history file exceeds its size limit.'));
       if (loaded === null) return new FilePromptHistory(path, []);
       content = loaded;

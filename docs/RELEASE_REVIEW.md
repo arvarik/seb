@@ -34,8 +34,8 @@ The changelog contains one consolidated 1.0.0 section and the package version ma
 
 | Check | Result |
 | --- | --- |
-| `npm run check` | Passed. 71 test files and 962 tests, plus version, lint, and type checks |
-| `npm run test:coverage` | Passed. Statements 82.99%, branches 73.41%, functions 89.23%, lines 85.13% |
+| `npm run check` | Passed. 71 test files and 963 tests, plus version, lint, and type checks |
+| `npm run test:coverage` | Passed. Statements 83.00%, branches 73.41%, functions 89.27%, lines 85.15% |
 | `npm audit --omit=dev` | Zero reported vulnerabilities |
 | `npm audit` | Zero reported vulnerabilities, including development dependencies |
 | `npm run doctor` | Passed local checks, Sleeper, nflverse, NWS, and a live Google tool continuation with grounded search |

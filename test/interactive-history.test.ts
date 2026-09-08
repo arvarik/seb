@@ -73,3 +73,14 @@ it('preserves oversized history files and keeps new prompts in memory', async ()
     expect((await stat(path)).size).toBe(21 * 1024 * 1024);
   } finally { await rm(path, { force: true }); }
 });
+
+it('loads a full history even when JSON uses six bytes per character', async () => {
+  const path = join(tmpdir(), `seb-escaped-history-${crypto.randomUUID()}.json`);
+  const entries = Array.from({ length: 200 }, (_, index) => '\x00'.repeat(16 * 1024 - 3) +
+    String.fromCharCode(index % 8, Math.floor(index / 8) % 8, Math.floor(index / 64)));
+  try {
+    await writeFile(path, `${JSON.stringify(entries, null, 2)}\n`);
+    const history = await FilePromptHistory.load({ SEB_HISTORY_FILE: path });
+    expect(history.list()).toEqual(entries);
+  } finally { await rm(path, { force: true }); }
+});

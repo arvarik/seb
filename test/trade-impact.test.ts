@@ -61,6 +61,18 @@ describe('trade impact analysis', () => {
     );
   });
 
+  it('calculates offensive lineup impact when the league also has an IDP starter', () => {
+    const give = player('give', 'Give Receiver', 'WR');
+    const receive = player('receive', 'Receive Receiver', 'WR');
+    const settings = { ...league(), roster_positions: ['WR', 'IDP', 'BN'] };
+    const result = analyzeTradeImpact({ analysisSeason: 2026, givePlayers: [give], receivePlayers: [receive],
+      league: settings, roster: { ...roster(), players: ['give'] }, rosterPlayers: [give], throughWeek: 3,
+      rows: [1, 2, 3].flatMap((week) => [stat('Give Receiver', 'give', week, { receivingYards: 50 }),
+        stat('Receive Receiver', 'receive', week, { receivingYards: 100 })]),
+    });
+    expect(result.lineupImpact).toMatchObject({ scope: 'offensive-starters', before: { complete: true }, after: { complete: true } });
+  });
+
   it('requires at least one player on each trade side', () => {
     expect(() => analyzeTradeImpact({
       analysisSeason: 2026,

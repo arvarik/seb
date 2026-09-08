@@ -1,7 +1,7 @@
 export interface LineupPlayer { id: string; name: string; positions: readonly string[]; points: number }
 const FLEX: Readonly<Record<string, readonly string[]>> = {
   FLEX: ['RB', 'WR', 'TE'], WRRBTE_FLEX: ['RB', 'WR', 'TE'], SUPER_FLEX: ['QB', 'RB', 'WR', 'TE'],
-  REC_FLEX: ['WR', 'TE'], WRTE_FLEX: ['WR', 'TE'], WRRB_FLEX: ['WR', 'RB'], IDP_FLEX: ['DL', 'LB', 'DB'],
+  REC_FLEX: ['WR', 'TE'], WRTE_FLEX: ['WR', 'TE'], WRRB_FLEX: ['WR', 'RB'], IDP_FLEX: ['DL', 'LB', 'DB'], IDP: ['DL', 'LB', 'DB'],
 };
 const BENCH = new Set(['BN', 'BENCH', 'IR', 'RESERVE', 'TAXI']);
 

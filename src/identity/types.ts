@@ -57,6 +57,7 @@ export type IdentityResolution<T> =
   | ResolvedIdentity<T>;
 
 export interface PlayerIdentitySeed {
+  active?: boolean;
   aliases?: readonly string[];
   canonicalId?: string;
   displayName: string;

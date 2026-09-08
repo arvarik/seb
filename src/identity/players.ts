@@ -25,6 +25,7 @@ export interface BuildPlayerIdentityOptions {
 }
 
 interface PreparedSeed {
+  active: boolean;
   aliases: string[];
   canonicalId: string | null;
   displayName: string;
@@ -174,6 +175,8 @@ export function buildPlayerIdentityRegistry(
     );
   }
 
+  if (automaticMatching === 'strict') applyRelocationMatches(prepared, parent);
+
   const groups = new Map<string, PreparedSeed[]>();
   for (const seed of prepared) {
     const root = find(parent, sourceIdentityKey(seed.source));
@@ -218,6 +221,7 @@ export function playerSeedFromSleeper(player: SleeperPlayer): PlayerIdentitySeed
     player.full_name?.trim() ||
     [player.first_name, player.last_name].filter(Boolean).join(' ').trim();
   return {
+    active: player.active === true,
     sourceProvider: 'sleeper',
     sourceId: player.player_id,
     displayName,
@@ -258,6 +262,7 @@ function prepareSeeds(
     }
     const teamId = resolveTeamId(input.team, input.sourceProvider, teamRegistry);
     const next: PreparedSeed = {
+      active: input.active === true,
       aliases: unique([displayName, ...(input.aliases ?? [])]),
       canonicalId: input.canonicalId?.trim() || null,
       displayName,
@@ -323,6 +328,37 @@ function applyAutomaticMatches(
   }
 }
 
+/** Link historical teams only when every provider has one identity for this name and position. */
+function applyRelocationMatches(seeds: readonly PreparedSeed[], parent: Map<string, string>): void {
+  const membersByRoot = new Map<string, PreparedSeed[]>();
+  for (const seed of seeds) {
+    const root = find(parent, sourceIdentityKey(seed.source));
+    const members = membersByRoot.get(root) ?? [];
+    members.push(seed);
+    membersByRoot.set(root, members);
+  }
+  const groups = new Map<string, PreparedSeed[]>();
+  for (const seed of seeds) {
+    if (!seed.position) continue;
+    const key = `${seed.normalizedName}|${seed.position}`;
+    const group = groups.get(key) ?? [];
+    group.push(seed);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    const active = group.filter((seed) => seed.source.provider === 'sleeper' && seed.active);
+    if (active.length !== 1 || new Set(group.map((seed) => seed.source.provider)).size !== group.length) continue;
+    const roots = new Set(group.map((seed) => find(parent, sourceIdentityKey(seed.source))));
+    const members = [...roots].flatMap((root) => membersByRoot.get(root) ?? []);
+    // Keep explicit links outside this exact name-position group unchanged.
+    if (members.length !== group.length) continue;
+    if (new Set(members.map((seed) => seed.source.provider)).size !== members.length) continue;
+    const canonicalIds = new Set(members.flatMap((seed) => seed.canonicalId ? [seed.canonicalId] : []));
+    if (canonicalIds.size > 1) continue;
+    for (const seed of group) union(parent, sourceIdentityKey(active[0]!.source), sourceIdentityKey(seed.source));
+  }
+}
+
 function combinePlayer(
   members: readonly PreparedSeed[],
   requestedCanonicalId: string | undefined,
@@ -341,7 +377,8 @@ function combinePlayer(
     displayName: preferred.displayName,
     normalizedName: preferred.normalizedName,
     position: positions.length === 1 ? positions[0] ?? null : preferred.position,
-    teamId: teams.length === 1 ? teams[0] ?? null : preferred.teamId,
+    teamId: members.find((member) => member.source.provider === 'sleeper' && member.active)?.teamId
+      ?? (teams.length === 1 ? teams[0] ?? null : preferred.teamId),
     aliases: unique(members.flatMap((member) => member.aliases)),
     sourceIdentities,
   };

@@ -519,6 +519,7 @@ function faabRange(
   }
   let lower = Math.min(faab.remaining, Math.round(faab.budget * lowerPercent / 100));
   let upper = Math.min(faab.remaining, Math.round(faab.budget * upperPercent / 100));
+  const minimumApplied = lower < faab.minimumBid;
   if (faab.remaining >= faab.minimumBid) {
     lower = Math.max(lower, faab.minimumBid);
     upper = Math.max(upper, lower);
@@ -527,7 +528,7 @@ function faabRange(
     ...faab,
     lower,
     lowerPercent,
-    rationale: `The ${rankScore} rank score maps to ${lowerPercent}-${upperPercent}% of the ${faab.budget} season budget. The roster has ${faab.remaining} remaining.`,
+    rationale: `The ${rankScore} rank score maps to ${lowerPercent}-${upperPercent}% of the ${faab.budget} season budget. The roster has ${faab.remaining} remaining.${minimumApplied ? ` The league minimum bid is ${faab.minimumBid}, so the bid range starts at ${faab.minimumBid}.` : ''}`,
     upper,
     upperPercent,
   };

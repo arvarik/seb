@@ -275,3 +275,8 @@ Seb states these limits in the answer when they affect a conclusion.
 - [AI SDK integration](docs/AI_SDK.md)
 - [Testing and verification](docs/ARCHITECTURE.md#test-design)
 - [Complete documentation index](docs/README.md)
+
+## Contributing and support
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md), and the [security policy](SECURITY.md).
+Seb uses the [Apache-2.0 license](LICENSE).

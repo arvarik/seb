@@ -63,14 +63,17 @@ chore(release): v1.0.0
 8. Open a pull request with the changes and exact verification results.
 9. Wait for every required Linux and macOS check to pass, then squash merge.
 10. Sync local `main` and verify that its commit matches GitHub.
-11. Create and push the annotated tag from that commit.
-12. Verify that the remote tag resolves to the same commit.
-13. Create a GitHub release with the exact tag as its title and clear release notes.
-14. Verify the release name, tag, and final commit.
+11. Create and push the annotated tag from that commit:
 
-Live model checks require credentials and can incur provider charges.
-News and source checks depend on external service availability. Record failures and investigate their cause before release.
-`npm run deps:check` reports newer dependencies. It does not require an upgrade to every new major version.
+    ```bash
+    git tag -a v1.0.0 -m "Release v1.0.0"
+    git push origin v1.0.0
+    ```
 
-The project does not publish an npm registry package yet. Users install the source from GitHub.
-A release does not change repository visibility or publish a registry package.
+12. The automated [Release workflow](../.github/workflows/release.yml) triggers on the tag push to execute:
+    - Verification: Runs `npm run version:check`, `lint`, `typecheck`, `test`, and `npm audit --omit=dev`.
+    - Package archiving: Generates the npm release tarball (`arvarik-seb-*.tgz`).
+    - npm registry: Publishes `@arvarik/seb` with cryptographic SLSA provenance (`--provenance`).
+    - Container registry: Builds and publishes the Docker image to GitHub Container Registry (`ghcr.io/arvarik/seb`).
+    - GitHub Release: Publishes the official GitHub release with notes generated from merged pull requests and the packaged tarball attached.
+13. Verify the release on GitHub, npm, and GHCR.

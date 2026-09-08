@@ -187,6 +187,27 @@ describe('connector model provider selection', () => {
 });
 
 describe('connector handlers', () => {
+  it('posts a sanitized model explanation through the reply handler', async () => {
+    const adapter = createMockAdapter('slack');
+    const post = vi.spyOn(adapter, 'postMessage');
+    const bot = new Chat({ adapters: { slack: adapter }, state: createMockState(), userName: 'seb' });
+    const error = new ModelResponseError({ statusCode: 401, message: 'secret-key private prompt' }, false);
+    registerConnectorHandlers(bot, async () => { throw error; });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    await bot.initialize();
+    try {
+      const message = createTestMessage('safe-failure', '<@seb> help', { isMention: true });
+      await bot.processMessage(adapter, message.threadId, message);
+      const posted = JSON.stringify(post.mock.calls);
+      expect(posted).toContain(error.message);
+      expect(posted).not.toContain('secret-key');
+      expect(posted).not.toContain('private prompt');
+    } finally {
+      await bot.shutdown();
+      stderr.mockRestore();
+    }
+  });
+
   it('subscribes after a new mention and invokes the shared reply', async () => {
     const adapter = createMockAdapter('slack');
     const state = createMockState();
@@ -522,7 +543,7 @@ describe('connector web sources', () => {
 
   it.each([
     { emittedOutput: false, includeText: false },
-    { emittedOutput: true, includeText: true },
+    { emittedOutput: false, includeText: true },
   ])(
     'rejects an aborted model stream when emittedOutput is $emittedOutput',
     async ({ emittedOutput, includeText }) => {

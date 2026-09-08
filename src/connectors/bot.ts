@@ -357,7 +357,7 @@ async function postAgentResponse(
     throw new ModelResponseError(error, false, modelErrorContext);
   }
   await waitForSignal(
-    thread.post(withWebSources(
+    postConnectorResponse(thread, withWebSources(
       result.fullStream,
       directSources,
       latestRecommendationQuestion(prompt),
@@ -368,7 +368,7 @@ async function postAgentResponse(
       ),
       (error) => usageTelemetry.closeUnfinished(error),
       modelErrorContext,
-    )),
+    ), signal),
     signal,
   );
 }
@@ -497,7 +497,7 @@ function guardedRecommendationStream(
 }
 
 function sourceAppendix(sources: SourceTracker): string {
-  const evidence = formatEvidenceMarkdown(sources.list());
+  const evidence = formatEvidenceMarkdown(sources.list(), { surface: 'connector' });
   return evidence ? `\n\n${evidence}` : '';
 }
 
@@ -657,7 +657,7 @@ async function runReply(
     if (connectorShutdown(error)) return;
     const reason = error instanceof Error ? error.message : String(error);
     process.stderr.write(`Seb connector reply failed: ${reason}\n`);
-    await postFailureMessage(thread);
+    await postFailureMessage(thread, error);
   }
 }
 
@@ -691,10 +691,10 @@ export function waitForSignal<T>(
   });
 }
 
-async function postFailureMessage(target: Thread): Promise<void> {
+async function postFailureMessage(target: Thread, error: unknown): Promise<void> {
   const signal = AbortSignal.timeout(CONNECTOR_FAILURE_TIMEOUT_MS);
   try {
-    await waitForSignal(target.post(FAILURE_MESSAGE), signal);
+    await waitForSignal(target.post(error instanceof ModelResponseError ? error.message : FAILURE_MESSAGE), signal);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     process.stderr.write(`Seb could not post the failure message: ${reason}\n`);
@@ -761,4 +761,46 @@ function requireEnvironment(
 
 export function isConnectorName(value: string): value is ConnectorName {
   return CONNECTOR_NAMES.includes(value as ConnectorName);
+}
+
+/** Split by UTF-16 length without separating a surrogate pair. Preserve all text. */
+export function splitConnectorMessage(text: string, limit: number): string[] {
+  if (!Number.isSafeInteger(limit) || limit < 2) throw new RangeError('The message limit must be at least 2.');
+  const chunks: string[] = [];
+  while (text.length > limit) {
+    let end = limit;
+    const newline = text.lastIndexOf('\n', end - 1);
+    const space = text.lastIndexOf(' ', end - 1);
+    const boundary = Math.max(newline, space);
+    if (boundary >= Math.floor(limit / 2)) end = boundary + 1;
+    const code = text.charCodeAt(end - 1);
+    if (code >= 0xD800 && code <= 0xDBFF) end -= 1;
+    chunks.push(text.slice(0, end));
+    text = text.slice(end);
+  }
+  if (text) chunks.push(text);
+  return chunks;
+}
+
+/** Use raw messages so platform formatting cannot expand a chunk past its limit. */
+export async function postConnectorResponse(
+  thread: Thread,
+  response: AsyncIterable<string | import('chat').StreamChunk>,
+  signal: AbortSignal,
+): Promise<void> {
+  const limit = thread.adapter.name === 'discord' ? 2_000 : thread.adapter.name === 'telegram' ? 4_096 : undefined;
+  if (!limit) {
+    await waitForSignal(thread.post(response), signal);
+    return;
+  }
+  let text = '';
+  for await (const part of response) {
+    signal.throwIfAborted();
+    if (typeof part === 'string') text += part;
+    else if (part.type === 'markdown_text') text += part.text;
+  }
+  for (const chunk of splitConnectorMessage(text, limit)) {
+    signal.throwIfAborted();
+    await waitForSignal(thread.post({ raw: chunk }), signal);
+  }
 }

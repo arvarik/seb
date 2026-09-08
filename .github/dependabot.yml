@@ -4,33 +4,33 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+      day: monday
+      time: "04:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    ignore:
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitest/*"
+        update-types: ["version-update:semver-major"]
     groups:
-      ai-sdk:
+      dependencies:
         patterns:
-          - ai
-          - '@ai-sdk/*'
-      chat-sdk:
-        patterns:
-          - chat
-          - '@chat-adapter/*'
-      hono:
-        patterns:
-          - hono
-          - '@hono/*'
-      dev-dependencies:
-        dependency-type: development
-        patterns:
-          - '*'
-        exclude-patterns:
-          - vitest
-          - '@vitest/*'
-      vitest:
-        patterns:
-          - vitest
-          - '@vitest/*'
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: "America/Los_Angeles"
     open-pull-requests-limit: 5
+    rebase-strategy: auto
+    groups:
+      actions:
+        patterns:
+          - "*"

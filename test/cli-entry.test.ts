@@ -54,6 +54,7 @@ describe('Seb executable', () => {
     expect(result.stderr).toBe('');
   });
 
+  // Four cold Node.js starts share this test's budget on slower CI machines.
   it('runs usage, stats, prune, and clear through the packaged entry point', () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'seb-cli-usage-'));
     try {
@@ -96,7 +97,7 @@ describe('Seb executable', () => {
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }
-  });
+  }, 45_000);
 });
 
 function runSeb(...arguments_: string[]) {

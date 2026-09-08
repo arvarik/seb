@@ -30,11 +30,35 @@ The review also corrected stale provider defaults, identity transfer rules, conn
 The old V1 design now separates implemented features from possible future work.
 The changelog contains one consolidated 1.0.0 section and the package version matches all checked documents.
 
+## Dependency PR review
+
+The release review checked all seven open dependency PRs.
+
+| PR | Outcome |
+| --- | --- |
+| [#18](https://github.com/arvarik/seb/pull/18) | Update `actions/checkout` to v7 |
+| [#19](https://github.com/arvarik/seb/pull/19) | Update `actions/setup-node` to v7 |
+| [#20](https://github.com/arvarik/seb/pull/20) | Update `@chat-adapter/tests` to 4.40.0 |
+| [#21](https://github.com/arvarik/seb/pull/21) | Update the Discord adapter to 4.40.0 |
+| [#22](https://github.com/arvarik/seb/pull/22) | Update the OpenAI-compatible provider to 3.0.44 |
+| [#23](https://github.com/arvarik/seb/pull/23) | Update the Telegram adapter to 4.40.0 |
+| [#24](https://github.com/arvarik/seb/pull/24) | Defer Vitest 5 because the latest Chat SDK test package requires Vitest 4 |
+
+The release also updates the Chat SDK core, Slack, and state adapters to 4.40.0 to keep one shared SDK version.
+Vitest and its coverage package remain on 4.1.11. The Vitest 5 PR failed dependency installation on both CI platforms.
+The release uses normal dependency resolution without peer overrides or forced installation.
+A provider regression verifies continuous reasoning when streamed chunks contain empty tool-call arrays.
+Dependabot now groups Chat SDK updates and groups Vitest with its coverage packages.
+A future Vitest 5 update must first resolve the Chat SDK test package compatibility requirement.
+
+The CLI statistics test starts four Node.js commands in sequence.
+Its test timeout now allows all four cold starts on slower CI machines, while each command retains its own timeout and assertions.
+
 ## Local verification
 
 | Check | Result |
 | --- | --- |
-| `npm run check` | Passed. 71 test files and 963 tests, plus version, lint, and type checks |
+| `npm run check` | Passed. 71 test files and 964 tests, plus version, lint, and type checks |
 | `npm run test:coverage` | Passed. Statements 83.00%, branches 73.41%, functions 89.27%, lines 85.15% |
 | `npm audit --omit=dev` | Zero reported vulnerabilities |
 | `npm audit` | Zero reported vulnerabilities, including development dependencies |

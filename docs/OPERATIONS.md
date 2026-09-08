@@ -243,6 +243,12 @@ Track these operational values.
 
 Do not update one Chat SDK adapter without checking the core `chat` version.
 
+Dependabot groups the Chat SDK packages and groups Vitest with its coverage packages.
+
+Check the Chat SDK test package peer requirements before a Vitest major upgrade.
+
+Version 1.0.0 uses Vitest 4 because `@chat-adapter/tests` 4.40.0 requires it.
+
 ## Incident actions
 
 ### The model provider fails

@@ -39,6 +39,12 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Split Discord and Telegram replies within platform limits and show sanitized model errors.
 - Keep capacity fallback within the original provider and deadline. Cancellation, timeouts, and visible output prevent a retry.
 
+### Dependencies
+
+- Update the Chat SDK core and all installed adapters to 4.40.0, including the shared test adapters.
+- Update the OpenAI-compatible provider to 3.0.44 and both GitHub Actions to v7.
+- Group related dependency updates. Retain Vitest 4 with matching coverage until the Chat SDK test package supports Vitest 5.
+
 ### Documentation
 
 - Replace the old V1 design with implemented scope, explicit limits, and a separate future roadmap.

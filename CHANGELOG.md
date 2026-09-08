@@ -6,6 +6,25 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-08
+
+### Added
+
+- Continuous Delivery release pipeline (`.github/workflows/release.yml`) automating verification, npm publishing with cryptographic SLSA provenance, Docker image builds to GitHub Container Registry (`ghcr.io`), and GitHub Releases.
+- Containerization support with a production `Dockerfile` and `.dockerignore` for zero-install Docker execution without requiring Node.js 22 on the host machine.
+- Scoped package naming (`@arvarik/seb`) for public npm registry distribution and zero-install execution via `npx @arvarik/seb`.
+
+### Changed
+
+- Streamlined and modernized `README.md` with concise marketing structure, 30-second quickstart, and decision safeguards overview.
+- Optimized Dependabot configuration to consolidate minor and patch dependency updates into a single weekly pull request and ignore breaking `vitest` major updates.
+
+### Dependencies
+
+- Bump `@ai-sdk/anthropic` to 4.0.49, `@ai-sdk/google` to 4.0.64, `@ai-sdk/openai` to 4.0.60, `ai` to 7.0.93, and `@ai-sdk/devtools` to 1.0.15.
+- Bump `hono` to 4.13.7, `zod` to 4.5.4, `tsx` to 4.23.13, and `oxlint` to 1.82.0.
+- Bump dev dependency `@types/node` to 26.4.1.
+
 ## [1.0.0] - 2026-09-08
 
 ### Added

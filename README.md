@@ -5,7 +5,7 @@
 [![CI](https://github.com/arvarik/seb/actions/workflows/ci.yml/badge.svg)](https://github.com/arvarik/seb/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 ![Node.js](https://img.shields.io/badge/Node.js->=22-339933?logo=node.js&logoColor=white)
-[![Version](https://img.shields.io/badge/version-1.0.0-informational.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-1.0.1-informational.svg)](package.json)
 
 Seb unifies real-time NFL news, live Sleeper leagues, nflverse statistics, and kickoff weather into a single conversational agent. 
 

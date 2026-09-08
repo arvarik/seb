@@ -1,6 +1,6 @@
 {
   "name": "@arvarik/seb",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": false,
   "type": "module",
   "description": "A source-grounded NFL and fantasy football agent for league, player, team, weather, and news analysis.",

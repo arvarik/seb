@@ -30,7 +30,9 @@ Seb then responds to later messages in the same thread.
 
 The connector reads up to 20 recent messages for conversation context.
 
-The connector streams each model answer through the platform adapter.
+Slack streams ordinary answers through its platform adapter.
+Discord and Telegram wait for completion, then split plain-text replies at 2,000 and 4,096 characters respectively.
+The split replies retain source URLs.
 
 It buffers a direct fantasy action until the deterministic evidence gate finishes.
 

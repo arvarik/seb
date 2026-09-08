@@ -40,7 +40,7 @@ A player identity contains these values.
 - Display aliases.
 - Sleeper and nflverse source identifiers.
 
-Seb prefers an nflverse record when it selects the display value for a linked group.
+Seb prefers an nflverse record for the display name. An explicitly active Sleeper profile supplies the current team for a linked group.
 
 Seb generates this ID when no explicit canonical ID exists.
 
@@ -54,7 +54,8 @@ Seb URL-encodes the source ID inside the generated identifier.
 
 The identity tool uses the strict matching strategy.
 
-This strategy requires the normalized name, position, and team to match.
+This strategy first matches the normalized name, position, and team.
+For a team transfer, Seb also accepts one unique name-position candidate from each provider when the Sleeper profile is explicitly active.
 
 It also requires one candidate from each provider.
 
@@ -66,11 +67,11 @@ The registry can also use these developer strategies.
 
 | Strategy | Rule |
 | --- | --- |
-| `strict` | Match the normalized name, position, and team. |
+| `strict` | Match the name, position, and team, with the guarded active-player transfer fallback. |
 | `name-position` | Match the normalized name and position. |
 | `off` | Use only explicit source links. |
 
-Use explicit links when a player changed teams or uses conflicting source names.
+Use explicit links when the guarded transfer fallback cannot resolve a player or the source names conflict.
 
 An explicit link can also assign a stable canonical ID.
 
@@ -102,7 +103,7 @@ The agent uses these tools when a name can map to several source identifiers.
 
 ## SQLite persistence
 
-Version `0.0.10` stores resolved player and team identities in SQLite.
+Seb stores resolved player and team identities in SQLite.
 
 The `identities` table stores the entity type, canonical ID, checked payload, and update time.
 

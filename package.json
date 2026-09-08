@@ -1,6 +1,6 @@
 {
   "name": "seb",
-  "version": "0.2.3",
+  "version": "1.0.0",
   "private": false,
   "type": "module",
   "description": "A source-grounded NFL and fantasy football agent for league, player, team, weather, and news analysis.",

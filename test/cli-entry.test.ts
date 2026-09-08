@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import { SEB_VERSION } from '../src/version.js';
 
 const projectDirectory = fileURLToPath(new URL('..', import.meta.url));
 
@@ -24,7 +25,7 @@ describe('Seb executable', () => {
     const result = runSeb('--version');
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe('seb 0.2.3\n');
+    expect(result.stdout).toBe(`seb ${SEB_VERSION}\n`);
   });
 
   it('returns the usage exit code for an empty one-shot request', () => {

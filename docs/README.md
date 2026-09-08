@@ -38,8 +38,9 @@ New users should read the setup and experience guides first.
 - [Architecture](ARCHITECTURE.md) describes request flow, agent boundaries, source clients, and extension points.
 - [AI SDK integration](AI_SDK.md) covers direct news, decision safeguards, typed output, context pruning, and local traces.
 - [Production operations](OPERATIONS.md) covers state, scaling, health checks, secrets, upgrades, and incidents.
+- [Version 1 release review](RELEASE_REVIEW.md) records findings, checks, and verification limits.
 - [Versioning](VERSIONING.md) defines release versions, tags, checks, and guarantees.
-- [V1 design](V1.md) records the longer-term roadmap for injuries, projections, and simulations.
+- [Version 1 scope and roadmap](V1.md) separates the current release from future work.
 
 ## Connectors
 

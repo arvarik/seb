@@ -17,10 +17,12 @@ Choose one supported model provider.
 
 | Provider | Required access | Default primary model | Default fallback model |
 | --- | --- | --- | --- |
-| Google Gemini | `GOOGLE_GENERATIVE_AI_API_KEY` or `GEMINI_API_KEY` | `gemini-3.7-flash` | `gemini-3.6-flash` |
-| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-5` | `claude-haiku-4-5` |
-| OpenAI | `OPENAI_API_KEY` | `gpt-5.6-luna` | `gpt-5.4-mini` |
+| Google Gemini | `GOOGLE_GENERATIVE_AI_API_KEY` or `GEMINI_API_KEY` | `gemini-flash` | `gemini-flash-lite` |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet` | `claude-haiku` |
+| OpenAI | `OPENAI_API_KEY` | `gpt-luna` | `gpt-mini` |
 | OpenAI-compatible | API base URL and model ID. The key is optional. | No default | The primary model |
+
+Hosted defaults use model families. Seb resolves their current stable versions at startup. See [model selection](MODELS.md).
 
 Sleeper, nflverse, and the NWS use public read-only endpoints. These sources need no API key.
 
@@ -30,7 +32,7 @@ Open the project folder.
 
 ```bash
 cd /path/to/seb
-npm install
+npm ci
 ```
 
 Copy the example environment file.
@@ -76,7 +78,7 @@ Use `seb configure`, a shell environment, or a deployment environment for these 
 Add a contact value to the NWS user agent.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.2.3 (you@example.com)
+NWS_USER_AGENT=seb/1.0.0 (you@example.com)
 ```
 
 The default value identifies the public Seb repository. A direct contact value helps the NWS contact you about request problems.

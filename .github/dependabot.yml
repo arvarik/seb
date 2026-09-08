@@ -4,12 +4,27 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
     groups:
+      ai-sdk:
+        patterns:
+          - ai
+          - '@ai-sdk/*'
       chat-sdk:
         patterns:
           - chat
           - '@chat-adapter/*'
+      hono:
+        patterns:
+          - hono
+          - '@hono/*'
+      dev-dependencies:
+        dependency-type: development
+        patterns:
+          - '*'
+        exclude-patterns:
+          - vitest
+          - '@vitest/*'
       vitest:
         patterns:
           - vitest

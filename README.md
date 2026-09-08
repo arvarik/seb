@@ -1,12 +1,15 @@
 # Seb
 
-**Current NFL research. Safer fantasy decisions. One terminal.**
+**The source-grounded NFL & fantasy football AI agent. One terminal.**
 
 [![CI](https://github.com/arvarik/seb/actions/workflows/ci.yml/badge.svg)](https://github.com/arvarik/seb/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+![Node.js](https://img.shields.io/badge/Node.js->=22-339933?logo=node.js&logoColor=white)
+[![Version](https://img.shields.io/badge/version-1.0.0-informational.svg)](package.json)
 
-Seb combines NFL data, current reporting, weather, and your Sleeper leagues in one conversation.
+Seb unifies real-time NFL news, live Sleeper leagues, nflverse statistics, and kickoff weather into a single conversational agent. 
 
-Ask a normal question. Seb finds the current context, gathers the evidence, and shows whether the evidence supports an action.
+Unlike generic chatbots that guess player stats or hallucinate lineups, Seb uses **deterministic math** for projections and rankings—safeguarding your start-sit, trade, and waiver decisions with verified evidence.
 
 ```text
 Show Derrick Henry's recent production and latest verified news.
@@ -14,275 +17,157 @@ Look deeper into his usage.
 Compare him with Saquon Barkley for this week's matchup and weather.
 ```
 
-Seb keeps the active subject between questions. You do not need to repeat the player, week, or league.
+> **Context-Aware:** Seb maintains the active player, matchup, and league between questions—no need to repeat yourself.
 
-## What Seb can do
+---
 
-| Need | What Seb gives you |
+## Why Seb?
+
+| Feature | What Seb Delivers |
 | --- | --- |
-| **Current news** | Direct reporting from 44 built-in NFL sources. Google adds Search as secondary coverage. |
-| **Player research** | Profiles, game logs, usage, production, news, and injury context. |
-| **Team research** | Schedules, results, offensive trends, defensive matchups, and game conditions. |
-| **My Fantasy** | Automatic discovery of your current Sleeper leagues, rosters, settings, and weekly needs. |
-| **Decisions** | Scoring-aware projections, starter comparisons, legal trade lineups, waiver ranks, and playoff simulations. |
-| **Weekly learning** | Local player trends, team errors, bounded parameter updates, and historical accuracy reports. |
-| **Weather** | Kickoff forecasts and alerts from the National Weather Service for United States venues. |
-| **Evidence** | Numbered sources with live, cached, or stale retrieval details. |
+| 🏈 **44+ Built-In Newsrooms** | Direct reporting from all 32 NFL team beat sources, official NFL feeds, and fantasy analysts. |
+| 🏆 **Instant Sleeper Sync** | Discovers your leagues, rosters, scoring settings, and weekly matchup needs automatically. |
+| 🛡️ **Grounded Decisions** | Deterministic projections, legal trade validation, FAAB waiver tiers, and playoff simulations. |
+| 📈 **Weekly Learning** | Learns local player performance trends and forecast accuracy after completed games. |
+| 🌦️ **Kickoff Weather** | Live game-day forecasts and active severe weather alerts from the National Weather Service. |
+| 🤖 **Multi-Provider AI** | Bring your own model: Google Gemini, Anthropic Claude, OpenAI, or local/compatible LLMs. |
+| 🔒 **Privacy First** | Read-only league access. Keys stay local. Telemetry never logs prompts, answers, or credentials. |
 
-Seb reads your fantasy leagues. It never changes a lineup, waiver claim, trade, or league setting.
+---
 
-Optional weekly learning updates local forecast parameters after completed games and validation.
+## Quick Start
 
-## Quick start
+### 1. Install
 
-Seb requires Node.js 22 or newer and one configured model provider.
-CI verifies Linux and macOS on Node.js 22. Windows does not have CI coverage.
-Hosted models can charge for requests. Check your provider account before live diagnostics.
+Choose your preferred way to run Seb (requires Node.js 22+):
 
 ```bash
-git clone https://github.com/arvarik/seb.git
-cd seb
-npm ci
-cp .env.example .env
+# Zero-install execution
+npx @arvarik/seb
+
+# Or install globally
+npm install -g @arvarik/seb
+
+# Or clone from source
+git clone https://github.com/arvarik/seb.git && cd seb && npm ci
 ```
 
-Run the private configuration flow.
+<details>
+<summary>🐳 <strong>Run with Docker (no local Node.js required)</strong></summary>
 
 ```bash
-npm run seb -- configure
+docker build -t seb .
+docker run -it --rm -v ~/.seb:/root/.seb seb
 ```
+</details>
 
-Choose Google Gemini, Anthropic, OpenAI, or an OpenAI-compatible endpoint.
+### 2. Configure (30 seconds)
 
-Seb masks typed keys and tests the selected model before it saves the configuration.
-
-The compatible flow accepts a local loopback endpoint or a remote HTTPS endpoint.
-
-Run the flow again when you want to add another provider or change a saved model.
-
-You can also add a provider key to `.env`. This example uses a [Gemini API key](https://aistudio.google.com/app/apikey).
-
-```dotenv
-GOOGLE_GENERATIVE_AI_API_KEY=your-key
-```
-
-Hosted Anthropic and OpenAI configurations use `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`.
-
-An OpenAI-compatible configuration needs a base URL and model. Its API key is optional.
-
-Environment values take priority over saved values.
-
-Seb ignores provider selection, custom endpoints, and private storage paths from a current-directory `.env` file.
-
-Use `seb configure` or an explicit shell environment for a compatible endpoint.
-
-Verify the installation and start Seb.
+Run the interactive setup to securely configure your AI provider:
 
 ```bash
-npm run doctor
-npm run seb
+seb configure
 ```
+*Keys are masked in the terminal and stored in a private local credentials file.*
 
-Connect Sleeper when you want personal fantasy context.
+### 3. Connect Sleeper (Optional)
 
-```text
-/connect your-sleeper-name
-```
-
-Seb saves only the optional username. It refreshes the current NFL state and fantasy context for each session.
-
-## Ask questions in three connected experiences
-
-### Explore
-
-Research the NFL without a fantasy account.
-
-```text
-Show Baltimore's recent offensive trends.
-What changed in the latest verified Seahawks news?
-Compare the rushing usage for these two players.
-```
-
-### My Fantasy
-
-Connect Sleeper and ask across every current league that you own.
-
-```text
-What needs my attention across my leagues?
-Show urgent news for players on my rosters.
-Which league has the weakest running back depth?
-```
-
-### Analyze
-
-Turn the active subject into a comparison or decision.
-
-```text
-Compare my flex options for this week.
-Rank these waiver targets and explain the free-agent acquisition budget ranges.
-Review this trade for my selected league.
-```
-
-Use `/explore`, `/fantasy`, or `/analyze` when you want to select an experience directly.
-
-Run `/provider` or `/model` to inspect the active model.
-
-Run `/provider NAME` or `/model MODEL` to switch it for the current session.
-
-`/provider` keeps that provider's configured fallback. `/model` uses one model without a separate fallback.
-
-## Use Seb your way
-
-Install the short `seb` command in the active Node.js environment.
+Link your Sleeper username for personalized fantasy intelligence:
 
 ```bash
-npm link
+seb setup your-sleeper-name
 ```
+*Seb only reads league data; it never modifies lineups, trades, or settings.*
 
-Start the full terminal interface.
+### 4. Launch
 
 ```bash
 seb
 ```
 
-Seb shows provider reasoning separately from the answer when the provider supplies it.
-Evidence uses one blue summary line. Run `/sources` to view full source details.
-Progress labels show thinking, reasoning, and answer writing.
-Press Escape to stop a request, including during startup. Use `/retry` to try again.
-Scroll with PgUp/PgDn or the mouse wheel. Seb preserves your reading position when the answer finishes.
-
-Ask one question from a script.
+Or ask a one-shot question directly from your shell:
 
 ```bash
-seb ask "Show the current NFL state."
+seb ask "Compare my flex options for this week"
 ```
 
-Select a configured provider or model for one run.
+---
 
-```bash
-seb ask --provider anthropic "Show the current NFL state."
-seb chat --provider openai --model gpt-luna
-```
+## Three Connected Modes
 
-Use a model family such as `gemini-flash`, `claude-sonnet`, or `gpt-luna` to select its newest stable version.
-Enter a family in `seb configure` to save that choice. Exact model IDs stay pinned.
-See [model selection](docs/MODELS.md) for families, defaults, and discovery behavior.
+Switch seamlessly between modes using `/explore`, `/fantasy`, and `/analyze`:
 
-`--provider` keeps the configured fallback. An explicit `--model` uses that model as its own fallback.
+### 🔍 Explore (NFL Intelligence)
+Deep NFL research without needing a fantasy account.
+* *"Show Baltimore's recent offensive trends and red zone usage."*
+* *"What changed in the latest verified Seahawks injury report?"*
+* *"Compare rushing usage and snap share for these two running backs."*
 
-Return a validated JSON object.
+### 🏆 My Fantasy (Multi-League Overview)
+Connect your Sleeper account to monitor all your leagues in one view.
+* *"What needs my attention across my leagues this week?"*
+* *"Show urgent news for players across my active rosters."*
+* *"Which of my leagues has the weakest running back depth?"*
 
-```bash
-seb ask --json "Should I start Player A?"
-```
+### 📊 Analyze (Protected Decisions)
+Turn research into winning start-sit, trade, and waiver actions.
+* *"Compare my flex options for Week 2 in full PPR."*
+* *"Rank these waiver targets and recommend FAAB bid ranges."*
+* *"Review this trade proposal for my Dynasty league."*
 
-Inspect locally recorded model activity.
+---
 
-```bash
-seb usage
-seb stats
-```
+## CLI & Bot Connectors
 
-`seb usage` defaults to today. `seb stats` defaults to the latest seven days.
+### Command-Line Tools
 
-Run `/usage` or `/stats` inside the interactive interface for the current session.
-
-The reports show the successful run rate, safe error categories, and failures after a returned client tool.
-
-These reports read local Seb telemetry. They do not query Google billing or calculate currency cost.
-
-Seb also supports Slack, Discord, and Telegram through read-only connectors.
-
-Read the [command-line guide](docs/CLI.md) and [connector guide](docs/CONNECTORS.md) for setup details.
-
-## How Seb protects a decision
-
-1. Seb resolves the requested player, team, league, and roster.
-2. Seb gathers current facts from direct data and news sources.
-3. Deterministic functions calculate statistics, projections, and ranking signals.
-4. A final gate checks that the evidence matches the requested subject and league.
-5. Seb withholds the action when identity, news, status, scoring, or projection evidence is incomplete.
-
-Start-sit advice requires an eligible projection for the selected league.
-
-Trade review rejects duplicate players and received players from several opposing rosters.
-
-Waiver rankings use stable absolute scales. The score does not change because a weaker candidate leaves the request.
-
-The same safeguards apply to terminal, JSON, and connector answers.
-
-## Sources and trust
-
-Seb separates source facts from model explanation.
-
-| Source | Seb uses it for |
+| Command | Description |
 | --- | --- |
-| Sleeper | NFL state, fantasy leagues, rosters, settings, matchups, transactions, and player records. |
-| nflverse | Schedules, results, weekly production, usage, and team performance. |
-| First-class news registry | Official NFL, independent, fantasy-impact, and all 32 official team sources for every model provider. |
-| Google Search and URL Context | Secondary public coverage and user-supplied web pages when Google is the active provider. |
-| National Weather Service | United States forecasts and active weather alerts. |
+| `seb` | Launch the full interactive terminal interface. |
+| `seb ask "..."` | Ask one-shot questions from scripts or shell (supports `--json`). |
+| `seb doctor` | Validate active model provider, local cache, and public APIs. |
+| `seb usage / stats`| Inspect local token usage, response latency, and run success rates. |
+| `seb learn` | Review adaptive forecast accuracy and completed-week parameter updates. |
+| `seb cache clear` | Manage or prune the local SQLite cache. |
 
-Seb checks news dates, publisher crawl rules, redirects, content types, and parsed values before it stores news data.
+### League Chat Bots
 
-Seb records source freshness and stale-data warnings. Its instructions require current news to use retrieved sources.
-Check the linked evidence before you act. Model explanations can still contain errors.
+Deploy Seb directly into your league's group chat! Seb includes built-in read-only connectors for:
+* **Slack** (Socket Mode & Webhooks)
+* **Discord** (Bot client)
+* **Telegram** (Bot polling)
 
-Interactive answers keep a numbered evidence list behind `/sources`. One-shot text shows source links, and JSON includes structured source records.
+See the [Chat Connectors Guide](docs/CONNECTORS.md) for step-by-step bot setup.
 
-Seb stores saved API keys in a private credential file. The non-secret model settings file contains no keys.
+---
 
-Remote compatible endpoints must use HTTPS. Local HTTP endpoints must use a loopback host.
+## How Seb Protects Your Decisions
 
-Compatible model and discovery requests reject redirects.
+Generic AI models often hallucinate injury reports or miscalculate fantasy points. Seb prevents this through a 4-step safety architecture:
 
-Local usage telemetry stores metadata only. It excludes prompts, answers, tool inputs, tool results, and raw errors.
+1. **Resolve**: Resolves the exact player, team, roster, and league scoring rules.
+2. **Gather**: Pulls live facts from Sleeper, nflverse, NWS weather, and 44+ newsrooms.
+3. **Compute**: Deterministic functions compute projections, trade impacts, and ranking scores.
+4. **Validate**: A safety gate verifies that all facts match the requested player and league. If facts are missing or conflicting, Seb withholds the action rather than guessing.
 
-It also excludes API keys, authorization headers, and compatible endpoint URLs.
+### Transparent Limits
+* **Offensive Focus**: Projections and lineup comparisons currently support offensive skill positions (QB, RB, WR, TE, K).
+* **Public Latency**: News and nflverse game logs rely on public feeds and can lag breaking live game events.
+* **Weather Coverage**: NWS weather forecasts cover United States venues only.
 
-## Honest limits
-
-Seb has no licensed publisher feed, official injury feed, or official projection feed.
-
-An OpenAI-compatible endpoint must support model streaming and tool calls for the full Seb agent flow.
-
-Public reporting can conflict or change. nflverse releases can lag the latest completed game.
-
-The National Weather Service supports United States locations only.
-
-Projections support offensive players and a documented subset of scoring rules. Playoff odds exclude divisions and custom seeding.
-Historical accuracy tests do not prove that forecasts improve live lineup decisions. See the [analysis limits](docs/ANALYSIS.md).
-
-Seb includes these limits in tool results and instructs the model to explain relevant limits.
+---
 
 ## Documentation
 
-### Use Seb
+* **Getting Started**: [Setup Guide](docs/SETUP.md) · [Terminal UI Guide](docs/TERMINAL_UI.md) · [Model Configuration](docs/MODELS.md)
+* **Features**: [Interactive Experience](docs/INTERACTIVE.md) · [CLI Reference](docs/CLI.md) · [Skills Guide](docs/SKILLS.md)
+* **Integrations**: [Chat Connectors](docs/CONNECTORS.md) · [Slack Guide](docs/connectors/SLACK.md) · [Discord Guide](docs/connectors/DISCORD.md)
+* **Architecture & Science**: [Architecture Guide](docs/ARCHITECTURE.md) · [Analysis & Accuracy](docs/ANALYSIS.md) · [Data Sources](docs/DATA_SOURCES.md) · [Provenance](docs/PROVENANCE.md)
 
-- [Setup guide](docs/SETUP.md)
-- [Interactive guide](docs/INTERACTIVE.md)
-- [Command-line guide](docs/CLI.md)
-- [Experience model](docs/EXPERIENCES.md)
-- [Terminal interface](docs/TERMINAL_UI.md)
-- [Skills and advanced workflows](docs/SKILLS.md)
-- [Chat connectors](docs/CONNECTORS.md)
+---
 
-### Understand the evidence
+## Contributing & License
 
-- [Analysis, forecast accuracy, and weekly learning](docs/ANALYSIS.md)
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md), our [Code of Conduct](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md).
 
-- [Data sources and limits](docs/DATA_SOURCES.md)
-- [Provenance and replay](docs/PROVENANCE.md)
-- [Local storage and cache](docs/STORAGE.md)
-
-### Build and contribute
-
-- [Architecture guide](docs/ARCHITECTURE.md)
-- [AI SDK integration](docs/AI_SDK.md)
-- [Testing and verification](docs/ARCHITECTURE.md#test-design)
-- [Complete documentation index](docs/README.md)
-
-## Contributing and support
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md), and the [security policy](SECURITY.md).
-Seb uses the [Apache-2.0 license](LICENSE).
+Licensed under the [Apache-2.0 License](LICENSE).

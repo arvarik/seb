@@ -57,7 +57,7 @@
   },
   "devDependencies": {
     "@ai-sdk/devtools": "^1.0.12",
-    "@chat-adapter/tests": "^4.38.1",
+    "@chat-adapter/tests": "^4.40.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.2.0",
     "@vitest/coverage-v8": "^4.1.11",

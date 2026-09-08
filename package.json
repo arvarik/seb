@@ -60,10 +60,10 @@
     "@chat-adapter/tests": "^4.40.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.4.1",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^5.0.0",
     "oxlint": "^1.79.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   },
   "license": "Apache-2.0",
   "publishConfig": {

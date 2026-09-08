@@ -49,7 +49,7 @@
     "chat": "^4.40.0",
     "cheerio": "^1.2.0",
     "csv-parse": "^7.0.2",
-    "hono": "^4.13.3",
+    "hono": "^4.13.7",
     "robots-parser": "^3.0.1",
     "string-width": "^8.2.2",
     "tsx": "^4.23.12",

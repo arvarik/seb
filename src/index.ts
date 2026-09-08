@@ -250,3 +250,13 @@ export {
   type UsageToolExecutionLocation,
   type UsageToolOutcome,
 } from './usage/types.js';
+export {
+  formatSystemMetadata,
+  getSystemMetadata,
+  isSystemTopic,
+  SYSTEM_TOPICS,
+  type SystemMetadataResult,
+  type SystemTopic,
+  type SystemTopicDetail,
+} from './system/metadata.js';
+export { createSystemTools } from './system/tools.js';

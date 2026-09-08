@@ -41,6 +41,7 @@ import {
   runNflverseBaselineReplay,
 } from '../evaluation/nflverse-runner.js';
 import { TeamIdentityRegistry } from '../identity/teams.js';
+import { formatSystemMetadata } from '../system/metadata.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import {
@@ -461,6 +462,10 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'account':
         state.mode = 'fantasy';
         return formatFantasyDashboard(state);
+      case 'about':
+      case 'architecture':
+      case 'arch':
+        return formatSystemMetadata(arguments_[0]);
       case 'help':
       case '?':
         return INTERACTIVE_HELP;

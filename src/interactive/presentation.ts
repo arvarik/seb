@@ -48,6 +48,7 @@ export function friendlyToolName(toolName: string): string {
     getTrendingPlayers: 'Read player trends',
     getUserLeagues: 'Read user leagues',
     getWeekWeather: 'Screen weekly weather risk',
+    inspectSystemDocs: 'Inspect Seb architecture & design',
     predictMatchup: 'Estimate the matchup',
     projectPlayer: 'Build a scoring-aware projection',
     rankWaiverTargets: 'Rank waiver and FAAB targets',

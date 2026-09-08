@@ -2,7 +2,7 @@
 
 Seb separates conversation control, source access, deterministic analysis, and model explanation.
 
-This design keeps current facts outside model memory.
+Direct tools supply current facts. Model explanations still need source review.
 
 ## Request flow
 
@@ -12,7 +12,7 @@ This design keeps current facts outside model memory.
 4. The Seb renderer reads and edits the terminal prompt.
 5. The transport selects Explore, My Fantasy, or Analyze from the question.
 6. The transport runs a slash command locally or sends a normal question to the agent.
-7. `ToolLoopAgent` gives the selected model read-only tools, direct news tools, and active session instructions.
+7. `ToolLoopAgent` gives the selected model source tools, local learning tools, and active session instructions.
 8. Middleware adds valid input examples to each compatible data tool.
 9. An identity tool resolves ambiguous player or team identifiers when necessary.
 10. The selected model calls only the tools that the question needs.
@@ -72,9 +72,10 @@ Connector replies use one two-minute deadline for the primary and fallback model
 
 Connector shutdown cancels all active reply signals.
 
-CLI and connector answers require a final `stop` event. An output limit, content filter, cancellation, or missing finish event produces an error.
+JSON and connector answers require a final `stop` event. Intermediate tool steps do not complete the answer.
 
-Decision responses remain buffered until this completion check passes. Partial ordinary text can remain visible, but Seb reports the failed response.
+One-shot text answers retain partial ordinary text after a final output limit or tool-step limit and show a warning.
+Decision responses remain buffered. These limits withhold the action. Content filters, cancellation, and missing final events produce errors.
 
 Interactive approval requests can pause with `tool-calls`. A denied tool clears its pending approval. Other incomplete interactive responses produce an error.
 
@@ -82,7 +83,8 @@ Capacity fallback runs only before visible output. Cancellation and timeout erro
 
 Connector fallback uses the original request deadline and cannot start after cancellation.
 
-The tools perform read-only actions.
+The tools read remote sources. They never submit fantasy transactions.
+Local learning tools can write validated forecast revisions. Source clients also write local caches and snapshots.
 
 The direct data tools cap large row results.
 
@@ -181,6 +183,8 @@ The runner uses the public AI SDK chat transport and UI message contracts.
 The local renderer uses the public `readUIMessageStream` function.
 
 Pure editor, history, theme, and presentation modules contain most terminal behavior.
+A shared text sanitizer removes untrusted terminal commands. One-shot streaming preserves sanitizer state across model chunks.
+History writes use unique temporary files and a serial save queue. Bounded reads reject oversized local files.
 
 Tests can verify those modules without a live terminal or model request.
 
@@ -330,7 +334,7 @@ The interactive state stores one immutable source snapshot for each answer ID.
 
 It applies full-jitter backoff and honors `Retry-After`.
 
-It opens a short circuit after repeated final failures.
+It opens a short circuit for the failing origin after repeated final failures. Other origins retain their own request state.
 
 A caller cancellation stops the active request and its retry delay.
 
@@ -406,7 +410,8 @@ Each canonical team ID uses the `nfl-team:CODE` format.
 
 `PlayerIdentityRegistry` maps source IDs and normalized names to canonical players.
 
-Strict automatic matching requires the same name, position, and team.
+Strict matching first requires the same name, position, and team.
+A transfer fallback requires one unique name-position candidate per provider and an explicitly active Sleeper profile.
 
 The registry reports ambiguous or conflicting candidates.
 
@@ -435,6 +440,8 @@ Seb skips a direct weather effect for a closed roof or a dome.
 Seb labels past nflverse weather fields as historical conditions.
 
 Seb labels NWS values as forecasts.
+Only alerts with a verified time window containing kickoff change the game risk rating.
+Other current alerts remain visible as context.
 
 ## Deterministic analysis
 

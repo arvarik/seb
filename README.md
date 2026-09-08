@@ -36,11 +36,13 @@ Optional weekly learning updates local forecast parameters after completed games
 ## Quick start
 
 Seb requires Node.js 22 or newer and one configured model provider.
+CI verifies Linux and macOS on Node.js 22. Windows does not have CI coverage.
+Hosted models can charge for requests. Check your provider account before live diagnostics.
 
 ```bash
 git clone https://github.com/arvarik/seb.git
 cd seb
-npm install
+npm ci
 cp .env.example .env
 ```
 
@@ -223,9 +225,10 @@ Seb separates source facts from model explanation.
 
 Seb checks news dates, publisher crawl rules, redirects, content types, and parsed values before it stores news data.
 
-Seb records source freshness and stale-data warnings. It never presents model memory as current news.
+Seb records source freshness and stale-data warnings. Its instructions require current news to use retrieved sources.
+Check the linked evidence before you act. Model explanations can still contain errors.
 
-Each answer keeps a numbered Evidence section with live, cached, or stale retrieval details.
+Interactive answers keep a numbered evidence list behind `/sources`. One-shot text shows source links, and JSON includes structured source records.
 
 Seb stores saved API keys in a private credential file. The non-secret model settings file contains no keys.
 
@@ -247,7 +250,10 @@ Public reporting can conflict or change. nflverse releases can lag the latest co
 
 The National Weather Service supports United States locations only.
 
-Seb states these limits in the answer when they affect a conclusion.
+Projections support offensive players and a documented subset of scoring rules. Playoff odds exclude divisions and custom seeding.
+Historical accuracy tests do not prove that forecasts improve live lineup decisions. See the [analysis limits](docs/ANALYSIS.md).
+
+Seb includes these limits in tool results and instructs the model to explain relevant limits.
 
 ## Documentation
 

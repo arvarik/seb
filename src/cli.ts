@@ -1,3 +1,4 @@
+import { TerminalTextSanitizer, sanitizeTerminalText } from './terminal-text.js';
 import { completedLearningWeek } from './learning/completed-week.js';
 import { DEFAULT_PROJECTION_PARAMETERS } from './projection/statistics.js';
 import { writeFile } from 'node:fs/promises';
@@ -953,6 +954,7 @@ async function streamAnswer(
   });
 
   const run = async (model: string): Promise<void> => {
+    const terminalText = new TerminalTextSanitizer();
     completionWarning = undefined;
     bufferedText = '';
     decisionToolResults = [];
@@ -984,8 +986,9 @@ async function streamAnswer(
           if (decisionRequested) bufferedText += part.text;
           else {
             stopProgress();
-            streams.stdout.write(part.text);
-            wroteText = true;
+            const text = terminalText.push(part.text);
+            streams.stdout.write(text);
+            wroteText ||= text.trim().length > 0;
           }
         } else if (part.type === 'tool-call') {
           decisionToolInputs.set(part.toolCallId, {
@@ -1061,7 +1064,7 @@ async function streamAnswer(
         toolResults: decisionToolResults,
       }),
     );
-    streams.stdout.write(guarded.answer);
+    streams.stdout.write(sanitizeTerminalText(guarded.answer));
     wroteText = true;
   }
 
@@ -1086,7 +1089,7 @@ async function streamAnswer(
   if (sources.size > 0) {
     streams.stdout.write(
       `\n\nSources:\n${[...sources]
-        .map(([url, label]) => `- ${label}: ${url}`)
+        .map(([url, label]) => `- ${sanitizeTerminalText(label)}: ${sanitizeTerminalText(url)}`)
         .join('\n')}`,
     );
   }

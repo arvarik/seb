@@ -18,7 +18,7 @@ The language model explains these calculations. It does not invent the numerical
 | Update season learning | `learnCompletedWeek` | Chronological training, separate validation, and bounded parameter selection |
 
 These tools never submit a lineup, waiver claim, or trade.
-Only the learning update writes local football learning files.
+Only the learning update writes local football learning revisions. Source reads can also write caches and snapshots.
 An explicit CLI or skill request updates the local football files.
 
 ## Forecast calculation
@@ -54,7 +54,7 @@ It also supports volume scoring, reception premiums, fumbles, two-point conversi
 Known kicking and team-defense settings do not invalidate offensive projections.
 Unknown active settings remain explicit and block final player recommendations.
 
-A missing required scoring component causes an error. Seb never substitutes zero for that missing component.
+A nonnumeric or nonfinite scoring weight causes an error. A missing required scoring component also causes an error. Seb never substitutes zero for that missing component.
 The source cache uses a new player-statistics version to avoid reusing rows without the added fields.
 
 Sleeper yardage bonuses use separate ranges.
@@ -131,14 +131,16 @@ It does not use current roster totals to describe an earlier cutoff.
 Commissioner score overrides take precedence.
 Median-match leagues add the extra result without halving the team's weekly scoring average.
 
-Playoff simulation requires complete historical scores and at least two scores per roster.
+Playoff simulation requires complete historical scores, valid opponent pairs, and at least two scores per roster.
 It also requires one known future matchup per roster in every remaining fantasy regular-season week.
 Missing schedules and division-based seeding stop the simulation.
 Seb never invents future opponents.
 
 The simulation blends season and recent roster averages at 70% and 30%.
 It uses independent normal weekly scores with a minimum standard deviation of eight points.
-It ranks simulated records by wins, then points, then a random draw for exact ties.
+It ranks simulated records by wins, then points scored, then higher points against, then a random draw for exact ties.
+This order follows [Sleeper standings tiebreakers](https://support.sleeper.com/en/articles/4238872-can-i-set-tiebreakers).
+Custom commissioner seeding remains outside the model.
 It includes median matches when the league enables them.
 
 The default uses 10,000 simulations and a fixed seed.
@@ -326,9 +328,9 @@ The [saved performance report](benchmarks/analysis-performance.json) records the
 
 | Work | Input size | Observed time |
 | --- | --- | ---: |
-| One weekly learning revision | 18,522 source rows across a full season | 86 ms |
-| Exact lineup assignment | 60 players and 12 starter slots | 68 ms |
-| Maximum playoff simulation | 32 rosters, 15 weeks, and 50,000 trials | 2.84 seconds |
+| One weekly learning revision | 19,400 source rows with regular-season filtering | 76 ms |
+| Exact lineup assignment | 60 players and 12 starter slots | 62 ms |
+| Maximum playoff simulation | 32 rosters, 15 weeks, and 50,000 trials | 2.80 seconds |
 
 These observations do not guarantee the same speed on another machine.
 The learning service also passed a live 2025 update and checksum readback for 610 players and 32 teams.

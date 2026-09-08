@@ -2,86 +2,75 @@
 
 Seb uses [Semantic Versioning](https://semver.org/) with the `MAJOR.MINOR.PATCH` format.
 
-The current version is `0.2.3`.
+The current version is `1.0.0`.
 
-## Version meaning
+## Supported public interfaces
 
-Seb uses these version rules.
+Version 1 supports the commands and options in the [CLI guide](CLI.md).
+It also supports the documented interactive commands and connector webhook routes.
+JSON commands expose their schema versions. Consumers must ignore additional object fields.
 
-| Version part | Meaning |
-| --- | --- |
-| `PATCH` | Adds a compatible fix, documentation change, or small internal improvement. |
-| `MINOR` | Adds a compatible user feature or a substantial capability. |
-| `MAJOR` | Changes a stable public interface in an incompatible way. |
+Patch releases fix compatible behavior. Minor releases add compatible features or fields.
+A major release changes an existing command or documented output contract incompatibly.
 
-Versions below `1.0.0` describe development releases. A development release can still change an interface when the release notes identify the change.
-
-The `0.0.x` series covers the first experimental releases. The `0.x.y` series starts when the command and connector interfaces become more stable.
-
-Version `1.0.0` starts after Seb has a documented and supported public interface.
+Model prose, provider catalogs, forecast values, news sources, and table layouts can change without a major version.
+Internal TypeScript exports and SQLite tables do not form a stable library API.
+Use the CLI JSON commands when integrating another program.
 
 ## Version sources
 
-`package.json` contains the source version.
+`package.json` contains the source version. The CLI reads it for `seb --version`.
+Both root version fields in `package-lock.json` must match it.
+`CHANGELOG.md` needs a dated heading for the same version.
+The NWS examples in `.env.example` and `docs/SETUP.md` must use that version.
+This guide must state the same current version.
 
-`package-lock.json` must contain the same version in both root version fields.
-
-`CHANGELOG.md` must contain a dated heading for the source version.
-
-The `npm run version:check` command verifies these requirements.
-
-The CLI reads the version from `package.json`.
-
-```bash
-seb --version
-```
+Run `npm run version:check` to verify these requirements.
 
 ## Release names
 
-Git tags use a lowercase `v` prefix. Version `0.2.0` uses the `v0.2.0` tag.
+Git tags use a lowercase `v` prefix. Version `1.0.0` uses the `v1.0.0` tag.
+The GitHub release title must exactly match the tag, such as `v1.0.0`.
+Use an annotated tag. Do not reuse or move a published tag.
 
-The GitHub release title must exactly match the tag. This release uses the title `v0.2.0`.
-
-Release commit subjects use this format.
+Use a Conventional Commit subject for release preparation:
 
 ```text
-chore(release): v0.2.0
+chore(release): v1.0.0
 ```
 
 ## Prepare a release
 
-Complete these steps from a clean branch.
-
-1. Move completed notes from `Unreleased` into a dated version section.
-2. Update the package files without creating a tag.
-
-   ```bash
-   npm version 0.2.0 --no-git-tag-version
-   ```
-
-3. Run all checks.
+1. Create a branch from current `main`.
+2. Consolidate completed `Unreleased` notes into one dated version section.
+3. Run `npm version 1.0.0 --no-git-tag-version` with the intended version.
+4. Update the environment example, setup guide, and version guide to match.
+5. Run the local checks:
 
    ```bash
    npm run check
    npm run test:coverage
-   npm run deps:check
-   npm audit
+   npm audit --omit=dev
+   npm run doctor
+   npm run contract:sources
+   npm run contract:answer
+   npm run news:smoke
+   npm pack --dry-run
    ```
 
-4. Commit the release with the documented subject format.
-5. Put the release commit on `main` through the selected repository workflow.
-6. Create the annotated Git tag from the final release commit on `main`.
-7. Push the tag after the release commit exists on GitHub.
-8. Create the GitHub release with the exact tag text as its title.
+6. Inspect the package file list for credentials, caches, and unrelated files.
+7. Verify a clean production install from the package archive.
+8. Open a pull request with the changes and exact verification results.
+9. Wait for every required Linux and macOS check to pass, then squash merge.
+10. Sync local `main` and verify that its commit matches GitHub.
+11. Create and push the annotated tag from that commit.
+12. Verify that the remote tag resolves to the same commit.
+13. Create a GitHub release with the exact tag as its title and clear release notes.
+14. Verify the release name, tag, and final commit.
 
-Do not reuse or move a published version tag.
+Live model checks require credentials and can incur provider charges.
+News and source checks depend on external service availability. Record failures and investigate their cause before release.
+`npm run deps:check` reports newer dependencies. It does not require an upgrade to every new major version.
 
-## Release guarantees
-
-The `main` branch must pass the version check, the type check, and all tests.
-
-Each release must include a changelog section.
-
-Each release tag must point to the commit that contains the matching package version.
-
-The project does not publish an npm package yet. The version identifies the source and the command output.
+The project does not publish an npm registry package yet. Users install the source from GitHub.
+A release does not change repository visibility or publish a registry package.

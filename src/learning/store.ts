@@ -1,5 +1,6 @@
+import { readBoundedUtf8File } from '../setup/bounded-file.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import type { SleeperSettings } from '../sleeper/types.js';
 import { scoringKey } from './engine.js';
@@ -87,11 +88,7 @@ export class LearningStore {
 }
 
 async function readBounded(file: string, maximum: number): Promise<string | null> {
-  try {
-    if ((await stat(file)).size > maximum) throw new Error('The learning file exceeds its size limit.');
-    const bytes = await readFile(file);
-    if (bytes.byteLength > maximum) throw new Error('The learning file exceeds its size limit.');
-    return bytes.toString('utf8');
-  } catch (error) { if (isMissing(error)) return null; throw error; }
+  return readBoundedUtf8File(file, maximum, () => new Error('The learning file exceeds its size limit.'));
 }
+
 function isMissing(error: unknown): boolean { return (error as NodeJS.ErrnoException).code === 'ENOENT'; }

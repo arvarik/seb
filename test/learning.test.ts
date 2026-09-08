@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -88,4 +88,12 @@ describe('local weekly learning', () => {
     expect(result.byPosition.RB?.adaptive?.regression.sampleSize).toBe(28);
     expect(result.updates.every((update) => update.throughWeek < 10)).toBe(true);
   });
+});
+
+it('rejects oversized and non-file learning overrides', async () => {
+  const local = await store(); const path = join(local.directory, 'overrides.json');
+  await writeFile(path, ' '.repeat(16 * 1024 + 1));
+  await expect(local.overrides()).rejects.toThrow('size limit');
+  await rm(path); await mkdir(path);
+  await expect(local.overrides()).rejects.toThrow('regular file');
 });

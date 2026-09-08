@@ -84,7 +84,7 @@ Seb uses these SQLite settings.
 
 Seb applies numbered schema migrations when it opens the database.
 
-The current development version uses database schema `6`.
+Version 1.0.0 uses database schema `6`.
 
 Schema `6` rebuilds the usage tables as strict tables. It validates every saved row and preserves valid schema `5` telemetry.
 

@@ -1,5 +1,6 @@
+import { readBoundedUtf8File } from './bounded-file.js';
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 
@@ -45,18 +46,9 @@ export class FileSetupProfileStore implements SetupProfileStore {
   }
 
   async load(): Promise<SebSetupProfile | null> {
-    let content: string;
-    try {
-      content = await readFile(this.path, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return null;
-      }
-      throw error;
-    }
-    if (Buffer.byteLength(content, 'utf8') > MAX_PROFILE_BYTES) {
-      throw new SetupProfileValidationError('The setup profile exceeds 64 KiB.');
-    }
+    const content = await readBoundedUtf8File(this.path, MAX_PROFILE_BYTES,
+      () => new SetupProfileValidationError('The setup profile exceeds 64 KiB.'));
+    if (content === null) return null;
 
     let value: unknown;
     try {

@@ -402,6 +402,48 @@ describe('AI SDK provider construction', () => {
     );
   });
 
+  it('keeps compatible reasoning continuous when chunks contain empty tool calls', async () => {
+    const chunks = [
+      { reasoning_content: 'Check ', tool_calls: [] },
+      { reasoning_content: 'the matchup.', tool_calls: [] },
+      { content: 'Here is the answer.', tool_calls: [] },
+    ].map((delta) => ({ choices: [{ delta, finish_reason: null }] }));
+    const responseBody = [
+      ...chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`),
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n',
+    ].join('');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(responseBody, {
+      headers: { 'content-type': 'text/event-stream' },
+    })));
+    const model = createProviderLanguageModel({
+      baseURL: 'http://localhost:1234/v1',
+      fallbackModel: 'local-model',
+      model: 'local-model',
+      provider: 'openai-compatible',
+    });
+    const { stream } = await model.doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'Compare the matchup.' }] }],
+    });
+    const reader = stream.getReader();
+    const parts = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+    }
+
+    expect(parts.filter((part) => part.type.startsWith('reasoning'))).toEqual([
+      { type: 'reasoning-start', id: 'reasoning-0' },
+      { type: 'reasoning-delta', id: 'reasoning-0', delta: 'Check ' },
+      { type: 'reasoning-delta', id: 'reasoning-0', delta: 'the matchup.' },
+      { type: 'reasoning-end', id: 'reasoning-0' },
+    ]);
+    expect(parts).toContainEqual({ type: 'text-delta', id: 'txt-0', delta: 'Here is the answer.' });
+    expect(parts.at(-1)).toMatchObject({ type: 'finish', finishReason: { unified: 'stop' } });
+    expect(parts.some((part) => part.type === 'error')).toBe(false);
+  });
+
   it('rejects a fallback model from another provider', () => {
     const selection = resolveModelProvider({
       environment: { GOOGLE_GENERATIVE_AI_API_KEY: 'google-key' },

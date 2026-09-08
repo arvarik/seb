@@ -1,4 +1,4 @@
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, stat, writeFile, readdir, truncate, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -50,4 +50,37 @@ describe('prompt history', () => {
     expect(await readFile(path, 'utf8')).toBe('{invalid json');
     expect(history.list()).toEqual(['Keep this prompt']);
   });
+});
+
+it('persists concurrent history changes in order without temporary file collisions', async () => {
+  const directory = join(tmpdir(), `seb-concurrent-history-${crypto.randomUUID()}`);
+  const path = join(directory, 'history.json');
+  try {
+    const history = await FilePromptHistory.load({ SEB_HISTORY_FILE: path });
+    await Promise.all([history.add('first'), history.add('second'), history.clear(), history.add('last')]);
+    expect(history.list()).toEqual(['last']);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(['last']);
+    expect(await readdir(directory)).toEqual(['history.json']);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+it('preserves oversized history files and keeps new prompts in memory', async () => {
+  const path = join(tmpdir(), `seb-oversized-history-${crypto.randomUUID()}.json`);
+  try {
+    await writeFile(path, ''); await truncate(path, 21 * 1024 * 1024);
+    const history = await FilePromptHistory.load({ SEB_HISTORY_FILE: path });
+    await expect(history.add('new prompt')).rejects.toThrow('size limit');
+    expect(history.list()).toEqual(['new prompt']);
+    expect((await stat(path)).size).toBe(21 * 1024 * 1024);
+  } finally { await rm(path, { force: true }); }
+});
+
+it('loads a full history even when JSON uses six bytes per character', async () => {
+  const path = join(tmpdir(), `seb-escaped-history-${crypto.randomUUID()}.json`);
+  const entries = Array.from({ length: 200 }, (_, index) => '\x00'.repeat(16 * 1024 - 3) +
+    String.fromCharCode(index % 8, Math.floor(index / 8) % 8, Math.floor(index / 64)));
+  try {
+    await writeFile(path, `${JSON.stringify(entries, null, 2)}\n`);
+    const history = await FilePromptHistory.load({ SEB_HISTORY_FILE: path });
+    expect(history.list()).toEqual(entries);
+  } finally { await rm(path, { force: true }); }
 });

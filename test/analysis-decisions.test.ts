@@ -114,3 +114,25 @@ it('recognizes a completed season when Sleeper moves league creation into the ne
   expect(resolveCompletedAnalysisWindow('2026', { ...state('off', 0), season: '2025', league_season: '2026' }, {}))
     .toEqual({ analysisSeason: 2025, throughWeek: 18 });
 });
+
+it.each(['unpaired', 'missing', 'null'])('withholds predictions for %s historical pairings', (kind) => {
+  const incomplete = history.map((week) => ({ ...week, matchups: kind === 'missing' ? week.matchups.slice(0, 1) :
+    week.matchups.map((game) => ({ ...game, matchup_id: kind === 'null' ? null : game.roster_id })) }));
+  const data = analyzeLeague({ league: league(), rosters, users: [], weeklyMatchups: incomplete, throughWeek: 2 });
+  expect(data.historyComplete).toBe(false);
+  return expect(simulatePlayoffOdds({ analysis: data, matchups: [], playoffTeams: 1 })).rejects.toThrow('completed scores');
+});
+it('rejects non-finite historical scores and duplicate rosters', () => {
+  expect(() => analyzeLeague({ league: league(), rosters, users: [], throughWeek: 1,
+    weeklyMatchups: [{ week: 1, matchups: [{ roster_id: 1, matchup_id: 1, points: NaN }] }] })).toThrow('invalid score');
+  expect(() => analyzeLeague({ league: league(), rosters: [rosters[0]!, rosters[0]!], users: [], throughWeek: 0, weeklyMatchups: [] })).toThrow('distinct');
+});
+it('uses higher points against after tied records and points for', async () => {
+  const data = analysis(); data.teams[1]!.pointsAgainst += 1;
+  const result = await simulatePlayoffOdds({ analysis: data, matchups: [], playoffTeams: 1, simulations: 100 });
+  expect(result.teams.map((team) => team.probability)).toEqual([0, 1]);
+});
+it('rejects missing entire weeks in the remaining schedule', async () => {
+  await expect(simulatePlayoffOdds({ analysis: analysis(), playoffTeams: 1,
+    matchups: [{ week: 3, rosterA: 1, rosterB: 2 }, { week: 5, rosterA: 1, rosterB: 2 }] })).rejects.toThrow('skip');
+});

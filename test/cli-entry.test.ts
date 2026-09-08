@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import { SEB_VERSION } from '../src/version.js';
 
 const projectDirectory = fileURLToPath(new URL('..', import.meta.url));
 
@@ -24,7 +25,7 @@ describe('Seb executable', () => {
     const result = runSeb('--version');
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe('seb 0.2.3\n');
+    expect(result.stdout).toBe(`seb ${SEB_VERSION}\n`);
   });
 
   it('returns the usage exit code for an empty one-shot request', () => {
@@ -53,6 +54,7 @@ describe('Seb executable', () => {
     expect(result.stderr).toBe('');
   });
 
+  // Four cold Node.js starts share this test's budget on slower CI machines.
   it('runs usage, stats, prune, and clear through the packaged entry point', () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'seb-cli-usage-'));
     try {
@@ -95,7 +97,7 @@ describe('Seb executable', () => {
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }
-  });
+  }, 45_000);
 });
 
 function runSeb(...arguments_: string[]) {

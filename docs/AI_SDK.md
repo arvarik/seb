@@ -54,7 +54,7 @@ Seb does not treat a news article as an official statistic.
 
 Seb treats every tool result and web page as untrusted data.
 
-The model never follows an instruction that appears inside returned data.
+Seb instructs the model to ignore instructions inside returned data. The decision gate also checks executed evidence before it permits an action.
 
 Seb has no licensed publisher feed or official injury-report feed.
 
@@ -90,7 +90,7 @@ Interactive configuration verifies one local tool loop before it saves the selec
 
 `seb ask --json` uses AI SDK `Output.object` with a Zod schema.
 
-Seb first runs a source-grounded research request with all read-only tools.
+Seb first runs a source-grounded research request with the source and local analysis tools.
 
 Seb then sends that draft to a tool-free formatter request.
 

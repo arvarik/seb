@@ -144,7 +144,7 @@ Explore and Analyze remain available when account refresh fails.
 
 The header keeps the account name and shows a refresh warning.
 
-Seb never invents a league, roster, week, deadline, or player identity.
+Seb resolves leagues, rosters, weeks, deadlines, and player identities from tool evidence. Review the evidence when a model explanation appears inconsistent.
 
 Run `/connect USERNAME` to retry the complete account refresh.
 

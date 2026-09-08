@@ -4,57 +4,52 @@ This file records each user-visible Seb release.
 
 The project follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
-
-### Fixed
-
-- Preserve league identifiers in large prompts and cancel stalled one-shot model requests with Ctrl+C.
-- Warn about truncated answers and keep incomplete recommendations unavailable.
-- Cache one Sleeper player map and apply filters locally. Isolate request circuits by origin and preserve shared loads for remaining callers.
-- Support IDP starter slots, link unique active players across team changes, and explain league minimum FAAB bids.
-- Accept consistent CLI value options and help aliases. Show progress while checking buffered answers.
-- Split Discord and Telegram replies within platform limits and show sanitized model errors.
-
-### Added
-
-- Apache-2.0 licensing, public package metadata, contribution and security guides, and GitHub community templates.
-- Weekly dependency updates and Linux/macOS CI coverage with cancellation of outdated runs.
-- Setup guide version checks and documentation for learning and evaluation commands.
-
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-08
+
 ### Added
 
-- Scoring-aware forecast ensembles, explicit uncertainty intervals, and legal-slot start-sit comparisons.
-- Exact offensive lineup comparison for trades and seeded playoff simulations with schedule checks.
-- Local weekly learning with separate training and validation, bounded overrides, checksummed revisions, and player and team summaries.
-- A weekly-learning skill, learning inspection tools, `seb learn`, and `seb evaluate`.
-- Historical benchmark reports and a research-backed analysis guide.
+- Apache-2.0 licensing, contribution and security guides, community templates, and a documented version 1 interface policy.
+- Linux and macOS CI coverage, outdated-run cancellation, weekly dependency updates, and synchronized setup versions.
+- Scoring-aware forecast ensembles, uncertainty intervals, legal-slot starter comparisons, and exact offensive trade lineups.
+- Seeded playoff qualification simulations with complete historical and future schedule checks.
+- Explicit local weekly learning with chronological validation, bounded overrides, immutable revisions, and player and team summaries.
+- A weekly-learning skill, inspection tools, `seb learn`, `seb evaluate`, and historical benchmark reports.
 
 ### Fixed
 
-- Sleeper yardage bonuses no longer stack across exclusive scoring tiers.
-- Offensive scoring includes fumbles, two-point conversions, reception premiums, and supported special-teams scores.
-- Player and trade calculations reject ambiguous identities, duplicate weeks, future inputs, and regular-season/postseason mixing.
-- Historical league analysis reconstructs standings from the requested weeks. Median matchups no longer reduce weekly scoring averages.
-- Starter comparisons reject players whose games already started. Historical projections exclude recorded target-game weather.
-- Starter comparisons require news for every relevant player and retain failed eligibility checks.
-- Priority waivers no longer inherit a leftover FAAB budget. Bid ranges require enough budget for the league minimum.
-- Doctor validates local forecast overrides. Playoff simulations permit cancellation between batches.
+- Validate kickoff calendar dates and reject nonexistent or ambiguous daylight-saving times. Reuse the time-zone formatter.
+- Reconstruct historical standings from valid opponent pairs and completed scores. Count median matches separately from weekly scoring and opponent averages.
+- Apply Sleeper playoff tiebreakers in order: record, points scored, higher points against, then a random draw for exact ties.
+- Score exclusive yardage bonus tiers correctly. Include supported fumbles, conversions, reception premiums, and special-teams scores.
+- Reject malformed scoring weights, missing required statistics, nonfinite scores, ambiguous identities, duplicate weeks, and future training data.
+- Check current player status, kickoff, league scoring, and relevant news before permitting starter recommendations.
+- Use valid kickoff forecast periods and exclude target-game historical weather from past forecasts. Apply alert risk only inside a verified kickoff window.
+- Support IDP slots and guarded active-player identity matching after team changes.
+- Preserve league identifiers in large prompts. Cancel stalled model operations and source waits without interrupting other callers.
+- Distinguish intermediate tool steps from final completion. Warn about partial one-shot text and withhold incomplete recommendations.
+- Keep JSON research and formatting strict. Match eligibility evidence to the executed tool inputs and selected league.
+- Isolate request circuits by origin. Use one canonical Sleeper player cache and apply player filters locally.
+- Reject stale fallback data after its deadline and preserve evidence for distinct source requests.
+- Normalize CLI value options and help aliases. Show progress while checking buffered answers.
+- Remove untrusted terminal commands across streaming chunk boundaries. Serialize history saves with unique private temporary files.
+- Bound profile, history, and learning reads before allocating file contents.
+- Clamp FAAB ranges to actual budgets and explain league minimum bids. Preserve priority-waiver rules and stable candidate scores.
+- Split Discord and Telegram replies within platform limits and show sanitized model errors.
+- Keep capacity fallback within the original provider and deadline. Cancellation, timeouts, and visible output prevent a retry.
 
+### Dependencies
 
-- Player searches retain the position filter when they include inactive players.
-- Sleeper evidence retains separate citations for different player filters and trending windows.
-- Player touch averages count carries and receptions instead of carries and targets.
-- Game weather requires a forecast period that contains kickoff. Nearby periods cannot supply a game risk rating.
-- Failed refreshes cannot return cached data after its stale fallback deadline expires.
+- Update the Chat SDK core and all installed adapters to 4.40.0, including the shared test adapters.
+- Update the OpenAI-compatible provider to 3.0.44 and both GitHub Actions to v7.
+- Group related dependency updates. Retain Vitest 4 with matching coverage until the Chat SDK test package supports Vitest 5.
 
-- CLI and connector answers now require a successful model finish. Truncated, cancelled, and incomplete responses cannot become completed recommendations.
-- JSON research must finish before the formatter runs. JSON evidence validation now retains the executed tool inputs and checks the requested league.
-- Interactive streams report a missing finish event. Denied tools no longer leave a pending approval behind.
-- Explicit model and fallback overrides replace lower-priority environment model references.
-- An explicit compatible endpoint selects the compatible provider. Conflicting provider and endpoint overrides produce a configuration error.
-- Cancellation and timeout errors cannot trigger a capacity fallback. Connector fallback also respects the shared request deadline.
+### Documentation
+
+- Replace the old V1 design with implemented scope, explicit limits, and a separate future roadmap.
+- Update provider family defaults, identity transfer rules, completion behavior, storage guarantees, and release instructions.
+- Explain forecast uncertainty and model fallibility without claiming guaranteed accuracy.
 
 ## [0.2.3] - 2026-09-07
 

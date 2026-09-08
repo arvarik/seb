@@ -64,3 +64,11 @@ describe('lineup-aware trade value', () => {
     expect(analyzeTradeImpact({ ...base, rosterPlayers: [a] }).lineupImpact).toBeNull();
   });
 });
+
+it.each([NaN, Infinity, '1', true])('rejects malformed scoring weights: %s', (weight) => {
+  expect(() => inspectPlayerScoringSettings({ rec: weight })).toThrow('finite number');
+  expect(() => scorePlayerWeek(stat(), { rec: weight })).toThrow('finite number');
+});
+it('rejects score overflow', () => {
+  expect(() => scorePlayerWeek(stat(), { rush_yd: Number.MAX_VALUE })).toThrow('must be finite');
+});

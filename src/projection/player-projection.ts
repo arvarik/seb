@@ -258,6 +258,7 @@ export function scorePlayerWeek(
     thresholdBonus(row.rushingYards, settings, 'bonus_rush_yd_200', 200) +
     thresholdBonus(row.receivingYards, settings, 'bonus_rec_yd_100', 100, 200) +
     thresholdBonus(row.receivingYards, settings, 'bonus_rec_yd_200', 200);
+  if (!Number.isFinite(round(points))) throw new Error('The league score must be finite. Check the source statistics and scoring settings.');
   return round(points);
 }
 
@@ -265,6 +266,7 @@ export function inspectPlayerScoringSettings(settings: SleeperSettings): {
   ignoredSettings: string[];
   usedSettings: string[];
 } {
+  for (const key of Object.keys(settings)) setting(settings, key);
   const active = Object.entries(settings)
     .filter(([, value]) => typeof value === 'number' && value !== 0)
     .map(([key]) => key)
@@ -437,7 +439,9 @@ function projectionConfidence(input: {
 
 function setting(settings: SleeperSettings, key: string): number {
   const value = settings[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  if (value === null || value === undefined) return 0;
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`Scoring setting ${key} must be a finite number.`);
+  return value;
 }
 
 function optionalScore(value: number | null | undefined, settings: SleeperSettings, key: string): number {

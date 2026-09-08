@@ -1,3 +1,8 @@
+const EASTERN_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+
 export function easternKickoff(
   date: string,
   time: string | null,
@@ -18,6 +23,10 @@ export function easternKickoff(
   }
 
   const target = Date.UTC(year, month - 1, day, hour, minute);
+  const calendar = new Date(target);
+  if (year < 1900 || year > 2100 || month < 1 || month > 12 || day < 1 ||
+    hour < 0 || hour > 23 || minute < 0 || minute > 59 ||
+    calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) return null;
   let estimate = target;
   for (let index = 0; index < 3; index += 1) {
     const parts = easternParts(new Date(estimate));
@@ -30,6 +39,12 @@ export function easternKickoff(
     );
     estimate += target - represented;
   }
+  const matches = (instant: number): boolean => {
+    const value = easternParts(new Date(instant));
+    return value.year === year && value.month === month && value.day === day && value.hour === hour && value.minute === minute;
+  };
+  // Reject nonexistent or ambiguous daylight-saving wall times.
+  if (!matches(estimate) || matches(estimate - 3_600_000) || matches(estimate + 3_600_000)) return null;
   return new Date(estimate);
 }
 
@@ -40,15 +55,7 @@ function easternParts(date: Date): {
   month: number;
   year: number;
 } {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date);
+  const parts = EASTERN_FORMATTER.formatToParts(date);
   const value = (type: Intl.DateTimeFormatPartTypes) =>
     Number(parts.find((part) => part.type === type)?.value);
   return {

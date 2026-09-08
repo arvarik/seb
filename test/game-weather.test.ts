@@ -167,3 +167,24 @@ function game(overrides: Partial<NflverseGame>): NflverseGame {
     ...overrides,
   };
 }
+
+it.each([
+  ['2026-09-05T00:00:00Z', '2026-09-06T00:00:00Z', 'low'],
+  ['2026-09-11T02:00:00Z', '2026-09-11T03:00:00Z', 'low'],
+  [null, null, 'low'],
+  ['2026-09-11T00:00:00Z', '2026-09-11T01:00:00Z', 'high'],
+])('applies a severe alert only during its verified kickoff window: %s', async (onset, ends, risk) => {
+  vi.useFakeTimers(); vi.setSystemTime(new Date('2026-09-05T12:00:00Z'));
+  const weather = {
+    getHourlyForecast: vi.fn().mockResolvedValue({ periods: [{
+      startTime: '2026-09-11T00:00:00Z', endTime: '2026-09-11T01:00:00Z',
+      temperature: 70, temperatureUnit: 'F', windSpeed: '5 mph', precipitationProbability: 0,
+    }] }),
+    getActiveAlerts: vi.fn().mockResolvedValue([{ severity: 'Severe', onset, ends }]),
+  };
+  const result = await new GameWeatherService(nflverseWithGame(game({})), weather as unknown as WeatherClient)
+    .getGameWeather({ season: 2026, week: 1, team: 'KC' });
+  expect(result.risk).toBe(risk);
+  expect(result.alerts).toHaveLength(1);
+  if (risk === 'low') expect(result.fantasyImpact.join(' ')).toContain('no verified time window');
+});

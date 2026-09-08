@@ -15,10 +15,13 @@ export async function simulatePlayoffOdds(input: {
     throw new Error('Invalid simulation count or playoff field size.');
   }
   const ids = new Set(teams.map((team) => team.rosterId));
-  if (!input.analysis.historyComplete || ids.size !== teams.length || teams.some((team) => ![team.seasonAverage, team.pointsFor, team.record.wins, team.record.losses, team.record.ties, team.recentAverage ?? 0, team.weeklyVolatility ?? 0, ...team.recentScores].every(Number.isFinite) || team.recentScores.length < 2)) {
+  if (!input.analysis.historyComplete || ids.size !== teams.length || teams.some((team) => ![team.seasonAverage, team.pointsFor, team.pointsAgainst, team.record.wins, team.record.losses, team.record.ties, team.recentAverage ?? 0, team.weeklyVolatility ?? 0, ...team.recentScores].every(Number.isFinite) || team.recentScores.length < 2)) {
     throw new Error('Playoff simulations need distinct rosters and at least two completed scores per roster.');
   }
   const weeks = [...new Set(input.matchups.map((matchup) => matchup.week))].sort((a, b) => a - b);
+  if (weeks.some((week, index) => week !== input.analysis.throughWeek + index + 1)) {
+    throw new Error('The remaining schedule cannot skip a regular-season week after the cutoff.');
+  }
   for (const week of weeks) {
     if (!Number.isInteger(week) || week <= input.analysis.throughWeek || week > 18) throw new Error('Remaining games must follow the analysis cutoff.');
     const participants = input.matchups.filter((matchup) => matchup.week === week).flatMap((matchup) => [matchup.rosterA, matchup.rosterB]);
@@ -34,13 +37,15 @@ export async function simulatePlayoffOdds(input: {
   for (let trial = 0; trial < simulations; trial += 1) {
     if (trial % 250 === 0) { await setImmediate(); throwIfRequestAborted(); }
     const standings = new Map(teams.map((team) => [team.rosterId, {
-      wins: team.record.wins + team.record.ties * 0.5, points: team.pointsFor, tie: random(),
+      wins: team.record.wins + team.record.ties * 0.5, points: team.pointsFor, pointsAgainst: team.pointsAgainst, tie: random(),
     }]));
     for (const week of weeks) {
       const scores = new Map(teams.map((team) => [team.rosterId,
         team.seasonAverage * 0.7 + (team.recentAverage ?? team.seasonAverage) * 0.3 + Math.max(8, team.weeklyVolatility ?? 15) * normal()]));
       for (const matchup of gamesByWeek.get(week)!) {
         const a = scores.get(matchup.rosterA)!; const b = scores.get(matchup.rosterB)!;
+        standings.get(matchup.rosterA)!.pointsAgainst += b;
+        standings.get(matchup.rosterB)!.pointsAgainst += a;
         standings.get(matchup.rosterA)!.wins += a > b ? 1 : a === b ? 0.5 : 0;
         standings.get(matchup.rosterB)!.wins += b > a ? 1 : a === b ? 0.5 : 0;
       }
@@ -53,7 +58,7 @@ export async function simulatePlayoffOdds(input: {
         if (input.medianMatch) record.wins += score > median ? 1 : score === median ? 0.5 : 0;
       }
     }
-    const ranked = [...standings].sort(([, a], [, b]) => b.wins - a.wins || b.points - a.points || b.tie - a.tie);
+    const ranked = [...standings].sort(([, a], [, b]) => b.wins - a.wins || b.points - a.points || b.pointsAgainst - a.pointsAgainst || b.tie - a.tie);
     for (const [id] of ranked.slice(0, input.playoffTeams)) counts.set(id, counts.get(id)! + 1);
   }
   return { simulations, seed: input.seed ?? 42, playoffTeams: input.playoffTeams,
@@ -64,7 +69,7 @@ export async function simulatePlayoffOdds(input: {
       const width = 1.96 * Math.sqrt(probability * (1 - probability) / simulations + z2 / (4 * simulations ** 2)) / denominator;
       return { rosterId: team.rosterId, probability, simulationInterval95: [Math.max(0, center - width), Math.min(1, center + width)] };
     }), assumptions: ['Independent normal weekly roster scores with a minimum eight-point standard deviation.',
-      'Standings use wins, then points scored, then a random draw for exact ties.',
+      'Standings use wins, then points scored, then higher points against, then a random draw for exact ties.',
       'Intervals measure simulation sampling error only. They exclude forecast model error.',
       'The model excludes future roster changes, divisions, and custom playoff seeding.'] };
 }

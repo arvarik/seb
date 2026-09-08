@@ -18,7 +18,7 @@ const league: SleeperLeague = {
   season_type: 'regular',
   sport: 'nfl',
   status: 'complete',
-  total_rosters: 3,
+  total_rosters: 4,
   roster_positions: ['QB', 'RB', 'WR', 'FLEX'],
   scoring_settings: { rec: 1 },
   settings: { leg: 4 },
@@ -27,19 +27,21 @@ const league: SleeperLeague = {
 const rosters: SleeperRoster[] = [
   roster(1, 'u1', 3, 0, 375, 300),
   roster(2, 'u2', 2, 1, 318, 320),
-  roster(3, 'u3', 0, 3, 270, 343),
+  roster(3, 'u3', 3, 0, 270, 240),
+  roster(4, 'u4', 0, 3, 240, 270),
 ];
 
 const users: SleeperUser[] = [
   user('u1', 'Alpha'),
   user('u2', 'Bravo'),
   user('u3', 'Charlie'),
+  user('u4', 'Delta'),
 ];
 
 const weeklyMatchups: WeeklyMatchups[] = [
-  week(1, [120, 108, 90]),
-  week(2, [130, 100, 92]),
-  week(3, [125, 110, 88]),
+  week(1, [120, 108, 90, 80]),
+  week(2, [130, 100, 92, 82]),
+  week(3, [125, 110, 88, 78]),
 ];
 
 describe('league analytics', () => {
@@ -52,7 +54,7 @@ describe('league analytics', () => {
       throughWeek: 3,
     });
 
-    expect(result.teams.map((team) => team.rosterId)).toEqual([1, 2, 3]);
+    expect(result.teams.map((team) => team.rosterId)).toEqual([1, 3, 2, 4]);
     expect(result.teams[0]).toMatchObject({
       rank: 1,
       teamName: 'Alpha',
@@ -60,7 +62,7 @@ describe('league analytics', () => {
       recentAverage: 125,
     });
     expect(result.teams[0]?.strengths.join(' ')).toContain('top third');
-    expect(result.teams[2]?.weaknesses.join(' ')).toContain('bottom third');
+    expect(result.teams[3]?.weaknesses.join(' ')).toContain('bottom third');
   });
 
   it('favors the higher-scoring roster without claiming certainty', () => {
@@ -136,7 +138,7 @@ function week(number: number, points: number[]): WeeklyMatchups {
     week: number,
     matchups: points.map((score, index) => ({
       roster_id: index + 1,
-      matchup_id: index === 2 ? 2 : 1,
+      matchup_id: Math.floor(index / 2) + 1,
       points: score,
     })),
   };

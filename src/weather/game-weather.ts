@@ -71,7 +71,7 @@ export class GameWeatherService {
       return {
         ...baseResult(game, kickoff, {
           status: 'historical',
-          reason: 'The game is complete. nflverse supplies the recorded temperature and wind when available.',
+          reason: 'The kickoff is in the past. nflverse supplies recorded temperature and wind when available.',
         }),
         fantasyImpact: historicalImpact(game),
         risk: historicalRisk(game),
@@ -127,7 +127,15 @@ export class GameWeatherService {
       };
     }
 
-    const assessment = assessWeather(period, alerts);
+    const kickoffAlerts = alerts.filter((alert) => {
+      const onset = Date.parse(alert.onset ?? '');
+      const ends = Date.parse(alert.ends ?? '');
+      return onset <= kickoff.getTime() && kickoff.getTime() < ends;
+    });
+    const assessment = assessWeather(period, kickoffAlerts);
+    if (alerts.length > kickoffAlerts.length) {
+      assessment.impacts.push('Some current alerts have no verified time window that includes kickoff. They do not change the kickoff risk rating.');
+    }
     return {
       alerts,
       fantasyImpact: assessment.impacts,

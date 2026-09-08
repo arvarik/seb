@@ -79,6 +79,7 @@ interface BaseTeamAnalysis {
   recentAverage: number | null;
   weeklyVolatility: number | null;
   recentScores: number[];
+  opponentGames: number;
 }
 
 export function analyzeLeague(input: {
@@ -90,14 +91,23 @@ export function analyzeLeague(input: {
 }): LeagueAnalysis {
   const usersById = new Map(input.users.map((user) => [user.user_id, user]));
   if (!Number.isInteger(input.throughWeek) || input.throughWeek < 0 || input.throughWeek > 18) throw new Error('The analysis week must be from zero through 18.');
+  const rosterIds = new Set(input.rosters.map((roster) => roster.roster_id));
+  if (rosterIds.size !== input.rosters.length || input.rosters.some((roster) => !Number.isSafeInteger(roster.roster_id))) {
+    throw new Error('League rosters need distinct integer IDs.');
+  }
   const weeks = input.weeklyMatchups.filter((week) => week.week <= input.throughWeek && week.week > 0);
   if (new Set(weeks.map((week) => week.week)).size !== weeks.length || weeks.some((week) =>
     new Set(week.matchups.map((matchup) => matchup.roster_id)).size !== week.matchups.length)) {
     throw new Error('League history contains duplicate weeks or roster scores.');
   }
-  const historyComplete = Array.from({ length: input.throughWeek }, (_, index) => index + 1).every((number) => {
+  if (weeks.some((week) => !Number.isInteger(week.week) || week.matchups.some((matchup) =>
+    !rosterIds.has(matchup.roster_id) || !Number.isFinite(matchup.custom_points ?? matchup.points)))) {
+    throw new Error('League history contains an unknown roster or an invalid score or week.');
+  }
+  const historyComplete = input.rosters.length > 0 && Array.from({ length: input.throughWeek }, (_, index) => index + 1).every((number) => {
     const week = weeks.find((candidate) => candidate.week === number);
-    return week && input.rosters.every((roster) => week.matchups.some((matchup) => matchup.roster_id === roster.roster_id));
+    return week && week.matchups.length === input.rosters.length && week.matchups.every((matchup) =>
+      Number.isSafeInteger(matchup.matchup_id) && week.matchups.filter((other) => other.matchup_id === matchup.matchup_id).length === 2);
   });
   const scoresByRoster = collectScores(weeks);
   const records = recordsFromWeeks(weeks, input.league.settings.league_average_match === 1);
@@ -107,7 +117,7 @@ export function analyzeLeague(input: {
     const user = ownerId ? usersById.get(ownerId) : undefined;
     const weeklyScores = scoresByRoster.get(roster.roster_id) ?? [];
     const recentScores = weeklyScores.slice(-3);
-    const record = records.get(roster.roster_id) ?? { wins: 0, losses: 0, ties: 0, pointsAgainst: 0 };
+    const record = records.get(roster.roster_id) ?? { wins: 0, losses: 0, ties: 0, pointsAgainst: 0, opponentGames: 0 };
     const { wins, losses, ties, pointsAgainst } = record;
     const games = wins + losses + ties;
     const pointsFor = weeklyScores.reduce((sum, score) => sum + score, 0);
@@ -128,6 +138,7 @@ export function analyzeLeague(input: {
       winRate: games > 0 ? (wins + ties * 0.5) / games : 0,
       pointsFor,
       pointsAgainst,
+      opponentGames: record.opponentGames,
       seasonAverage,
       recentAverage: average(recentScores),
       weeklyVolatility: standardDeviation(weeklyScores),
@@ -144,8 +155,7 @@ export function analyzeLeague(input: {
     (team) => team.weeklyVolatility ?? Number.POSITIVE_INFINITY,
   );
   const pointsAgainstValues = baseTeams.map((team) => {
-    const games = team.wins + team.losses + team.ties;
-    return games > 0 ? team.pointsAgainst / games : 0;
+    return team.opponentGames > 0 ? team.pointsAgainst / team.opponentGames : 0;
   });
 
   const unsortedTeams = baseTeams.map<TeamAnalysis>((team) => {
@@ -201,8 +211,8 @@ export function analyzeLeague(input: {
       scheduleContext: buildScheduleContext(
         team,
         percentile(
-          team.wins + team.losses + team.ties > 0
-            ? team.pointsAgainst / (team.wins + team.losses + team.ties)
+          team.opponentGames > 0
+            ? team.pointsAgainst / team.opponentGames
             : 0,
           pointsAgainstValues,
         ),
@@ -307,15 +317,15 @@ function collectScores(weeks: WeeklyMatchups[]): Map<number, number[]> {
 }
 
 function recordsFromWeeks(weeks: WeeklyMatchups[], medianMatch: boolean) {
-  const records = new Map<number, { wins: number; losses: number; ties: number; pointsAgainst: number }>();
+  const records = new Map<number, { wins: number; losses: number; ties: number; pointsAgainst: number; opponentGames: number }>();
   for (const week of weeks) {
     const median = week.matchups.length ? quantile(week.matchups.map((matchup) => matchup.custom_points ?? matchup.points), 0.5) : 0;
     for (const matchup of week.matchups) {
-      const record = records.get(matchup.roster_id) ?? { wins: 0, losses: 0, ties: 0, pointsAgainst: 0 };
+      const record = records.get(matchup.roster_id) ?? { wins: 0, losses: 0, ties: 0, pointsAgainst: 0, opponentGames: 0 };
       const score = matchup.custom_points ?? matchup.points;
       const opponents = matchup.matchup_id === null ? [] : week.matchups.filter((other) => other.matchup_id === matchup.matchup_id && other.roster_id !== matchup.roster_id);
       const against = opponents.length === 1 ? [opponents[0]!.custom_points ?? opponents[0]!.points] : [];
-      if (against.length) record.pointsAgainst += against[0]!;
+      if (against.length) { record.pointsAgainst += against[0]!; record.opponentGames += 1; }
       if (medianMatch) against.push(median);
       for (const opponentScore of against) {
         if (score > opponentScore) record.wins += 1;

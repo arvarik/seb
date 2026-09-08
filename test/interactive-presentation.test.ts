@@ -31,7 +31,8 @@ describe('interactive presentation', () => {
     expect(output).toBe('safe text done');
     expect(output).not.toContain('\x1b');
     expect(output).not.toContain('\x07');
-    expect(sanitizeTerminalText('a\x00b\x9fc')).toBe('abc');
+    // C1 APC starts a control string. Discard its unfinished payload too.
+    expect(sanitizeTerminalText('a\x00b\x9fc')).toBe('ab');
     expect(sanitizeTerminalText('a\tb')).toBe('a    b');
   });
 

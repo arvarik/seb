@@ -1,4 +1,6 @@
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { readBoundedUtf8File } from '../setup/bounded-file.js';
+import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -36,6 +38,7 @@ export class MemoryPromptHistory implements PromptHistory {
 }
 
 export class FilePromptHistory extends MemoryPromptHistory {
+  private saves: Promise<void> = Promise.resolve();
   private pendingFailure: string | null;
   private writable: boolean;
   private writeFailure: string | null;
@@ -56,7 +59,10 @@ export class FilePromptHistory extends MemoryPromptHistory {
     const path = promptHistoryPath(environment);
     let content: string;
     try {
-      content = await readFile(path, 'utf8');
+      const loaded = await readBoundedUtf8File(path, MAX_ENTRIES * MAX_ENTRY_LENGTH * 6 + 1024,
+        () => new Error('The history file exceeds its size limit.'));
+      if (loaded === null) return new FilePromptHistory(path, []);
+      content = loaded;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return new FilePromptHistory(path, []);
@@ -122,15 +128,23 @@ export class FilePromptHistory extends MemoryPromptHistory {
     }
   }
 
-  private async save(): Promise<void> {
+  private save(): Promise<void> {
+    const content = `${JSON.stringify(this.entries, null, 2)}\n`;
+    const pending = this.saves.then(() => this.writeSnapshot(content));
+    this.saves = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async writeSnapshot(content: string): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-    const temporary = `${this.path}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(this.entries, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
-    await rename(temporary, this.path);
-    await chmod(this.path, 0o600);
+    const temporary = `${this.path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      await rename(temporary, this.path);
+      await chmod(this.path, 0o600);
+    } finally {
+      await rm(temporary, { force: true });
+    }
   }
 }
 

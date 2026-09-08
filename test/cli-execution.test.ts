@@ -194,3 +194,13 @@ describe('CLI agent execution', () => {
     expect(mocks.models).toEqual(['primary-test']);
   });
 });
+
+it('strips terminal commands across model chunks before writing ordinary answers', async () => {
+  const answer = 'News.\x1b]52;c;YWJj\x1b\\ Safe.\x1b[2J';
+  mocks.stream.mockResolvedValue(stream([...[...answer].map((text) => ({ type: 'text-delta', text })),
+    { type: 'finish', finishReason: 'stop' },
+  ]));
+  const io = output();
+  await expect(runCli(['ask', 'Show current news'], io.streams, {})).resolves.toBe(0);
+  expect(io.stdout.join('')).toBe('News. Safe.\n');
+});

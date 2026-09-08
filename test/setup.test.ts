@@ -440,3 +440,13 @@ function exampleProfile(): SebSetupProfile {
     updatedAt: '2026-08-20T12:00:00.000Z',
   };
 }
+
+it('rejects oversized profiles before parsing and preserves the file', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'seb-profile-limit-'));
+  temporaryDirectories.push(directory);
+  const path = join(directory, 'profile.json');
+  await writeFile(path, ' '.repeat(64 * 1024 + 1));
+  await expect(new FileSetupProfileStore({ path }).load()).rejects.toThrow('exceeds 64 KiB');
+  expect((await stat(path)).size).toBe(64 * 1024 + 1);
+  await expect(new FileSetupProfileStore({ path: directory }).load()).rejects.toThrow('regular file');
+});

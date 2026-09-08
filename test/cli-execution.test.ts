@@ -59,7 +59,7 @@ function output() {
 }
 
 describe('CLI agent execution', () => {
-  it.each(['length', 'content-filter', 'tool-calls', undefined])(
+  it.each(['content-filter', undefined])(
     'rejects incomplete recommendations with finish reason %s', async (finishReason) => {
       mocks.stream.mockResolvedValue(stream([
         { type: 'text-delta', text: 'Start Example Player.' },
@@ -71,6 +71,57 @@ describe('CLI agent execution', () => {
       expect(mocks.models).toEqual(['primary-test']);
     },
   );
+
+  it.each(['length', 'tool-calls'])('withholds a partial recommendation and warns for %s', async (finishReason) => {
+    mocks.stream.mockResolvedValue(stream([{ type: 'text-delta', text: 'Start Example Player.' }, { type: 'finish', finishReason }]));
+    const io = output();
+    await expect(runCli(['ask', 'Should I start Example Player?'], io.streams, {})).resolves.toBe(0);
+    expect(io.stdout.join('')).toContain('Decision unavailable');
+    expect(io.stdout.join('')).not.toContain('Start Example Player');
+    expect(io.stderr.join('')).toContain('Warning:');
+  });
+
+  it.each(['setup', 'stream', 'json'])('propagates SIGINT during model %s and removes the listener', async (phase) => {
+    let signal!: AbortSignal;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const never = new Promise<never>(() => undefined);
+    if (phase === 'json') mocks.generate.mockImplementation(({ abortSignal }) => {
+      signal = abortSignal; started(); return never;
+    });
+    else mocks.stream.mockImplementation(({ abortSignal }) => {
+      signal = abortSignal; started();
+      return phase === 'setup' ? never : { fullStream: { [Symbol.asyncIterator]: () => ({ next: () => never }) } };
+    });
+    const before = process.listenerCount('SIGINT');
+    const io = output();
+    const pending = runCli(['ask', ...(phase === 'json' ? ['--json'] : []), 'Show current news'], io.streams, {});
+    const rejection = expect(pending).rejects.toThrow('request stopped');
+    await ready;
+    process.emit('SIGINT');
+    await rejection;
+    expect(signal.aborted).toBe(true);
+    expect(process.listenerCount('SIGINT')).toBe(before);
+    expect(io.stdout).toEqual([]);
+  });
+
+  it('shows terminal progress before a recommendation completes and clears its timer', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    mocks.stream.mockImplementation(() => { started(); return { fullStream: (async function* () {
+      await gate; yield { type: 'text-delta', text: 'A buffered recommendation.' }; yield { type: 'finish', finishReason: 'stop' };
+    })() }; });
+    const io = output();
+    const pending = runCli(['ask', 'Should I start Example Player?'], { ...io.streams, stderr: { ...io.streams.stderr, isTTY: true } }, {});
+    await ready;
+    expect(io.stderr.join('')).toContain('Seb is checking the answer');
+    expect(io.stdout).toEqual([]);
+    release();
+    await pending;
+    expect(io.stderr.at(-1)).toBe('\r\x1b[2K');
+  });
 
   it('rejects an aborted stream instead of printing its buffered recommendation', async () => {
     mocks.stream.mockResolvedValue(stream([
@@ -98,11 +149,12 @@ describe('CLI agent execution', () => {
     expect(io.stdout).toEqual([]);
   });
 
-  it('reports truncated ordinary text as a failure without retrying it', async () => {
+  it('warns about truncated ordinary text without retrying it', async () => {
     mocks.stream.mockResolvedValue(stream([{ type: 'text-delta', text: 'Partial news.' }, { type: 'finish', finishReason: 'length' }]));
     const io = output();
-    await expect(runCli(['ask', 'Show current news'], io.streams, {})).rejects.toThrow('stopped before it completed');
-    expect(io.stdout.join('')).toBe('Partial news.');
+    await expect(runCli(['ask', 'Show current news'], io.streams, {})).resolves.toBe(0);
+    expect(io.stderr.join('')).toContain('Warning: The model reached the output limit');
+    expect(io.stdout.join('')).toBe('Partial news.\n');
     expect(mocks.models).toEqual(['primary-test']);
   });
 

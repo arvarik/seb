@@ -218,6 +218,19 @@ describe('fantasy football agent harness', () => {
     });
   });
 
+  it('retains user and league identifiers before bulky runtime fields', async () => {
+    const model = new MockLanguageModelV4({ doGenerate: {
+      content: [{ type: 'text', text: 'Done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
+    } });
+    const context = { leagueId: '123456', rosterId: 7, userId: 'user-1', user: { id: 'user-1' },
+      leagues: [{ leagueId: '123456' }],
+      details: Array.from({ length: 100 }, () => ({ value: 'x'.repeat(1000) })) };
+    await createFantasyFootballAgent({ languageModel: model, getRuntimeContext: () => JSON.stringify(context) }).generate({ prompt: 'Check context' });
+    expect(runtimeDataFromPrompt(model.doGenerateCalls[0]?.prompt)).toMatchObject({
+      leagueId: '123456', rosterId: 7, userId: 'user-1', user: { id: 'user-1' }, leagues: [{ leagueId: '123456' }],
+    });
+  });
+
   it('preserves decision fields when runtime collections exceed the limit', async () => {
     const model = new MockLanguageModelV4({
       doGenerate: {

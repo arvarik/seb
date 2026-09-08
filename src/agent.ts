@@ -45,6 +45,11 @@ export const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-3.6-flash';
 const MAX_AGENT_STEPS = 12;
 const RUNTIME_CONTEXT_CHARACTER_LIMIT = 24_000;
 const RUNTIME_CONTEXT_KEY_PRIORITY = [
+  'leagueId',
+  'rosterId',
+  'leagues',
+  'user',
+  'userId',
   'subject',
   'decisionContext',
   'nfl',
@@ -59,13 +64,8 @@ const RUNTIME_CONTEXT_KEY_PRIORITY = [
   'season',
   'week',
   'options',
-  'user',
-  'userId',
   'accountStatus',
   'refreshError',
-  'leagueId',
-  'rosterId',
-  'leagues',
 ] as const;
 const RUNTIME_CONTEXT_KEY_RANK: ReadonlyMap<string, number> = new Map(
   RUNTIME_CONTEXT_KEY_PRIORITY.map((key, index) => [key, index]),

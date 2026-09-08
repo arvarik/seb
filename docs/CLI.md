@@ -35,13 +35,21 @@ You can skip `npm link`. Use `npm run seb` and `npm run ask` instead.
 | `seb doctor` | Verify local configuration and source access. |
 | `seb cache` | Inspect or clear the SQLite source cache. |
 | `seb snapshots` | List snapshots or inspect snapshot provenance. |
+| `seb learn` | Inspect or update local forecast learning from completed weeks. |
+| `seb evaluate` | Compare legacy, ensemble, and adaptive forecasts. |
 | `seb replay` | Measure the nflverse PPR baseline. |
 | `seb usage` | Show concise local model API usage. |
 | `seb stats` | Show detailed local model and tool analytics. |
 | `seb completion` | Print a shell completion script. |
 | `seb version` | Print the installed Seb version. |
 
-Run `seb COMMAND --help` to return the general command help.
+Run `seb COMMAND --help` or `seb COMMAND -h` to return the general command help.
+Value options accept `--option value` and `--option=value`.
+For example, use `seb evaluate --season=2025` or `seb --json "Show current news"`.
+Use `--` before literal prompt text that starts with a dash.
+
+Press Ctrl+C to cancel a one-shot request. The terminal shows progress while Seb checks buffered recommendations.
+A truncated text answer includes a warning. Seb withholds incomplete recommendations.
 
 ## Configure a model provider
 

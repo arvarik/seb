@@ -42,7 +42,7 @@
     "@chat-adapter/slack": "^4.38.1",
     "@chat-adapter/state-memory": "^4.38.1",
     "@chat-adapter/state-redis": "^4.38.1",
-    "@chat-adapter/telegram": "^4.38.1",
+    "@chat-adapter/telegram": "^4.40.0",
     "@hono/node-server": "^2.1.1",
     "ai": "^7.0.76",
     "better-sqlite3": "^13.0.3",

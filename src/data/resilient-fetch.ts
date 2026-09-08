@@ -53,10 +53,9 @@ export class CircuitOpenError extends Error {
 }
 
 export class ResilientFetch {
-  private consecutiveFailures = 0;
+  private readonly circuits = new Map<string, { consecutiveFailures: number; openUntil: number }>();
   private readonly fetchImplementation: Fetch;
   private readonly now: () => number;
-  private openUntil = 0;
   private readonly policy: RequestPolicy;
   private readonly random: () => number;
   private readonly sleep: (
@@ -80,7 +79,8 @@ export class ResilientFetch {
   ): Promise<Response> {
     const url = String(input);
     init.signal?.throwIfAborted();
-    this.assertCircuit(url);
+    const circuit = this.circuit(url);
+    this.assertCircuit(url, circuit);
     let finalError: unknown;
 
     for (let attempt = 1; attempt <= this.policy.maxAttempts; attempt += 1) {
@@ -94,14 +94,14 @@ export class ResilientFetch {
           throw abortReason(init.signal);
         }
         if (!RETRYABLE_STATUS_CODES.has(response.status)) {
-          this.recordSuccess();
+          this.recordSuccess(circuit);
           onAttempt?.({ attempt, delayMs: null, status: response.status, url });
           return response;
         }
 
         finalError = new Error(`The source returned HTTP ${response.status}.`);
         if (attempt === this.policy.maxAttempts) {
-          this.recordFailure();
+          this.recordFailure(circuit);
           onAttempt?.({ attempt, delayMs: null, status: response.status, url });
           return response;
         }
@@ -122,7 +122,7 @@ export class ResilientFetch {
           throw abortReason(init.signal);
         }
         if (attempt === this.policy.maxAttempts) {
-          this.recordFailure();
+          this.recordFailure(circuit);
           throw error;
         }
         const delayMs = retryDelay(
@@ -137,37 +137,50 @@ export class ResilientFetch {
       }
     }
 
-    this.recordFailure();
+    this.recordFailure(circuit);
     throw finalError ?? new Error('The request failed without an error response.');
   }
 
-  state(): { consecutiveFailures: number; openUntil: string | null } {
+  /** Without a URL, report aggregate diagnostics for existing callers. */
+  state(url?: string): { consecutiveFailures: number; openUntil: string | null } {
+    const states = url ? [this.circuit(url)] : [...this.circuits.values()];
+    const openUntil = Math.max(0, ...states.map((state) => state.openUntil));
     return {
-      consecutiveFailures: this.consecutiveFailures,
-      openUntil: this.openUntil > this.now() ? new Date(this.openUntil).toISOString() : null,
+      consecutiveFailures: states.reduce((sum, state) => sum + state.consecutiveFailures, 0),
+      openUntil: openUntil > this.now() ? new Date(openUntil).toISOString() : null,
     };
   }
 
-  private assertCircuit(url: string): void {
-    if (this.openUntil > this.now()) {
-      throw new CircuitOpenError(url, new Date(this.openUntil).toISOString());
+  private circuit(url: string): { consecutiveFailures: number; openUntil: number } {
+    const origin = new URL(url).origin;
+    let circuit = this.circuits.get(origin);
+    if (!circuit) {
+      circuit = { consecutiveFailures: 0, openUntil: 0 };
+      this.circuits.set(origin, circuit);
     }
-    if (this.openUntil !== 0) {
-      this.openUntil = 0;
-      this.consecutiveFailures = 0;
+    return circuit;
+  }
+
+  private assertCircuit(url: string, circuit: { consecutiveFailures: number; openUntil: number }): void {
+    if (circuit.openUntil > this.now()) {
+      throw new CircuitOpenError(url, new Date(circuit.openUntil).toISOString());
+    }
+    if (circuit.openUntil !== 0) {
+      circuit.openUntil = 0;
+      circuit.consecutiveFailures = 0;
     }
   }
 
-  private recordFailure(): void {
-    this.consecutiveFailures += 1;
-    if (this.consecutiveFailures >= this.policy.circuitBreakerThreshold) {
-      this.openUntil = this.now() + this.policy.circuitBreakerCooldownMs;
+  private recordFailure(circuit: { consecutiveFailures: number; openUntil: number }): void {
+    circuit.consecutiveFailures += 1;
+    if (circuit.consecutiveFailures >= this.policy.circuitBreakerThreshold) {
+      circuit.openUntil = this.now() + this.policy.circuitBreakerCooldownMs;
     }
   }
 
-  private recordSuccess(): void {
-    this.consecutiveFailures = 0;
-    this.openUntil = 0;
+  private recordSuccess(circuit: { consecutiveFailures: number; openUntil: number }): void {
+    circuit.consecutiveFailures = 0;
+    circuit.openUntil = 0;
   }
 }
 

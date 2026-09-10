@@ -6,6 +6,7 @@ import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import { WeatherClient } from '../weather/client.js';
 import { PlayerProjectionService } from './service.js';
+import { projectPlayers } from './batch.js';
 
 const seasonSchema = z.number().int().min(1999).max(2100);
 
@@ -16,6 +17,22 @@ export function createProjectionTools(
 ) {
   const service = new PlayerProjectionService(sleeper, nflverse, weather);
   return {
+    projectPlayers: tool({
+      description: 'Project several QB, RB, WR, TE, or K players in one selected league. Use this for roster or matchup analysis instead of repeated projectPlayer calls. Each result includes uncertainty and eligibility. Defense and missing projections remain unavailable. This tool does not add news adjustments or infer missing scores.',
+      inputSchema: z.object({
+        leagueId: z.string().trim().regex(/^\d+$/),
+        playerNames: z.array(z.string().trim().min(2).max(100)).min(1).max(40),
+        season: seasonSchema,
+        week: z.number().int().min(1).max(18),
+        analysisSeason: seasonSchema.optional(),
+        throughWeek: z.number().int().min(1).max(18).optional(),
+      }),
+      execute: ({ analysisSeason, throughWeek, ...request }) => projectPlayers(service, {
+        ...request,
+        ...(analysisSeason === undefined ? {} : { analysisSeason }),
+        ...(throughWeek === undefined ? {} : { throughWeek }),
+      }),
+    }),
     compareStartSit: tool({
       description: 'Compare two through six players using league scoring, forecast uncertainty, and scheduled games. Flag close decisions and ineligible players.',
       inputSchema: z.object({

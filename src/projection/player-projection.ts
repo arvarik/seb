@@ -1,3 +1,5 @@
+import { ResearchDataError } from '../data/research-error.js';
+import { KICKING_SETTINGS, scoreKicking } from './kicking.js';
 import { DEFAULT_PROJECTION_PARAMETERS, forecastMean, forecastInterval, rollingResiduals, PROJECTION_MODEL_VERSION, type ProjectionParameters } from './statistics.js';
 import type { NflversePlayerWeek } from '../nflverse/types.js';
 import type { SleeperSettings } from '../sleeper/types.js';
@@ -30,6 +32,7 @@ export interface ScoringAwarePlayerProjection {
   limitations: string[];
   median: number;
   expectedPoints: number;
+  scoreScope: 'weekly-estimate' | 'partial-scoring' | 'historical-baseline';
   interval: ReturnType<typeof forecastInterval>;
   model: { version: string; parameters: ProjectionParameters; learningThroughWeek: number | null; learningSeason: number | null; manualOverride: boolean };
 
@@ -120,24 +123,27 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
     ![input.week, input.throughWeek].every((week) => Number.isInteger(week) && week >= 1 && week <= 18) ||
     input.analysisSeason > projectionSeason ||
     (input.analysisSeason === projectionSeason && input.throughWeek >= input.week)) {
-    throw new Error('Projection training must end before the projected week.');
+    throw new ResearchDataError('Projection training must end before the projected week.');
   }
   const ordered = [...input.rows]
     .filter((row) => row.season === input.analysisSeason && row.seasonType === 'REG' && row.week <= input.throughWeek)
     .sort((left, right) => left.week - right.week);
   const latest = ordered.at(-1);
   if (!latest) {
-    throw new Error('A player projection needs at least one completed game.');
+    throw new ResearchDataError('A player projection needs at least one completed game.');
+  }
+  if (!['QB', 'RB', 'WR', 'TE', 'K'].includes(latest.position.toUpperCase())) {
+    throw new ResearchDataError('Seb projects QB, RB, WR, TE, and K scoring only. Team defense and individual defender projections are unavailable. Do not count them as zero.');
   }
   const playerIds = new Set(ordered.map((row) => row.playerId));
   if (playerIds.size !== 1) {
-    throw new Error('A player projection needs one resolved player identity.');
+    throw new ResearchDataError('A player projection needs one resolved player identity.');
   }
 
   if (new Set(ordered.map((row) => row.week)).size !== ordered.length) {
-    throw new Error('A projection cannot count duplicate player weeks.');
+    throw new ResearchDataError('A projection cannot count duplicate player weeks.');
   }
-  const scoring = inspectPlayerScoringSettings(input.scoringSettings);
+  const scoring = inspectPlayerScoringSettings(input.scoringSettings, latest.position);
   const scoredGames = ordered.map((row) => scorePlayerWeek(row, input.scoringSettings));
   const parameters = input.parameters ?? DEFAULT_PROJECTION_PARAMETERS;
   const base = forecastMean(scoredGames, input.priorMean ?? null, parameters);
@@ -186,7 +192,7 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
   if (input.kickoffKnown === false) limitations.push('The schedule has no verified kickoff time. Seb cannot confirm that a lineup change remains available.');
   if (input.currentProfileKnown === false) limitations.push('The current player profile has no verified active team. The estimate uses historical identity only.');
   if (input.gameStarted) limitations.push('The scheduled game has started. Do not change this player into the starting lineup.');
-  if (input.scheduled === false) limitations.push('No game exists for this team in the requested week. Do not start a player on a bye.');
+  if (input.scheduled === false) limitations.push('The source has no verified game for this team in the requested week. This is a historical baseline, not a weekly score. Do not include it in a matchup total.');
 
 
   return {
@@ -201,6 +207,8 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
     limitations,
     median: round(median),
     expectedPoints: round(median),
+    scoreScope: input.scheduled === false || input.currentProfileKnown === false ? 'historical-baseline'
+      : scoring.ignoredSettings.length > 0 || scoring.usedSettings.length === 0 ? 'partial-scoring' : 'weekly-estimate',
     interval: inactive ? { ...interval, lower: 0, upper: 0 } : interval,
     model: { version: PROJECTION_MODEL_VERSION, parameters: { ...parameters }, learningThroughWeek: input.learningThroughWeek ?? null, learningSeason: input.learningSeason ?? null, manualOverride: input.manualOverride ?? false },
     opponent: input.opponent ?? null,
@@ -214,7 +222,7 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
       ordered.length >= 3 &&
       scoring.usedSettings.length > 0 &&
       scoring.ignoredSettings.length === 0 &&
-      ['QB', 'RB', 'WR', 'TE'].includes(latest.position) &&
+      ['QB', 'RB', 'WR', 'TE', 'K'].includes(latest.position) &&
       input.scheduled !== false &&
       !input.gameStarted &&
       input.kickoffKnown !== false &&
@@ -231,6 +239,7 @@ export function scorePlayerWeek(
   settings: SleeperSettings,
 ): number {
   const points =
+    (row.position.toUpperCase() === 'K' ? scoreKicking(row, settings) : 0) +
     optionalScore(row.specialTeamsTouchdowns, settings, 'st_td') +
     optionalScore(row.fumbleRecoveryTouchdowns, settings, 'fum_rec_td') +
     optionalScore(row.fumbles, settings, 'fum') +
@@ -258,11 +267,11 @@ export function scorePlayerWeek(
     thresholdBonus(row.rushingYards, settings, 'bonus_rush_yd_200', 200) +
     thresholdBonus(row.receivingYards, settings, 'bonus_rec_yd_100', 100, 200) +
     thresholdBonus(row.receivingYards, settings, 'bonus_rec_yd_200', 200);
-  if (!Number.isFinite(round(points))) throw new Error('The league score must be finite. Check the source statistics and scoring settings.');
+  if (!Number.isFinite(round(points))) throw new ResearchDataError('The league score must be finite. Check the source statistics and scoring settings.');
   return round(points);
 }
 
-export function inspectPlayerScoringSettings(settings: SleeperSettings): {
+export function inspectPlayerScoringSettings(settings: SleeperSettings, position?: string): {
   ignoredSettings: string[];
   usedSettings: string[];
 } {
@@ -272,9 +281,9 @@ export function inspectPlayerScoringSettings(settings: SleeperSettings): {
     .map(([key]) => key)
     .sort();
   return {
-    usedSettings: active.filter((key) => SUPPORTED_SETTINGS.has(key)),
+    usedSettings: active.filter((key) => position?.toUpperCase() === 'K' ? KICKING_SETTINGS.has(key) : SUPPORTED_SETTINGS.has(key)),
     ignoredSettings: active.filter(
-      (key) => !SUPPORTED_SETTINGS.has(key) && !NON_PLAYER_SETTINGS.has(key),
+      (key) => !SUPPORTED_SETTINGS.has(key) && !NON_PLAYER_SETTINGS.has(key) && !KICKING_SETTINGS.has(key),
     ),
   };
 }
@@ -289,7 +298,11 @@ function matchupAdjustment(
   const selected = rows.filter((row) => row.position === position);
   if (selected.length === 0) return null;
   const byDefense = new Map<string, Map<string, number>>();
+  const seen = new Set<string>();
   for (const row of selected) {
+    const identity = `${row.season}:${row.week}:${row.playerId}`;
+    if (seen.has(identity)) throw new ResearchDataError('The opponent data contains duplicate player weeks.');
+    seen.add(identity);
     const games = byDefense.get(row.opponentTeam) ?? new Map<string, number>();
     games.set(row.gameId, (games.get(row.gameId) ?? 0) + scorePlayerWeek(row, settings));
     byDefense.set(row.opponentTeam, games);
@@ -382,14 +395,12 @@ function projectionLimitations(
   if ((input.projectionSeason ?? input.analysisSeason) > input.analysisSeason) limitations.push('The baseline comes from a prior season. Player roles and team strength can change.');
   if (games < 3) limitations.push('The projection has fewer than three completed games.');
   if (scoring.usedSettings.length === 0) {
-    limitations.push('The league has no supported offensive scoring settings.');
+    limitations.push(`The league has no supported ${position === 'K' ? 'kicking' : 'offensive'} scoring settings.`);
   }
   if (scoring.ignoredSettings.length > 0) {
     limitations.push(`The projection cannot calculate these active settings from nflverse weekly rows: ${scoring.ignoredSettings.join(', ')}.`);
   }
-  if (position === 'K') {
-    limitations.push('The nflverse weekly rows do not provide scoring-aware kicking components.');
-  }
+  if (position === 'K') limitations.push('The kicker estimate uses completed kicking results. Seb has not validated kicker-specific forecast accuracy.');
   if (!input.injuryStatus) {
     limitations.push('The Sleeper profile has no current injury status.');
   } else {
@@ -440,7 +451,7 @@ function projectionConfidence(input: {
 function setting(settings: SleeperSettings, key: string): number {
   const value = settings[key];
   if (value === null || value === undefined) return 0;
-  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`Scoring setting ${key} must be a finite number.`);
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new ResearchDataError(`Scoring setting ${key} must be a finite number.`);
   return value;
 }
 
@@ -448,7 +459,7 @@ function optionalScore(value: number | null | undefined, settings: SleeperSettin
   const weight = setting(settings, key);
   if (!weight) return 0;
   if (value === null || value === undefined || !Number.isFinite(value)) {
-    throw new Error(`The source lacks ${key} statistics required by this league. Do not treat missing values as zero.`);
+    throw new ResearchDataError(`The source lacks ${key} statistics required by this league. Do not treat missing values as zero.`);
   }
   return value * weight;
 }

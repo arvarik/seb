@@ -3,7 +3,7 @@ import { gzipSync } from 'node:zlib';
 
 import { MockLanguageModelV4 } from 'ai/test';
 
-import { createFantasyFootballAgent } from '../src/agent.js';
+import { MAX_AGENT_STEPS, createFantasyFootballAgent } from '../src/agent.js';
 import {
   createSessionState,
   formatSessionData,
@@ -318,8 +318,8 @@ describe('fantasy football agent harness', () => {
     );
   });
 
-  it('reserves the twelfth model step for the final text answer', async () => {
-    const toolSteps = Array.from({ length: 11 }, (_, index) => ({
+  it('reserves the final model step and keeps function definitions to enforce no tool calls', async () => {
+    const toolSteps = Array.from({ length: MAX_AGENT_STEPS - 1 }, (_, index) => ({
       content: [{
         type: 'tool-call' as const,
         toolCallId: `call-${index + 1}`,
@@ -352,9 +352,11 @@ describe('fantasy football agent harness', () => {
 
     expect(result.text).toBe('The current NFL week is 2.');
     expect(result.finishReason).toBe('stop');
-    expect(model.doGenerateCalls).toHaveLength(12);
-    expect(model.doGenerateCalls[11]?.tools).toBeUndefined();
-    expect(model.doGenerateCalls[11]?.toolChoice).toEqual({ type: 'none' });
+    expect(model.doGenerateCalls).toHaveLength(MAX_AGENT_STEPS);
+    expect(model.doGenerateCalls[MAX_AGENT_STEPS - 1]?.tools?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(model.doGenerateCalls[MAX_AGENT_STEPS - 1]?.prompt)).toContain('call-1');
+    expect(JSON.stringify(model.doGenerateCalls[MAX_AGENT_STEPS - 1]?.prompt)).toContain('research budget is complete');
+    expect(model.doGenerateCalls[MAX_AGENT_STEPS - 1]?.toolChoice).toEqual({ type: 'none' });
   });
 
   it('passes the agent abort signal into a source fetch', async () => {

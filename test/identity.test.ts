@@ -40,6 +40,7 @@ describe('TeamIdentityRegistry', () => {
   it('maps historic provider codes to the current franchise identity', () => {
     const registry = new TeamIdentityRegistry();
 
+    expect(registry.resolveSource('nflverse', 'LA')).toMatchObject({ status: 'resolved', identity: { code: 'LAR' } });
     expect(registry.resolveSource('nflverse', 'OAK')).toMatchObject({
       status: 'resolved',
       matchKind: 'source-id',

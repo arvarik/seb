@@ -267,7 +267,7 @@ export function createSleeperTools(client: SleeperClient) {
 
     predictMatchup: tool({
       description:
-        'Compare two fantasy rosters with a transparent estimate based only on prior Sleeper scores.',
+        'Compare two fantasy rosters using prior Sleeper scores. Requires at least two completed scores per roster. For Week 1 or current starter and news analysis, use projectPlayers instead.',
       inputSchema: z.object({
         leagueId: leagueIdSchema,
         rosterAId: z.number().int().positive(),

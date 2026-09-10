@@ -38,11 +38,11 @@ Each tool uses a Zod input schema.
 
 The schemas validate seasons, weeks, teams, limits, IDs, and other inputs.
 
-The agent uses at most 12 model and tool steps for one request.
+The agent uses at most 32 model steps for one request. Each step can request several tools.
 
 The agent runs AI SDK `pruneMessages` before each model request.
 
-This policy removes reasoning and old tool data from the active context.
+This policy removes old reasoning and tool data from earlier turns. It preserves the active turn, including provider signatures and all returned research.
 
 The interactive transport also limits model history to 24 recent messages.
 
@@ -50,7 +50,13 @@ It also limits retained context to 120,000 estimated characters.
 
 One submitted prompt can contain at most 32,000 characters.
 
-The last allowed step disables tools and asks the model for the final answer.
+The last allowed step asks the model for a final answer with function calling disabled.
+
+Seb keeps function definitions so Gemini sends its explicit `NONE` setting. Seb removes hosted tools from this step.
+
+The agent also switches to a final answer when its prepared messages reach 200,000 characters.
+
+The `projectPlayers` tool projects up to 40 names per call. It runs at most four player projections concurrently and returns missing projections individually.
 
 The active provider and tool set control the news instructions.
 

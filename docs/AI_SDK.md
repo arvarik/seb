@@ -143,11 +143,11 @@ seb ask --json "Compare these teams." | jq '.analysis.confidence.score'
 
 Seb calls AI SDK `pruneMessages` before each model request.
 
-The policy removes all reasoning data from the prior context.
+The policy preserves all messages and provider signatures in the active turn.
 
-The policy removes tool calls and tool results older than the last six messages.
+The policy removes reasoning from earlier turns. It removes tool data older than the last six history messages.
 
-The policy also removes empty messages.
+The policy also removes empty history messages.
 
 Recent user and assistant text remains available.
 

@@ -6,6 +6,20 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Preserve active-turn research and provider signatures across long tool conversations.
+- Raise the model-step limit to 32 and reserve a final answer with Gemini function calling explicitly disabled.
+- Add batch player projections with bounded concurrency and explicit missing-player results.
+- Calculate kicker projections from made, missed, and blocked kicks, distance ranges, and yardage rules.
+- Fix punctuation and suffix matching, recover from missing current-season statistics, and exclude current injuries and teams from historical forecasts.
+- Map nflverse Rams team codes consistently so schedules, opponents, and weather remain available.
+- Recognize defense names without searching unrelated players. Keep unsupported defense scores and special-teams rules explicit.
+- Mark partial scoring and historical baselines so batch results cannot claim complete weekly scores.
+- Reject duplicate opponent data and invalid comparison ranges. Explain invalid local learning data without exposing its contents.
+- Keep failed questions for natural retries without resending partial answers or approval state.
+- Allow editable drafts and one queued prompt while a response runs. Preserve drafts after failure or cancellation.
+- Collapse embedded and duplicate evidence sections into one line per answer. Keep full evidence in sources, copy, and exports.
+- Add space below the input and distinguish data limitations from model provider errors.
+
 ## [1.0.1] - 2026-09-08
 
 ### Added

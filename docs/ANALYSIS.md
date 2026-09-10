@@ -12,6 +12,7 @@ The language model explains these calculations. It does not invent the numerical
 | Compare two through six starters | `compareStartSit` | Expected points, legal slot checks, and approximate scoring probabilities |
 | Find waiver targets | `rankWaiverTargets` | League availability, production, roster need, demand, and budget constraints |
 | Compare a trade | `analyzeTradeImpact` | Best legal offensive lineup before and after the trade |
+| Project several starters | `projectPlayers` | Up to 40 names, league scoring, explicit missing projections |
 | Compare fantasy rosters | `predictMatchup` | Completed roster scores and a stated probability heuristic |
 | Estimate playoff qualification | `simulatePlayoffOdds` | Repeated simulations against the actual remaining fantasy schedule |
 | Review season learning | `inspectLearning` | Saved validation results and public player or team summaries |
@@ -54,6 +55,12 @@ It also supports volume scoring, reception premiums, fumbles, two-point conversi
 Known kicking and team-defense settings do not invalidate offensive projections.
 Unknown active settings remain explicit and block final player recommendations.
 
+Kicker projections calculate made and missed field goals, made and missed PATs, distance ranges, total field-goal yards, and yards over 30.
+The distance ranges include both the older 50-plus rule and the separate 50–59 and 60-plus rules.
+Blocked kicks count as misses. A distance rule requires a complete list of kick distances.
+Kicker projections use default parameters or an explicit manual override. They do not reuse parameters learned from offensive players.
+Seb does not claim validated kicker forecast accuracy.
+
 A nonnumeric or nonfinite scoring weight causes an error. A missing required scoring component also causes an error. Seb never substitutes zero for that missing component.
 The source cache uses a new player-statistics version to avoid reusing rows without the added fields.
 
@@ -62,18 +69,22 @@ For example, 400 passing yards awards the configured 400-yard bonus and removes 
 The same rule applies to rushing and receiving tiers. See [Sleeper's scoring rules](https://support.sleeper.com/en/articles/3998131-what-scoring-options-are-available).
 
 Seb rejects duplicate player-week records and ambiguous historical identities.
+Seb maps nflverse's `LA` source code to `LAR` before matching schedules, players, and opponents.
 It excludes postseason rows from regular-season projections.
 It limits training to completed weeks before the target week.
 An explicit historical cutoff also limits the available learning revision.
 
 Week 1 uses the previous season.
 Later weeks also fall back when the current season has no matching results.
+An unpublished current-season statistics file also triggers this fallback when the user did not select an explicit analysis window.
+Other source failures remain visible. Seb does not silently replace a requested season.
 Fewer than three observed games prevent a final starter recommendation.
 An explicit prior-season analysis remains available when the current sample is too small.
 
 A bye week, a started game, an unavailable player, or an invalid starter slot prevents a starter selection.
 A missing kickoff time or unverified current team also prevents a starter selection.
 Recorded weather from a completed target game cannot adjust its historical projection.
+Current injuries and later team assignments cannot adjust a past week or season.
 Comparisons across positions require an explicit slot, such as `FLEX` or `SUPER_FLEX`.
 Current identity, league scoring, player status, source freshness, and news checks still apply.
 News must cover every relevant player. A shared last name cannot satisfy both players' checks.
@@ -357,3 +368,20 @@ Doctor checks local overrides without a language-model call.
 A later model can add play-by-play expected opportunity, role changes, and correlated lineup simulations.
 Those additions need aligned historical inputs and the same chronological tests before automatic promotion.
 Large machine-learning models and causal player claims remain outside this implementation.
+
+## Missing projections
+
+The player model supports QB, RB, WR, TE, and K scoring. It does not project team defenses or individual defenders.
+
+Seb reports these positions as unavailable. It does not use zero as a replacement.
+
+A batch keeps successful player projections when another player lacks data. Cancellation stops the batch before it starts more players.
+
+Each projection includes `scoreScope`: `weekly-estimate`, `partial-scoring`, or `historical-baseline`.
+Unknown active scoring rules produce partial estimates. Missing schedules or current team identity produce historical baselines.
+The batch reports `complete: true` only when every result has a complete weekly estimate.
+Weekly data does not separate player special-teams forced fumbles and recoveries. The active `st_ff` and `st_fum_rec` rules remain explicit omissions.
+
+A matchup subtotal excludes missing projections. It does not represent a complete final score.
+
+The historical roster-score model needs at least two completed scores per roster. Week 1 analysis uses supported player projections from the prior season.

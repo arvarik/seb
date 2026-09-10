@@ -5,6 +5,12 @@ import { SourceTracker } from '../src/sources.js';
 import { SleeperApiError, SleeperClient } from '../src/sleeper/client.js';
 
 describe('SleeperClient', () => {
+  it.each(['AJ Brown Jr.', 'Brown, A.J.'])('finds a current profile from the normalized name %s', async (query) => {
+    const client = new SleeperClient({ database: false, fetch: async () => jsonResponse({
+      '1': { player_id: '1', full_name: 'A.J. Brown', position: 'WR', active: true },
+    }) });
+    expect((await client.findPlayers(query))[0]?.player_id).toBe('1');
+  });
   it('builds a league matchup request', async () => {
     let requestedUrl = '';
     const fetch: typeof globalThis.fetch = async (input) => {

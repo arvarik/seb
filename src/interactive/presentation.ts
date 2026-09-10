@@ -51,6 +51,7 @@ export function friendlyToolName(toolName: string): string {
     inspectSystemDocs: 'Inspect Seb architecture & design',
     predictMatchup: 'Estimate the matchup',
     projectPlayer: 'Build a scoring-aware projection',
+    projectPlayers: 'Project the selected players',
     rankWaiverTargets: 'Rank waiver and FAAB targets',
     analyzeTradeImpact: 'Compare trade impact',
     readNewsUrl: 'Read the supplied web page',

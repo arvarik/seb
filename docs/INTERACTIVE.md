@@ -64,6 +64,28 @@ Seb submits a complete action immediately.
 
 Seb places an action with a placeholder in the editor.
 
+## Drafts and failed requests
+
+Type the next prompt while Seb writes a response or runs tools.
+
+Use the usual cursor, deletion, paste, and multiline controls to edit the draft.
+
+Press Enter to queue one draft. Seb submits it after the current response completes.
+
+An edit cancels the queue. Press Enter again to queue the edited draft.
+
+If the response fails or you stop it, Seb keeps the draft for review. Press Enter to submit it.
+
+Escape stops the current request. Ctrl+C exits Seb. Page Up, Page Down, and the mouse wheel scroll the transcript.
+
+Seb keeps a failed question in the conversation. A follow-up such as “please try again” still refers to that question.
+
+Seb excludes incomplete answers and unfinished approvals from later model requests.
+
+Evidence occupies one collapsed line per answer, including evidence that the model embeds in its answer.
+
+Run `/sources` for the full source list. Copy and export retain the full evidence text.
+
 ## Search and completion commands
 
 Press `Ctrl+K` or type `/` to open the command palette.

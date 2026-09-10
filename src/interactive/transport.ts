@@ -23,6 +23,7 @@ import {
   buildFreeformRecommendationEvidence,
   enforceFreeformRecommendation,
   questionRequestsRecommendation,
+  isRetryPrompt,
   recommendationContextQuestion,
   type RecommendationToolResult,
 } from '../analysis/recommendation-eligibility.js';
@@ -268,7 +269,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           invocation.prompt,
           recommendationContextQuestion(
             invocation.prompt,
-            previousUserPrompt(options.messages),
+            previousUserPrompt(this.modelMessages(options.messages)),
           ),
           (error) => usageTelemetry?.closeUnfinished(error),
           (reason) => usageTelemetry?.abortUnfinished(reason),
@@ -291,7 +292,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         parsed.argumentText,
         recommendationContextQuestion(
           parsed.argumentText,
-          previousUserPrompt(options.messages),
+          previousUserPrompt(this.modelMessages(options.messages)),
         ),
         (error) => usageTelemetry?.closeUnfinished(error),
         (reason) => usageTelemetry?.abortUnfinished(reason),
@@ -318,7 +319,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       this.options.sources,
       this.uiState,
       text,
-      recommendationContextQuestion(text, previousUserPrompt(options.messages)),
+      recommendationContextQuestion(text, previousUserPrompt(this.modelMessages(options.messages))),
       (error) => usageTelemetry?.closeUnfinished(error),
       (reason) => usageTelemetry?.abortUnfinished(reason),
       approvalContinuation
@@ -1055,6 +1056,8 @@ export const SHORTCUT_HELP = `## Keyboard shortcuts
 - \`Ctrl+W\`: Delete the prior word.
 - \`Ctrl+U\`: Delete to the start.
 - \`Alt+Enter\`: Insert a new line.
+- Type during a reply to draft the next prompt. Press Enter to queue it.
+- Editing cancels the queue. A failed reply keeps the draft for review.
 - \`Up\` and \`Down\`: Read prompt history.
 - \`Ctrl+R\`: Search prompt history.
 - \`Page Up\` and \`Page Down\`: Scroll the transcript.
@@ -1131,6 +1134,7 @@ export function decorateResponseStream(
     addStreamSubject(confirmed.team, teamCandidates);
   }
   let bufferedText = '';
+  let hasAnswerText = false;
   let answerId = `answer-${crypto.randomUUID()}`;
   let consumerCancelRecorded = false;
   let streamFailed = false;
@@ -1157,6 +1161,7 @@ export function decorateResponseStream(
   const decorated = stream.pipeThrough(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
       transform(chunk, controller) {
+        if (chunk.type === 'text-delta' && chunk.delta.trim()) hasAnswerText = true;
         if (chunk.type === 'abort') {
           streamFailed = true;
           const errorText = 'The request stopped before the model completed the answer.';
@@ -1231,10 +1236,17 @@ export function decorateResponseStream(
             pendingApprovals.size > 0;
           if (!streamFailed && chunk.finishReason !== 'stop' && !awaitsApproval) {
             streamFailed = true;
+            recordStreamError(new Error(incompleteFinishMessage(chunk.finishReason)));
             controller.enqueue({
               type: 'error',
               errorText: incompleteFinishMessage(chunk.finishReason),
             });
+          }
+          if (!streamFailed && chunk.finishReason === 'stop' && !hasAnswerText) {
+            streamFailed = true;
+            const errorText = 'The model returned no answer. Your question is still in this conversation. Use /retry to try again.';
+            recordStreamError(new Error(errorText));
+            controller.enqueue({ type: 'error', errorText });
           }
           const completed = !streamFailed && chunk.finishReason === 'stop';
           const evidence = completed ? sources.snapshot(answerId) : undefined;
@@ -1398,7 +1410,9 @@ function previousUserPrompt(messages: readonly UIMessage[]): string | undefined 
       skippedCurrent = true;
       continue;
     }
-    return messageText(message).trim() || undefined;
+    const text = messageText(message).trim();
+    if (isRetryPrompt(text)) continue;
+    return text || undefined;
   }
   return undefined;
 }
@@ -1709,6 +1723,9 @@ function safeModelDisplayValue(value: string, label: string): string {
 }
 
 function incompleteFinishMessage(finishReason: string | undefined): string {
+  if (finishReason === 'tool-calls') {
+    return 'The request reached its research limit before the final answer. Your question is still in this conversation. Use /retry to try again.';
+  }
   if (finishReason === 'length') {
     return 'The model reached the output limit before it completed the answer. Ask a narrower question, then retry.';
   }

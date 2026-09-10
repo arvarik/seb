@@ -280,7 +280,10 @@ Compatible model and discovery requests reject redirects.
 
 Interactive configuration requires approval before it sends data to a remote compatible origin.
 
-The current-directory `.env` loader cannot select a compatible endpoint or redirect the configuration directory.
+CLI and connector startup load saved user settings before tracing and model initialization.
+They do not load a current-directory `.env` automatically.
+The registry in `src/setup/configuration-registry.ts` defines supported persistent settings and validates imports.
+Explicit imports cannot select a new compatible endpoint or redirect the configuration directory.
 
 Connector processes use environment provider settings only. They do not read the local provider files.
 

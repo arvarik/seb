@@ -166,7 +166,7 @@ Seb works without a Judgment account. Tracing stays off unless you explicitly en
 When tracing is off, Seb does not load the Judgment SDK or send data to Judgment.
 Adding credentials alone does not enable tracing.
 
-To enable tracing, add these values to your local `.env` file or service environment:
+To enable tracing, add these values to a dotenv file for explicit import, or to your service environment:
 
 ```dotenv
 SEB_JUDGMENT_TRACING=true
@@ -175,6 +175,12 @@ JUDGMENT_ORG_ID=<your Judgment organization ID>
 ```
 
 Git ignores `.env` and its variants, such as `.env.local`. The repository tracks only `.env.example`.
+
+Import the file once with `seb configure --import-env /absolute/path/to/.env`.
+Review the setting names and confirm the import. Seb masks secrets in the preview.
+Saved settings apply from any directory. Seb does not load a current-directory `.env` automatically.
+Use `seb configure` to edit Gemini credentials, models, Judgment settings, and other supported settings.
+See [Persistent configuration](docs/CONFIGURATION.md) for storage, security, and override rules.
 Use your own organization ID. Seb sends traces to the `seb` project in that organization.
 Seb loads the environment before it initializes tracing once per process.
 Missing credentials or initialization failures produce a warning, and Seb continues without tracing.

@@ -79,10 +79,9 @@ import {
   formatModelErrorForUser,
   isModelCapacityError,
 } from './model-capacity-error.js';
-import {
-  formatIgnoredLocalEnvironment,
-  loadSafeLocalEnvironment,
-} from './local-environment.js';
+import { loadSafeLocalEnvironment } from './local-environment.js';
+import { loadUserEnvironment, UserConfigurationStore } from './setup/user-configuration.js';
+import { editUserConfiguration, importUserEnvironment } from './setup/configuration-editor.js';
 import { NflverseClient } from './nflverse/client.js';
 import { NewsClient } from './news/client.js';
 import { SleeperClient } from './sleeper/client.js';
@@ -299,7 +298,7 @@ export async function runCli(
       await runSetupCommand(streams, environment, command.username);
       return 0;
     case 'configure':
-      await runConfigureCommand(streams, environment);
+      await runConfigureCommand(streams, environment, command.importEnv);
       return 0;
     case 'doctor': {
       let modelProvider: ResolvedModelProvider | undefined;
@@ -605,6 +604,7 @@ async function runSetupCommand(
 async function runConfigureCommand(
   streams: CliStreams,
   environment: NodeJS.ProcessEnv,
+  importEnv?: string,
 ): Promise<void> {
   if (streams.stdin.isTTY !== true || streams.stdout.isTTY !== true) {
     throw new CliUsageError(
@@ -617,6 +617,17 @@ async function runConfigureCommand(
     streams.stdin as NodeJS.ReadStream,
     streams.stdout as NodeJS.WriteStream,
   );
+  const options = { prompt, environment, store: new UserConfigurationStore(environment), write: (text: string) => { streams.stdout.write(text); } };
+  const action = importEnv ? 'import' : await prompt.select('Configure Seb', [
+    { label: 'Model provider setup (verify a key and select models)', value: 'model' },
+    { label: 'Saved settings and credentials', value: 'settings' },
+    { label: 'Import a dotenv file', value: 'import' },
+  ]);
+  if (action === 'settings') return editUserConfiguration(options);
+  if (action === 'import') {
+    const path = importEnv ?? await prompt.text('Path to the dotenv file', { required: true });
+    return importUserEnvironment(path, options);
+  }
   const result = await runModelConfigurationWizard({
     credentialStore,
     environment,
@@ -1300,11 +1311,10 @@ export async function launchCli(
   installBrokenPipeExit(process.stdout);
   installBrokenPipeExit(process.stderr);
   try {
-    const environmentWarning = formatIgnoredLocalEnvironment(
-      loadLocalEnvironment(),
-    );
-    if (environmentWarning) process.stderr.write(environmentWarning);
     const command = parseCliArguments(arguments_);
+    if (!['configure', 'help', 'version', 'completion'].includes(command.name)) {
+      await loadUserEnvironment();
+    }
     if (command.name === 'ask' || command.name === 'chat') {
       await configureJudgmentTracing();
     }

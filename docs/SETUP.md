@@ -47,7 +47,7 @@ Run the private model configuration flow.
 npm run seb -- configure
 ```
 
-The flow masks typed keys and tests the selected provider for 30 seconds.
+Select model provider setup to enter a key and test the selected provider for 30 seconds.
 
 Seb saves the configuration only after the test succeeds.
 
@@ -55,11 +55,15 @@ The command requires an interactive terminal because it masks private keys.
 
 Run the command again to add another provider or change a saved model.
 
-You can use environment variables instead. This `.env` example selects Google.
+You can import a dotenv file instead. This example adds a Google key.
 
 ```dotenv
 GOOGLE_GENERATIVE_AI_API_KEY=your-key
 ```
+
+Run `seb configure --import-env /absolute/path/to/.env` and confirm the import.
+Imports save credentials without contacting the provider.
+Saved settings apply from any directory. See [Persistent configuration](CONFIGURATION.md).
 
 This shell example selects a local OpenAI-compatible endpoint without a key.
 
@@ -69,7 +73,7 @@ export OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
 export OPENAI_COMPATIBLE_MODEL=local-model
 ```
 
-Seb ignores custom endpoint selection and configuration path changes from a current-directory `.env` file.
+Seb does not load a current-directory `.env` file automatically.
 
 This rule prevents an untrusted project file from selecting a model endpoint or a private storage path.
 
@@ -365,7 +369,7 @@ Choose one platform guide.
 - [Discord](connectors/DISCORD.md)
 - [Telegram](connectors/TELEGRAM.md)
 
-Add the platform values to `.env`. Then start the connector service.
+Add the platform values to `.env` and import it with `seb configure --import-env .env`. Then start the connector service.
 
 ```bash
 npm run connectors
@@ -415,7 +419,7 @@ Set `SEB_CONNECTORS` explicitly in production. This setting prevents an unused c
 
 Environment values override saved credentials and saved model settings.
 
-The automatic current-directory `.env` loader ignores custom endpoints, provider selection, private storage paths, and DevTools activation.
+The explicit dotenv importer skips custom endpoints and private storage paths. Use model provider setup or a shell environment for these values.
 
 An explicit CLI or slash model override uses that model as its own fallback.
 

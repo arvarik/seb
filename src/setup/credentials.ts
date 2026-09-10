@@ -14,6 +14,7 @@ import { dirname, resolve } from 'node:path';
 import { validateOpenAICompatibleBaseURL } from '../ai/model-provider.js';
 import { readBoundedUtf8File } from './bounded-file.js';
 import { resolveSetupProfilePath } from './profile.js';
+import { validateStoredEnvironment } from './configuration-registry.js';
 
 export const SETUP_CREDENTIALS_SCHEMA_VERSION = 1;
 export const SETUP_CREDENTIAL_PROVIDER_IDS = [
@@ -34,6 +35,7 @@ const TOP_LEVEL_FIELDS = new Set([
   'schemaVersion',
   'keys',
   'updatedAt',
+  'environment',
 ]);
 const PROVIDER_IDS = new Set<string>(SETUP_CREDENTIAL_PROVIDER_IDS);
 
@@ -45,6 +47,7 @@ export type SetupCredentialKeys = Partial<
 >;
 
 export interface SebSetupCredentials {
+  environment?: Record<string, string>;
   compatibleBaseURL?: string;
   schemaVersion: typeof SETUP_CREDENTIALS_SCHEMA_VERSION;
   keys: SetupCredentialKeys;
@@ -202,6 +205,7 @@ export function validateSetupCredentials(value: unknown): SebSetupCredentials {
     ...(compatibleBaseURL === undefined ? {} : { compatibleBaseURL }),
     schemaVersion: SETUP_CREDENTIALS_SCHEMA_VERSION,
     keys,
+    ...(value.environment === undefined ? {} : { environment: validateStoredEnvironment(value.environment, true) }),
     updatedAt: value.updatedAt,
   };
 }

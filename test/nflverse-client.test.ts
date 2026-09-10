@@ -16,6 +16,34 @@ const statsCsv = `player_id,player_display_name,position,season,week,season_type
 `;
 
 describe('NflverseClient', () => {
+  it.each(['LA', 'LAR'])('maps Rams source codes consistently across schedule and player data: %s', async (team) => {
+    const client = new NflverseClient({ database: false, fetch: async (url) => csvResponse(String(url).includes('schedules')
+      ? scheduleCsv.replaceAll('BUF', 'LA') : statsCsv.replaceAll('BUF', 'LA')) });
+    expect((await client.getSchedule({ season: 2026, week: 1, team }))[0]?.awayTeam).toBe('LAR');
+    expect((await client.getPlayerWeeklyStats({ season: 2025, team }))[0]?.team).toBe('LAR');
+    const opponent = new NflverseClient({ database: false, fetch: async () => csvResponse(statsCsv.replaceAll('BAL', 'LA')) });
+    expect((await opponent.getPlayerWeeklyStats({ season: 2025 }))[0]?.opponentTeam).toBe('LAR');
+  });
+  it.each(['AJ Brown', 'A.J. Brown Jr.', 'Brown, A.J.'])('matches punctuation and suffix variants: %s', async (playerName) => {
+    const client = new NflverseClient({ database: false, fetch: async () => csvResponse(statsCsv.replace('Josh Allen', 'A.J. Brown')) });
+    expect((await client.getPlayerWeeklyStats({ season: 2025, playerName }))[0]?.playerId).toBe('00-1');
+  });
+
+  it('preserves kicking components and includes blocked kicks in missed distances', async () => {
+    const extended = statsCsv.trim().split('\n').map((line, index) => line + (index === 0
+      ? ',fg_made,fg_att,pat_made,pat_att,fg_made_list,fg_missed_list,fg_missed,fg_blocked_list,fg_blocked'
+      : ',2,4,3,4,25;51,40,1,35,1')).join('\n');
+    const client = new NflverseClient({ database: false, fetch: async () => csvResponse(extended) });
+    expect((await client.getPlayerWeeklyStats({ season: 2025 }))[0]?.kicking).toEqual({
+      fieldGoalsMade: 2, fieldGoalsAttempted: 4, extraPointsMade: 3, extraPointsAttempted: 4,
+      madeDistances: [25, 51], missedDistances: [40, 35],
+    });
+    const missing = new NflverseClient({ database: false, fetch: async () => csvResponse(statsCsv) });
+    expect((await missing.getPlayerWeeklyStats({ season: 2025 }))[0]?.kicking?.madeDistances).toBeNull();
+    const incomplete = new NflverseClient({ database: false, fetch: async () => csvResponse(extended.replaceAll('25;51', '25')) });
+    expect((await incomplete.getPlayerWeeklyStats({ season: 2025 }))[0]?.kicking?.madeDistances).toBeNull();
+  });
+
   it('loads and filters the compressed nflverse schedule', async () => {
     let calls = 0;
     const client = new NflverseClient({

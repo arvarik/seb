@@ -14,6 +14,11 @@ import type { FantasyAnalysis } from '../src/analysis/output.js';
 import type { DataSourceRecord } from '../src/sources.js';
 
 describe('recommendation eligibility', () => {
+  it.each(['please try again', 'Retry.', 'try that again please'])('keeps recommendation checks for %s', (retry) => {
+    expect(recommendationContextQuestion(retry, 'Should I start Aaron Smith?')).toBe('Should I start Aaron Smith?');
+    expect(recommendationContextQuestion(retry, 'What is the weather?')).toBe('What is the weather?');
+    expect(recommendationContextQuestion(retry)).toBe(retry);
+  });
   it('detects action requests without classifying a factual lookup', () => {
     expect(questionRequestsRecommendation('Should I start Example Player?')).toBe(true);
     expect(questionRequestsRecommendation('Rank my waiver targets.')).toBe(true);
@@ -533,6 +538,18 @@ describe('comparison evidence for every player', () => {
   });
   it('preserves a failed comparison slot check', () => {
     expect(build('Aaron Smith and Brian Smith are healthy.', { ...comparison, output: { ...comparison.output, recommendationEligible: false } }).projection).toBe('ineligible');
+  });
+  it.each(['complete', 'missing', 'duplicate', 'unavailable'] as const)('validates %s batch projection evidence', (state) => {
+    const results = projections.map((projection) => ({ playerName: projection.player.name, status: 'projected', projection }));
+    if (state === 'missing') results.pop();
+    if (state === 'duplicate') results[1] = results[0]!;
+    if (state === 'unavailable') results[1]!.status = 'unavailable';
+    const evidence = buildRecommendationEvidence({ analysis: exampleAnalysis(),
+      question: 'Should I start Aaron Smith or Brian Smith in league 123456?', sources: [directSource(), webSource()],
+      toolResults: [{ toolName: 'projectPlayers', input: comparison.input, output: { results } },
+        { toolName: 'searchCurrentNews', output: { result: 'Aaron Smith and Brian Smith are healthy.' } }] });
+    expect(evidence.projection).toBe(state === 'complete' ? 'eligible' : 'ineligible');
+    if (state === 'complete') expect(evidence.leagueScoring).toBe('present');
   });
 });
 

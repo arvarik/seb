@@ -60,7 +60,7 @@ The projection needs at least three completed games and at least one supported a
 
 Every active player scoring rule must have a supported nflverse calculation.
 
-The player must also be available and cannot be a kicker.
+The player must also be available and have a supported position and complete scoring data.
 
 Seb lists the missing requirement when the final gate blocks an action.
 

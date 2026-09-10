@@ -1,3 +1,4 @@
+import { ResearchDataError } from '../data/research-error.js';
 import type { SleeperNflState } from '../sleeper/types.js';
 export function resolveCompletedAnalysisWindow(
   leagueSeasonText: string, state: SleeperNflState,
@@ -13,7 +14,7 @@ export function resolveCompletedAnalysisWindow(
   const throughWeek = request.throughWeek ?? maximumWeek;
   if (!Number.isInteger(analysisSeason) || analysisSeason < 1999 || analysisSeason > currentSeason ||
     !Number.isInteger(throughWeek) || throughWeek < 1 || throughWeek > maximumWeek) {
-    throw new Error('Analysis must use completed regular-season weeks. Choose a prior season when no current week is complete.');
+    throw new ResearchDataError('Analysis must use completed regular-season weeks. Choose a prior season when no current week is complete.');
   }
   return { analysisSeason, throughWeek };
 }

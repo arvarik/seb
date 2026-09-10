@@ -12,6 +12,129 @@ import { InteractiveUiState } from '../src/interactive/ui-state.js';
 import { SourceTracker } from '../src/sources.js';
 
 describe('SebTerminalRenderer prompt input', () => {
+  it.each(['success', 'error', 'cancel'] as const)('keeps an editable draft after %s', async (outcome) => {
+    const terminal = createTerminal();
+    const history = new MemoryPromptHistory();
+    const renderer = createRenderer(terminal, history);
+    let controller!: ReadableStreamDefaultController<UIMessageChunk>;
+    const running = renderer.renderStream({
+      uiMessageStream: new ReadableStream({ start(value) { controller = value; } }),
+    });
+    terminal.input.type('Next questioX\x7fn\x1b[D!\x1b[C');
+    const frame = () => stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    await expect.poll(frame).toContain('Next questio!n');
+    expect(history.list()).toHaveLength(0);
+    if (outcome === 'cancel') terminal.input.type('\x1b');
+    else {
+      if (outcome === 'error') controller.enqueue({ type: 'error', errorText: 'Request failed' });
+      else {
+        controller.enqueue({ type: 'text-start', id: 'answer' });
+        controller.enqueue({ type: 'text-delta', id: 'answer', delta: 'Answer.' });
+        controller.enqueue({ type: 'text-end', id: 'answer' });
+        controller.enqueue({ type: 'finish', finishReason: 'stop' });
+      }
+      controller.close();
+    }
+    await running;
+    const prompt = renderer.readPrompt();
+    expect(frame()).toContain('Next questio!n');
+    terminal.input.type('\r');
+    await expect(prompt).resolves.toBe('Next questio!n');
+    expect(history.list()).toEqual(['Next questio!n']);
+    renderer.close();
+  });
+
+  it('queues one prompt after success and requires Enter after a draft edit', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    let controller!: ReadableStreamDefaultController<UIMessageChunk>;
+    const running = renderer.renderStream({ uiMessageStream: new ReadableStream({ start(value) { controller = value; } }) });
+    terminal.input.type('Next question\r');
+    const frame = () => stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    await expect.poll(frame).toContain('Queued');
+    terminal.input.type(' please');
+    await expect.poll(frame).toContain('Draft · Enter queues');
+    terminal.input.type('\r\r');
+    controller.enqueue({ type: 'text-start', id: 'answer' });
+    controller.enqueue({ type: 'text-delta', id: 'answer', delta: 'Answer.' });
+    controller.enqueue({ type: 'text-end', id: 'answer' });
+    controller.enqueue({ type: 'finish', finishReason: 'stop' });
+    controller.close();
+    await running;
+    await expect(renderer.readPrompt()).resolves.toBe('Next question please');
+    const next = renderer.readPrompt();
+    terminal.input.type('Third question\r');
+    await expect(next).resolves.toBe('Third question');
+    renderer.close();
+  });
+
+  it('keeps a queued prompt for review after failure', async () => {
+    const terminal = createTerminal();
+    const renderer = createRenderer(terminal);
+    let controller!: ReadableStreamDefaultController<UIMessageChunk>;
+    const running = renderer.renderStream({ uiMessageStream: new ReadableStream({ start(value) { controller = value; } }) });
+    terminal.input.type('Follow-up\r');
+    controller.enqueue({ type: 'error', errorText: 'Request failed' });
+    controller.close();
+    await running;
+    let submitted = false;
+    const prompt = renderer.readPrompt().then((value) => { submitted = true; return value; });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(submitted).toBe(false);
+    terminal.input.type('\r');
+    await expect(prompt).resolves.toBe('Follow-up');
+    renderer.close();
+  });
+
+  it.each([40, 80, 120])('leaves one blank row below a multiline draft at %i columns', async (columns) => {
+    const terminal = createTerminal();
+    terminal.output.columns = columns;
+    terminal.output.rows = 16;
+    const renderer = createRenderer(terminal);
+    const prompt = renderer.readPrompt();
+    terminal.input.type('\x1b[200~Line one\nLine two\x1b[201~');
+    const frame = () => stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    await expect.poll(frame).toContain('Line two');
+    const lines = frame().split('\r\n');
+    expect(lines).toHaveLength(16);
+    expect(lines.at(-2)?.trim()).toBe('');
+    expect(lines.every((line) => visibleLength(line) <= columns)).toBe(true);
+    terminal.input.type('\r');
+    await expect(prompt).resolves.toBe('Line one\nLine two');
+    renderer.close();
+  });
+
+  it.each(['## Evidence', '━━ EVIDENCE', '**Evidence**', 'Sources:', 'EVIDENCE\n--------'])('collapses embedded %s and duplicate appendices', async (heading) => {
+    const terminal = createTerminal();
+    terminal.output.rows = 50;
+    const uiState = new InteractiveUiState();
+    const renderer = createRenderer(terminal, new MemoryPromptHistory(), uiState);
+    let controller!: ReadableStreamDefaultController<UIMessageChunk>;
+    const running = renderer.renderStream({ uiMessageStream: new ReadableStream({ start(value) { controller = value; } }) });
+    controller.enqueue({ type: 'start', messageId: 'embedded-evidence' });
+    controller.enqueue({ type: 'text-start', id: 'answer' });
+    const text = `## Current News\n\n\`\`\`yaml\n• Josh Allen is healthy.\n\`\`\`\n\n${heading}\n\`\`\`markdown\n1. PRIVATE DETAIL · LIVE · retrieved now\n\`\`\`\n\n## Outlook\nThe forecast remains uncertain.`;
+    for (const line of text.split(/(?<=\n)/u)) {
+      controller.enqueue({ type: 'text-delta', id: 'answer', delta: line });
+    }
+    controller.enqueue({ type: 'text-end', id: 'answer' });
+    controller.enqueue({ type: 'text-start', id: 'sources' });
+    controller.enqueue({ type: 'text-delta', id: 'sources', delta: '## Evidence\n1. Generated source details' });
+    controller.enqueue({ type: 'text-end', id: 'sources' });
+    controller.enqueue({ type: 'finish', finishReason: 'stop' });
+    controller.close();
+    await running;
+    const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame).toContain('Josh Allen is healthy.');
+    expect(frame).toContain('The forecast remains uncertain.');
+    expect(frame).not.toContain('PRIVATE DETAIL');
+    expect(frame).not.toContain('Generated source details');
+    expect(frame.match(/Evidence · \/sources for details/gu)).toHaveLength(1);
+    expect(uiState.latestAnswer).toContain('PRIVATE DETAIL');
+    expect(uiState.latestAnswer).toContain('Generated source details');
+    renderer.close();
+  });
+
   it('shows reasoning and keeps the writing status through timer updates', async () => {
     const terminal = createTerminal();
     const uiState = new InteractiveUiState();
@@ -124,14 +247,14 @@ describe('SebTerminalRenderer prompt input', () => {
         },
       }),
     });
-    await expect.poll(() => terminal.output.text()).toContain('Response in progress');
+    await expect.poll(() => terminal.output.text()).toContain('Type your next prompt');
     terminal.input.type('\x1b');
     await rendered;
     const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
     expect(frame).toContain('stopped');
     expect(frame).toContain('This response is incomplete');
     expect(frame).not.toContain('Working');
-    expect(frame).not.toContain('Response in progress');
+    expect(frame).not.toContain('Type your next prompt');
     renderer.close();
   });
 

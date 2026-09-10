@@ -1148,7 +1148,7 @@ describe('SebInteractiveTransport', () => {
     expect(alias).toContain('Source 1: [Test source](https://example.test/data)');
   });
 
-  it('withholds an unsupported freeform decision before display', async () => {
+  it.each([false, true])('withholds unsupported decisions, including repeated retries (retry=%s)', async (retry) => {
     const model = new MockLanguageModelV4({
       doStream: async () => ({
         stream: simulateReadableStream({
@@ -1182,7 +1182,11 @@ describe('SebInteractiveTransport', () => {
       weather: clients.weatherClient,
     });
 
-    const output = await sendCommand(transport, 'Should I start Example Player?', 'message-1');
+    const output = retry ? await sendConversation(transport, [
+      { id: 'message-1', role: 'user', parts: [{ type: 'text', text: 'Should I start Example Player?' }] },
+      { id: 'message-2', role: 'user', parts: [{ type: 'text', text: 'try again' }] },
+      { id: 'message-3', role: 'user', parts: [{ type: 'text', text: 'please try again' }] },
+    ]) : await sendCommand(transport, 'Should I start Example Player?', 'message-1');
 
     expect(output).toContain('Decision unavailable');
     expect(output).not.toContain('Start Example Player with high confidence');
@@ -1416,7 +1420,29 @@ describe('SebInteractiveTransport', () => {
     expect(session.team).toBeNull();
   });
 
-  it('updates the player after one successful streamed tool result', async () => {
+  it.each(['stop', 'tool-calls'] as const)('rejects an empty %s response and keeps trusted state', async (finishReason) => {
+    const session = createSessionState();
+    session.player = 'Derrick Henry';
+    const uiState = new InteractiveUiState();
+    uiState.latestAnswer = 'Prior complete answer';
+    const errors: unknown[] = [];
+    const stream = decorateResponseStream(new ReadableStream({ start(controller) {
+      controller.enqueue({ type: 'start', messageId: 'empty-answer' });
+      controller.enqueue({ type: 'finish', finishReason });
+      controller.close();
+    } }), session, new SourceTracker(), uiState, 'What is the weather?', undefined,
+    (error) => errors.push(error));
+    const chunks: UIMessageChunk[] = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    expect(chunks).toContainEqual({ type: 'error', errorText: expect.stringContaining(
+      finishReason === 'stop' ? 'returned no answer' : 'research limit') });
+    expect(errors).toHaveLength(1);
+    expect(uiState.latestAnswer).toBe('Prior complete answer');
+    expect(uiState.latestEvidence()).toBeNull();
+    expect(session.player).toBe('Derrick Henry');
+  });
+
+  it('updates the player after a successful tool result and complete answer', async () => {
     const session = createSessionState();
     const sourceStream = new ReadableStream<UIMessageChunk>({
       start(controller) {
@@ -1432,6 +1458,9 @@ describe('SebInteractiveTransport', () => {
           toolCallId: 'henry-call',
           output: { stats: [{ playerId: 'henry-1' }] },
         });
+        controller.enqueue({ type: 'text-start', id: 'answer' });
+        controller.enqueue({ type: 'text-delta', id: 'answer', delta: 'Derrick Henry statistics.' });
+        controller.enqueue({ type: 'text-end', id: 'answer' });
         controller.enqueue({ type: 'finish', finishReason: 'stop' });
         controller.close();
       },

@@ -25,6 +25,14 @@ export interface NflverseGame {
 }
 
 export interface NflversePlayerWeek {
+  kicking?: {
+    fieldGoalsMade: number | null;
+    fieldGoalsAttempted: number | null;
+    extraPointsMade: number | null;
+    extraPointsAttempted: number | null;
+    madeDistances: number[] | null;
+    missedDistances: number[] | null;
+  } | undefined;
   specialTeamsTouchdowns?: number | null | undefined;
   fumbleRecoveryTouchdowns?: number | null | undefined;
 

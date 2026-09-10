@@ -20,6 +20,7 @@ import {
   parseInteractiveCommandInput,
 } from './commands.js';
 import { PromptEditor, TerminalKeyParser, type TerminalKey } from './editor.js';
+import { splitEvidenceText } from './evidence.js';
 import type { PromptHistory } from './history.js';
 import {
   formatElapsed,
@@ -115,6 +116,7 @@ interface Section {
   completedTool?: string;
   durationMs?: number;
   evidenceCount?: number;
+  evidenceGroup?: string;
 }
 
 interface BodyRow {
@@ -209,6 +211,7 @@ export class SebTerminalRenderer {
   private paintTimer: ReturnType<typeof setTimeout> | undefined;
   private paintedBodyHeight = 3;
   private pendingPromptDraft: string | undefined;
+  private queuedPrompt = false;
   private scrollOffset = 0;
   private screenSelection: ScreenSelection | undefined;
   private selectionMode = false;
@@ -243,7 +246,7 @@ export class SebTerminalRenderer {
     this.start();
     this.status = this.options.uiState.notification || 'Ready';
     this.options.uiState.notification = '';
-    this.editor.set(this.pendingPromptDraft ?? '');
+    if (this.pendingPromptDraft !== undefined) this.editor.set(this.pendingPromptDraft);
     this.pendingPromptDraft = undefined;
     this.menuDismissed = false;
     this.historyIndex = -1;
@@ -257,6 +260,10 @@ export class SebTerminalRenderer {
         });
       };
       this.attachInput();
+      if (this.queuedPrompt) {
+        this.queuedPrompt = false;
+        void this.submitPrompt(resolve).catch(reject);
+      }
       if (options?.title) this.paint();
     });
   }
@@ -334,6 +341,7 @@ export class SebTerminalRenderer {
         });
       }
       this.activeToolIds.clear();
+      if (this.interrupted || streamFailed) this.queuedPrompt = false;
       this.status = this.interrupted
         ? 'Request stopped'
         : streamFailed
@@ -841,6 +849,30 @@ export class SebTerminalRenderer {
       this.scroll(key.type === 'scroll-up' ? MOUSE_WHEEL_LINES : -MOUSE_WHEEL_LINES);
     } else if (key.type === 'ctrl-l') {
       this.paint(true);
+    } else {
+      const before = this.editor.text();
+      switch (key.type) {
+        case 'character': this.editor.insert(key.value); break;
+        case 'paste': this.editor.insert(sanitizeTerminalText(key.value.replace(/\r\n?/g, '\n'))); break;
+        case 'backspace': this.editor.backspace(); break;
+        case 'delete': this.editor.deleteForward(); break;
+        case 'left': this.editor.moveLeft(); break;
+        case 'right': this.editor.moveRight(); break;
+        case 'word-left': this.editor.moveWordLeft(); break;
+        case 'word-right': this.editor.moveWordRight(); break;
+        case 'home':
+        case 'ctrl-a': this.editor.moveHome(); break;
+        case 'end':
+        case 'ctrl-e': this.editor.moveEnd(); break;
+        case 'ctrl-u': this.editor.deleteToStart(); break;
+        case 'ctrl-w': this.editor.deleteWordBackward(); break;
+        case 'newline': this.editor.insert('\n'); break;
+        case 'enter': this.queuedPrompt = Boolean(this.editor.text().trim()); break;
+        default: return;
+      }
+      // Editing a queued draft requires Enter again before it can run.
+      if (this.editor.text() !== before) this.queuedPrompt = false;
+      this.paint();
     }
   }
 
@@ -853,19 +885,18 @@ export class SebTerminalRenderer {
     for (const [index, part] of message.parts.entries()) {
       const id = `${message.id}:${index}`;
       if (part.type === 'text' && part.text.trim()) {
-        if (/^(?:##\s+Evidence\s*\n|Web sources:)/u.test(part.text.trimStart())) {
-          active.add(id);
-          const snapshot = this.options.uiState.evidenceForAnswer(message.id);
+        const snapshot = this.options.uiState.evidenceForAnswer(message.id);
+        for (const [sectionIndex, section] of splitEvidenceText(part.text).entries()) {
+          const sectionId = `${id}:${sectionIndex}`;
+          active.add(sectionId);
           this.upsert({
-            content: part.text,
-            id,
-            kind: 'evidence',
-            title: 'Evidence',
+            content: section.content,
+            id: sectionId,
+            kind: section.evidence ? 'evidence' : 'assistant',
+            title: section.evidence ? 'Evidence' : 'Seb',
+            ...(section.evidence ? { evidenceGroup: message.id } : {}),
             ...(snapshot ? { evidenceCount: snapshot.sources.length } : {}),
           });
-        } else {
-          active.add(id);
-          this.upsert({ content: part.text, id, kind: 'assistant', title: 'Seb' });
         }
       } else if (part.type === 'reasoning' && part.text.trim()) {
         active.add(id);
@@ -1549,9 +1580,12 @@ export class SebTerminalRenderer {
       return this.home(width).map((text) => ({ text }));
     }
     const rows: BodyRow[] = [];
+    const evidenceGroups = new Set<string>();
     for (let index = 0; index < this.sections.length; index += 1) {
       const section = this.sections[index]!;
       if (section.kind === 'evidence') {
+        if (section.evidenceGroup && evidenceGroups.has(section.evidenceGroup)) continue;
+        if (section.evidenceGroup) evidenceGroups.add(section.evidenceGroup);
         const count = section.evidenceCount;
         const summary = count === undefined ? 'Evidence · /sources for details'
           : `Evidence: ${count} source${count === 1 ? '' : 's'} · /sources`;
@@ -1590,7 +1624,7 @@ export class SebTerminalRenderer {
       const lines = [paint(this.theme, color, `${section.kind === 'assistant' ? symbol(this.theme, 'assistant') : symbol(this.theme, 'bullet')} ${sanitizeTerminalText(section.title)}`)];
       const rendered = section.kind === 'assistant'
         ? renderAnalysisText(
-          section.content,
+          section.content.trimEnd(),
           this.theme,
           Math.max(20, width - 2),
         )
@@ -1611,7 +1645,7 @@ export class SebTerminalRenderer {
   }
 
   private renderFooter(width: number, maximumHeight = Number.POSITIVE_INFINITY): string[] {
-    let menu = this.menuIsVisible()
+    let menu = !this.ticker && this.menuIsVisible()
       ? this.renderMenu(width)
       : [];
     let suggestions = this.overlay === 'none' &&
@@ -1619,7 +1653,7 @@ export class SebTerminalRenderer {
       !this.editor.text() && menu.length === 0
       ? this.suggestions()
       : [];
-    const reservedRows = this.overlay === 'none' ? 3 : 2;
+    const reservedRows = this.overlay === 'none' ? 4 : 2;
     const availableExtraRows = Math.max(0, maximumHeight - reservedRows);
     if (menu.length > 0) {
       menu = menu.slice(0, availableExtraRows);
@@ -1629,16 +1663,18 @@ export class SebTerminalRenderer {
     }
     const maximumPromptRows = Math.max(
       1,
-      Math.min(5, maximumHeight - menu.length - suggestions.length - 2),
+      Math.min(5, maximumHeight - menu.length - suggestions.length - 3),
     );
     const promptLines = this.overlay === 'none'
       ? renderEditor(this.editor, width - 4, this.theme, maximumPromptRows)
       : [];
-    if (this.ticker && this.overlay === 'none') {
-      promptLines.splice(0, promptLines.length, paint(this.theme, 'dim', 'Response in progress'));
+    if (this.ticker && this.overlay === 'none' && !this.editor.text()) {
+      promptLines[0] += paint(this.theme, 'dim', ' Type your next prompt');
     }
     const status = this.overlay !== 'none'
       ? 'Panel open · PgUp/PgDn or the mouse wheel scrolls · Escape closes'
+      : this.ticker && this.editor.text()
+      ? this.queuedPrompt ? 'Queued · Editing cancels the queue · Esc stops' : 'Draft · Enter queues · Esc stops'
       : this.answerFocus
       ? `Opened at ${this.answerFocus} · ${this.scrollOffset} ${this.scrollOffset === 1 ? 'line' : 'lines'} to latest · PgDn continues`
       : this.scrollOffset > 0
@@ -1650,6 +1686,7 @@ export class SebTerminalRenderer {
         paint(this.theme, 'source', fit(` ${index + 1}  ${sanitizeTerminalText(value)}`, width))),
       paint(this.theme, 'dim', '─'.repeat(width)),
       ...promptLines.map((line, index) => `${index === 0 ? `${symbol(this.theme, 'prompt')} ` : '  '}${line}`),
+      ...(promptLines.length > 0 ? [''] : []),
       paint(this.theme, 'dim', fit(` ${sanitizeTerminalText(status)}${this.ticker ? ' · Ctrl+C exits · PgUp/PgDn scrolls' : ' · Ctrl+G context · Ctrl+K commands · ? help'}`, width)),
     ];
   }
@@ -1740,6 +1777,8 @@ export class SebTerminalRenderer {
       '  Ctrl+W       Delete the prior word',
       '  Ctrl+U       Delete to the start',
       '  Alt+Enter    Insert a new line',
+      '  During a reply, type the next prompt. Enter queues it.',
+      '  Editing cancels the queue. A failed reply keeps the draft.',
       '  ↑ / ↓        Read prompt history',
       '  Ctrl+R       Search prompt history',
       '  PgUp/PgDn    Scroll the transcript or panel',

@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
+import { SebTerminalRenderer } from '../src/interactive/renderer.js';
+import { MemoryPromptHistory } from '../src/interactive/history.js';
+import { InteractiveUiState } from '../src/interactive/ui-state.js';
+import { createSessionState } from '../src/interactive/session.js';
+import { SourceTracker } from '../src/sources.js';
 
 import {
   SebConversationRunner,
@@ -7,6 +13,58 @@ import {
 } from '../src/interactive/tui.js';
 
 describe('SebConversationRunner', () => {
+  it('accepts a retry draft during a failed response and sends the original question without partial output', async () => {
+    class Input extends EventEmitter {
+      isTTY = true;
+      pause() { return this; }
+      resume() { return this; }
+      setRawMode() { return this; }
+      type(value: string) { this.emit('data', Buffer.from(value)); }
+    }
+    class Output extends EventEmitter {
+      columns = 100;
+      rows = 30;
+      text = '';
+      write(value: string | Uint8Array) { this.text += String(value); return true; }
+    }
+    const input = new Input();
+    const output = new Output();
+    const uiState = new InteractiveUiState();
+    const renderer = new SebTerminalRenderer({ input, output, uiState,
+      environment: { NO_COLOR: '1' }, model: 'test', version: 'test',
+      history: new MemoryPromptHistory(), session: createSessionState(), sources: new SourceTracker() });
+    const sent: UIMessage[][] = [];
+    let first!: ReadableStreamDefaultController<UIMessageChunk>;
+    const transport = transportFor((messages) => {
+      sent.push(structuredClone(messages));
+      return new ReadableStream({ start(controller) {
+        if (sent.length === 1) { first = controller; return; }
+        controller.enqueue({ type: 'text-start', id: 'answer' });
+        controller.enqueue({ type: 'text-delta', id: 'answer', delta: 'The weather is clear.' });
+        controller.enqueue({ type: 'text-end', id: 'answer' });
+        controller.enqueue({ type: 'finish', finishReason: 'stop' });
+        controller.close();
+      } });
+    });
+    const conversation = new SebConversationRunner({ renderer, transport, title: 'Test' }).run();
+    input.type('What is the weather?\r');
+    await expect.poll(() => sent.length).toBe(1);
+    first.enqueue({ type: 'text-start', id: 'partial' });
+    first.enqueue({ type: 'text-delta', id: 'partial', delta: 'Untrusted partial weather.' });
+    await expect.poll(() => output.text).toContain('Untrusted partial weather.');
+    input.type('Please try again\r');
+    first.enqueue({ type: 'error', errorText: 'Weather request failed.' });
+    first.close();
+    await expect.poll(() => output.text.split('\x1b[H').at(-1)).toContain('Ready');
+    expect(sent).toHaveLength(1);
+    input.type('\r');
+    await expect.poll(() => uiState.latestAnswer).toBe('The weather is clear.');
+    expect(sent[1]?.map(textOf)).toEqual(['What is the weather?', 'Please try again']);
+    expect(JSON.stringify(sent[1])).not.toContain('Untrusted partial');
+    input.type('/exit\r');
+    await conversation;
+  });
+
   it('opens the renderer before transport setup completes and cancels a late stream', async () => {
     let resolveSetup!: (stream: ReadableStream<UIMessageChunk>) => void;
     let signal: AbortSignal | undefined;
@@ -116,10 +174,10 @@ describe('SebConversationRunner', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it('does not send a failed turn with the next prompt', async () => {
+  it('keeps the failed question when the user asks to try again', async () => {
     const sent: UIMessage[][] = [];
     const renderer = rendererFor(
-      ['Failed question', 'Next question', undefined],
+      ['What is the weather?', 'Please try again', undefined],
       [undefined, assistant('answer-2', 'Second answer')],
     );
     const transport = transportFor((messages) => {
@@ -134,8 +192,9 @@ describe('SebConversationRunner', () => {
     }).run();
 
     expect(sent).toHaveLength(2);
-    expect(sent[1]?.map((message) => message.role)).toEqual(['user']);
-    expect(textOf(sent[1]?.[0])).toBe('Next question');
+    expect(sent[1]?.map((message) => message.role)).toEqual(['user', 'user']);
+    expect(textOf(sent[1]?.[0])).toBe('What is the weather?');
+    expect(textOf(sent[1]?.[1])).toBe('Please try again');
   });
 
   it('removes a failed approval continuation before the next prompt', async () => {
@@ -173,8 +232,9 @@ describe('SebConversationRunner', () => {
       'user',
       'assistant',
     ]);
-    expect(sent[2]?.map((message) => message.role)).toEqual(['user']);
-    expect(textOf(sent[2]?.[0])).toBe('Next question');
+    expect(sent[2]?.map((message) => message.role)).toEqual(['user', 'user']);
+    expect(textOf(sent[2]?.[0])).toBe('Run the tool');
+    expect(textOf(sent[2]?.[1])).toBe('Next question');
   });
 });
 

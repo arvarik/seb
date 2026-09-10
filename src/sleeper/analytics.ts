@@ -1,3 +1,4 @@
+import { ResearchDataError } from '../data/research-error.js';
 import { quantile } from '../projection/statistics.js';
 import type {
   SleeperLeague,
@@ -252,17 +253,17 @@ export function predictMatchup(
   rosterBId: number,
 ): MatchupPrediction {
   if (rosterAId === rosterBId) {
-    throw new Error('Select two different roster IDs.');
+    throw new ResearchDataError('Select two different roster IDs.');
   }
 
   const rosterA = analysis.teams.find((team) => team.rosterId === rosterAId);
   const rosterB = analysis.teams.find((team) => team.rosterId === rosterBId);
   if (!rosterA || !rosterB) {
-    throw new Error('One or both roster IDs do not exist in this league.');
+    throw new ResearchDataError('One or both roster IDs do not exist in this league.');
   }
 
   if (!analysis.historyComplete || rosterA.recentScores.length < 2 || rosterB.recentScores.length < 2) {
-    throw new Error('A matchup forecast needs complete history and at least two scores for each roster.');
+    throw new ResearchDataError('A matchup forecast needs complete history and at least two scores for each roster. Use projectPlayers for Week 1 or current starter projections.');
   }
   const scoreA = expectedScore(rosterA);
   const scoreB = expectedScore(rosterB);

@@ -11,6 +11,7 @@ import {
   type ResourceResult,
 } from '../data/cached-resource.js';
 import { currentRequestSignal } from '../ai/request-signal.js';
+import { normalizePlayerName } from '../identity/normalize.js';
 import {
   readResponseBytes,
   readResponseErrorDetail,
@@ -38,8 +39,8 @@ const SCHEDULE_URL = `${DEFAULT_BASE_URL}/schedules/games.csv.gz`;
 const MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 128 * 1024 * 1024;
 const MAX_ERROR_BYTES = 4 * 1024;
-const CACHE_SCHEMA_VERSION = 'v2';
-const STATS_SCHEMA_VERSION = 'v3';
+const CACHE_SCHEMA_VERSION = 'v3';
+const STATS_SCHEMA_VERSION = 'v5';
 const SCHEDULE_TTL_MS = 6 * 60 * 60 * 1_000;
 const STATS_TTL_MS = 6 * 60 * 60 * 1_000;
 const STALE_IF_ERROR_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -135,7 +136,7 @@ export class NflverseClient {
     const games = loaded.value;
     this.recordSource('nflverse-schedules', 'nflverse schedules', sourceUrl, loaded);
 
-    const team = filters.team?.trim().toUpperCase();
+    const team = filters.team === undefined ? undefined : normalizeNflverseTeam(filters.team);
     const gameType = filters.gameType?.trim().toUpperCase();
     return games.filter(
       (game) =>
@@ -163,7 +164,7 @@ export class NflverseClient {
 
     const playerName = normalizeText(filters.playerName);
     const playerId = filters.playerId?.trim();
-    const team = filters.team?.trim().toUpperCase();
+    const team = filters.team === undefined ? undefined : normalizeNflverseTeam(filters.team);
     const position = filters.position?.trim().toUpperCase();
     const seasonType = filters.seasonType?.trim().toUpperCase();
     return stats.filter(
@@ -354,9 +355,9 @@ function parseGame(row: CsvRow): NflverseGame {
     week: integer(row.week, 'week'),
     gameDate: requiredText(row.gameday, 'gameday'),
     gameTime: nullableText(row.gametime),
-    awayTeam: requiredText(row.away_team, 'away_team'),
+    awayTeam: normalizeNflverseTeam(requiredText(row.away_team, 'away_team')),
     awayScore: nullableNumber(row.away_score),
-    homeTeam: requiredText(row.home_team, 'home_team'),
+    homeTeam: normalizeNflverseTeam(requiredText(row.home_team, 'home_team')),
     homeScore: nullableNumber(row.home_score),
     location: nullableText(row.location),
     awayRest: nullableNumber(row.away_rest),
@@ -374,6 +375,17 @@ function parseGame(row: CsvRow): NflverseGame {
 
 function parsePlayerWeek(row: CsvRow): NflversePlayerWeek {
   return {
+    kicking: {
+      fieldGoalsMade: nullableNumber(row.fg_made),
+      fieldGoalsAttempted: nullableNumber(row.fg_att),
+      extraPointsMade: nullableNumber(row.pat_made),
+      extraPointsAttempted: nullableNumber(row.pat_att),
+      madeDistances: kickDistances(row.fg_made_list, row.fg_made),
+      missedDistances: combineKickDistances(
+        kickDistances(row.fg_missed_list, row.fg_missed),
+        kickDistances(row.fg_blocked_list, row.fg_blocked),
+      ),
+    },
     specialTeamsTouchdowns: nullableNumber(row.special_teams_tds),
     fumbleRecoveryTouchdowns: nullableNumber(row.fumble_recovery_tds),
 
@@ -390,8 +402,8 @@ function parsePlayerWeek(row: CsvRow): NflversePlayerWeek {
     week: integer(row.week, 'week'),
     seasonType: requiredText(row.season_type, 'season_type'),
     gameId: requiredText(row.game_id, 'game_id'),
-    team: requiredText(row.team, 'team'),
-    opponentTeam: requiredText(row.opponent_team, 'opponent_team'),
+    team: normalizeNflverseTeam(requiredText(row.team, 'team')),
+    opponentTeam: normalizeNflverseTeam(requiredText(row.opponent_team, 'opponent_team')),
     completions: number(row.completions, 'completions'),
     attempts: number(row.attempts, 'attempts'),
     passingYards: number(row.passing_yards, 'passing_yards'),
@@ -585,9 +597,27 @@ function nullableText(value: string | undefined): string | null {
   return text ? text : null;
 }
 
+function kickDistances(value: string | undefined, count: string | undefined): number[] | null {
+  const expected = nullableNumber(count);
+  if (value === undefined || expected === null) return null;
+  const distances = value.trim() === '' ? [] : value.split(';').map((distance) => Number(distance));
+  if (distances.length !== expected || distances.some((distance) => !Number.isInteger(distance) || distance < 0)) return null;
+  return distances;
+}
+
+function combineKickDistances(missed: number[] | null, blocked: number[] | null): number[] | null {
+  return missed && blocked ? [...missed, ...blocked] : null;
+}
+
 function normalizeText(value: string | undefined): string | undefined {
-  const normalized = value?.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+  const normalized = value === undefined ? undefined : normalizePlayerName(value);
   return normalized || undefined;
+}
+
+/** nflverse uses LA for the Rams. The rest of Seb uses Sleeper's LAR code. */
+function normalizeNflverseTeam(value: string): string {
+  const team = value.trim().toUpperCase();
+  return team === 'LA' ? 'LAR' : team;
 }
 
 function errorMessage(error: unknown): string {

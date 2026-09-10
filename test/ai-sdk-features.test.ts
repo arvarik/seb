@@ -214,7 +214,7 @@ describe('AI SDK feature integration', () => {
     expect(JSON.stringify(pruned)).toContain('Follow-up 7');
   });
 
-  it('prunes old tool results between model steps', async () => {
+  it('retains early tool results throughout the active turn', async () => {
     const toolSteps = Array.from({ length: 4 }, (_, index) => ({
       content: [{
         type: 'tool-call' as const,
@@ -253,7 +253,7 @@ describe('AI SDK feature integration', () => {
     await agent.generate({ prompt: 'Research the current NFL state.' });
 
     const finalPrompt = JSON.stringify(model.doGenerateCalls[4]?.prompt);
-    expect(finalPrompt).not.toContain('call-1');
+    expect(finalPrompt).toContain('call-1');
     expect(finalPrompt).toContain('call-4');
   });
 

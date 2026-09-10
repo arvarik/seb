@@ -84,7 +84,7 @@ A start-sit action also needs an eligible projection.
 
 The projection becomes ineligible when it lacks enough games or finds an unsupported active scoring rule.
 
-It also becomes ineligible for an unavailable player or a kicker.
+It also becomes ineligible for an unavailable player, an unsupported position, or missing required scoring data.
 
 A trade package must contain unique players on each side.
 

@@ -44,7 +44,8 @@ import { createSystemTools } from './system/tools.js';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash';
 export const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-3.6-flash';
-const MAX_AGENT_STEPS = 12;
+export const MAX_AGENT_STEPS = 32;
+const RESEARCH_CONTEXT_CHARACTER_LIMIT = 200_000;
 const RUNTIME_CONTEXT_CHARACTER_LIMIT = 24_000;
 const RUNTIME_CONTEXT_KEY_PRIORITY = [
   'leagueId',
@@ -134,12 +135,22 @@ export function createFantasyFootballAgent(
         instructions: runtimeInstructions(options, newsToolMode),
       };
     },
-    prepareStep: ({ messages, stepNumber }) => ({
-      messages: pruneFantasyMessages(messages),
-      ...(stepNumber >= MAX_AGENT_STEPS - 1
-        ? { activeTools: [], toolChoice: 'none' as const }
-        : {}),
-    }),
+    prepareStep: ({ messages, stepNumber }) => {
+      const prepared = pruneFantasyMessages(messages);
+      const conclude = stepNumber >= MAX_AGENT_STEPS - 1 ||
+        JSON.stringify(prepared).length >= RESEARCH_CONTEXT_CHARACTER_LIMIT;
+      return {
+        messages: prepared,
+        ...(conclude ? {
+          // Gemini needs function declarations to send functionCallingConfig.NONE.
+          // Exclude hosted tools, which can still run when function calling is off.
+          activeTools: (Object.keys(tools) as Array<keyof typeof tools>)
+            .filter((name) => tools[name]?.type !== 'provider'),
+          toolChoice: 'none' as const,
+          instructions: `${runtimeInstructions(options, newsToolMode)}\n\nThe research budget is complete. Answer the user's question now using the research already returned. Do not request more tools. State any missing evidence and give only estimates that the available evidence supports.`,
+        } : {}),
+      };
+    },
     onEnd: ({ usage }) => options.onUsage?.(usage),
     ...agentTelemetry(options, 'seb.research'),
     tools,
@@ -540,6 +551,14 @@ Use a Sleeper tool for every current fact about a Sleeper user, league, roster, 
 Use an nflverse tool for every schedule, game result, player game log, usage trend, team performance, or defense-by-position fact.
 Use a National Weather Service tool for every current United States forecast or weather alert.
 Use projectPlayer for a scoring-aware player projection in a selected Sleeper league.
+Use projectLeagueMatchup for matchup scores, once per league. It resolves starters and adds actual and projected scores. Use its returned projectedSubtotal values directly. Never recalculate them in the answer.
+Use projectPlayers for several individual players or roster analysis outside a matchup. Batch relevant players in one call per league.
+Read the selected week's starters from getLeagueMatchups. Do not include bench players in a starting-lineup score.
+Reuse successful tool results from this turn. Do not repeat the same request unless it failed or the user asks for a refresh.
+For Week 1, use player projections from the prior season. predictMatchup needs at least two completed scores per roster and cannot predict Week 1.
+Keep missing player projections explicit. Do not count an unavailable projection as zero or present a subtotal as a complete final score.
+Check scoreScope and scoring.ignoredSettings. A partial-scoring result omits active rules. Exclude historical-baseline results from weekly subtotals and list them separately. Explain missing active scoring rules with the subtotal.
+Current news supplements the statistical projection. Explain any news-based adjustment separately without inventing precision.
 Use compareStartSit to compare starters. Supply the legal starter slot for players at different positions.
 Explain expected points and the uncertainty interval. Flag close choices and all failed eligibility checks.
 Use simulatePlayoffOdds only with a complete future fantasy schedule. State its simulation and model limits.
@@ -574,11 +593,15 @@ State when Sleeper exposes a setting but does not expose an exact live deadline.
 
 For league analysis, explain the data period and the heuristic.
 For matchup predictions, state the probability, the expected scores, the confidence, and the disclaimer.
+For matchup scores, lead with one compact table across the requested matchups and a few important drivers. Show individual starter projections only when requested.
+Report a probability only when a tool supports it. If positions lack projections, label the score as a partial subtotal and name the missing positions.
 Treat all predictions as estimates, not facts or betting advice.
 Separate a future forecast from a recorded historical game condition.
 Treat the betting line fields as context, not betting advice.
 
 Keep the response concise.
+Use ordinary Markdown for the answer. Do not wrap prose or bullet lists in code fences.
+Do not add an Evidence or Sources section. The interface adds the source list and its collapsed summary.
 Use clear tables when the user asks for comparisons across three or more rosters.
 Start complex data with a short labeled summary.
 Group related metrics under clear Markdown headings.

@@ -111,6 +111,7 @@ export function recommendationContextQuestion(
   question: string,
   previousQuestion?: string,
 ): string {
+  if (previousQuestion && isRetryPrompt(question)) return previousQuestion;
   if (
     questionRequestsRecommendation(question) ||
     !previousQuestion ||
@@ -120,6 +121,10 @@ export function recommendationContextQuestion(
     return question;
   }
   return `${previousQuestion}\n${question}`;
+}
+
+export function isRetryPrompt(question: string): boolean {
+  return /^(?:please\s+)?(?:try(?:\s+(?:it|that))?\s+again|retry(?:\s+(?:it|that))?)(?:\s+please)?[.!?]*$/iu.test(question.trim());
 }
 
 export function buildFreeformRecommendationEvidence(input: {
@@ -174,6 +179,26 @@ export function buildRecommendationEvidence(
   input: BuildRecommendationEvidenceInput,
 ): RecommendationEvidence {
   input = { ...input, toolResults: input.toolResults.flatMap((result) => {
+    if (result.toolName === 'projectPlayers') {
+      const results = asRecord(result.output)?.results;
+      const requested = asRecord(result.input)?.playerNames;
+      const requestedNames = new Set(Array.isArray(requested)
+        ? requested.map((name) => typeof name === 'string' ? name.trim().toLowerCase() : '') : []);
+      const returnedNames = Array.isArray(results)
+        ? results.map((item) => asRecord(item)?.playerName).filter((name): name is string => typeof name === 'string')
+          .map((name) => name.trim().toLowerCase()) : [];
+      if (!Array.isArray(results) || !results.length || !Array.isArray(requested) ||
+        requestedNames.size !== results.length || new Set(returnedNames).size !== results.length ||
+        returnedNames.some((name) => !requestedNames.has(name))) {
+        return [{ toolName: 'projectPlayer', output: { recommendationEligible: false }, input: result.input }];
+      }
+      return results.map((item) => {
+        const record = asRecord(item);
+        return { toolName: 'projectPlayer',
+          input: { ...asRecord(result.input), playerName: record?.playerName },
+          output: record?.status === 'projected' ? record.projection : { recommendationEligible: false } };
+      });
+    }
     if (result.toolName !== 'compareStartSit') return [result];
     const projections = asRecord(result.output)?.projections;
     const requested = asRecord(result.input)?.playerNames;

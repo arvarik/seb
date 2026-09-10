@@ -1,10 +1,12 @@
+import { ResearchDataError } from '../data/research-error.js';
 import { easternKickoff } from '../time.js';
 import { resolveCompletedAnalysisWindow } from '../analysis/window.js';
 import { LearningStore } from '../learning/store.js';
 import { positionPrior } from '../learning/engine.js';
 import { normalizePlayerName } from '../identity/normalize.js';
+import { TeamIdentityRegistry } from '../identity/teams.js';
 import { throwIfRequestAborted } from '../ai/request-signal.js';
-import { NflverseClient } from '../nflverse/client.js';
+import { NflverseApiError, NflverseClient } from '../nflverse/client.js';
 import type { NflversePlayerWeek } from '../nflverse/types.js';
 import { SleeperClient } from '../sleeper/client.js';
 import type { SleeperPlayer } from '../sleeper/types.js';
@@ -37,6 +39,11 @@ export class PlayerProjectionService {
   }
 
   async project(request: PlayerProjectionRequest): Promise<ScoringAwarePlayerProjection> {
+    throwIfRequestAborted();
+    const team = new TeamIdentityRegistry().resolve(request.playerName);
+    if (team.status === 'resolved') {
+      throw new ResearchDataError('Team defense projections are unavailable. Do not count a missing defense projection as zero.');
+    }
     let analysisSeason = request.analysisSeason ??
       (request.week === 1 ? request.season - 1 : request.season);
     let throughWeek = request.throughWeek ??
@@ -45,10 +52,10 @@ export class PlayerProjectionService {
       !Number.isInteger(request.season) || request.season < 1999 || request.season > 2100 ||
       !Number.isInteger(analysisSeason) || !Number.isInteger(throughWeek) || throughWeek > 18 ||
       analysisSeason > request.season || (analysisSeason === request.season && throughWeek >= request.week)) {
-      throw new Error('Projection training must use a valid season and end before the projected week.');
+      throw new ResearchDataError('Projection training must use a valid season and end before the projected week.');
     }
     if (throughWeek < 1) {
-      throw new Error('A player projection needs at least one completed analysis week. Select the prior season for Week 1.');
+      throw new ResearchDataError('A player projection needs at least one completed analysis week. Select the prior season for Week 1.');
     }
 
     const state = await this.sleeper.getNflState();
@@ -60,6 +67,9 @@ export class PlayerProjectionService {
       throughWeek = completed.throughWeek;
     }
     resolveCompletedAnalysisWindow(String(request.season), state, { analysisSeason, throughWeek });
+    const automaticCurrentSeason = request.analysisSeason === undefined && request.throughWeek === undefined && analysisSeason === request.season;
+    const historicalTarget = request.season < Number(state.season) ||
+      (request.season === Number(state.season) && request.week < state.week);
     const [league, initialRows, playerMatches] = await Promise.all([
       this.sleeper.getLeague(request.leagueId),
       this.nflverse.getPlayerWeeklyStats({
@@ -67,16 +77,18 @@ export class PlayerProjectionService {
         season: analysisSeason,
         seasonType: 'REG',
         throughWeek,
+      }).catch((error: unknown) => {
+        throwIfRequestAborted();
+        if (automaticCurrentSeason && error instanceof NflverseApiError && error.status === 404) return [];
+        throw error;
       }),
-      this.sleeper.findPlayers(request.playerName, { active: true, limit: 10 }),
+      historicalTarget ? Promise.resolve([]) : this.sleeper.findPlayers(request.playerName, { active: true, limit: 10 }),
     ]);
-    if (league.season !== String(request.season)) throw new Error('The selected league season does not match the projected season.');
+    if (league.season !== String(request.season)) throw new ResearchDataError('The selected league season does not match the projected season.');
     let matchingRows = initialRows;
     if (
       matchingRows.length === 0 &&
-      request.analysisSeason === undefined &&
-      request.throughWeek === undefined &&
-      analysisSeason === request.season
+      automaticCurrentSeason
     ) {
       analysisSeason = request.season - 1;
       throughWeek = 18;
@@ -89,8 +101,11 @@ export class PlayerProjectionService {
     }
     const rows = resolvePlayerRows(matchingRows, request.playerName);
     const latest = rows.at(-1);
-    if (!latest) throw new Error(`nflverse found no completed games for ${request.playerName}.`);
-    const player = resolveSleeperPlayer(playerMatches, latest.playerDisplayName, latest.position);
+    if (!latest) throw new ResearchDataError(`nflverse found no completed games for ${request.playerName}.`);
+    if (!['QB', 'RB', 'WR', 'TE', 'K'].includes(latest.position.toUpperCase())) {
+      throw new ResearchDataError('Seb projects QB, RB, WR, TE, and K scoring only. This position has no supported projection. Do not count it as zero.');
+    }
+    const player = historicalTarget ? null : resolveSleeperPlayer(playerMatches, latest.playerDisplayName, latest.position);
     const currentTeam = player?.team?.toUpperCase() ?? latest.team;
 
     const [schedule, positionRows] = await Promise.all([
@@ -107,7 +122,7 @@ export class PlayerProjectionService {
         throughWeek,
       }),
     ]);
-    if (schedule.length > 1) throw new Error('The schedule contains multiple games for this team and week.');
+    if (schedule.length > 1) throw new ResearchDataError('The schedule contains multiple games for this team and week.');
     const game = schedule[0] ?? null;
     const opponent = game
       ? game.homeTeam === currentTeam ? game.awayTeam : game.homeTeam
@@ -119,11 +134,8 @@ export class PlayerProjectionService {
         })
       : null;
 
-    const overrides = this.learning ? await this.learning.overrides() : null;
-    const learned = this.learning && overrides?.enabled !== false
-      ? await this.learning.latest(analysisSeason, analysisSeason === request.season ? Math.min(request.week, throughWeek + 1) : throughWeek + 1, league.scoring_settings) ??
-        (analysisSeason === request.season ? await this.learning.latest(request.season - 1, 19, league.scoring_settings) : null)
-      : null;
+    const { overrides, learned } = await this.learningContext(request, analysisSeason, throughWeek, latest.position, league.scoring_settings);
+    throwIfRequestAborted();
     const parameters = overrides?.enabled === false ? undefined : overrides?.parameters ?? learned?.parameters;
     return projectPlayer({
       projectionSeason: request.season,
@@ -154,6 +166,27 @@ export class PlayerProjectionService {
       week: request.week,
     });
   }
+
+  private async learningContext(
+    request: PlayerProjectionRequest,
+    analysisSeason: number,
+    throughWeek: number,
+    position: string,
+    scoring: import('../sleeper/types.js').SleeperSettings,
+  ) {
+    try {
+      const overrides = this.learning ? await this.learning.overrides() : null;
+      // Existing learned parameters and calibration describe offensive players only.
+      const learned = this.learning && overrides?.enabled !== false && position !== 'K'
+        ? await this.learning.latest(analysisSeason, analysisSeason === request.season ? Math.min(request.week, throughWeek + 1) : throughWeek + 1, scoring) ??
+          (analysisSeason === request.season ? await this.learning.latest(request.season - 1, 19, scoring) : null)
+        : null;
+      return { overrides, learned };
+    } catch {
+      throwIfRequestAborted();
+      throw new ResearchDataError('Seb cannot read valid local forecast settings. Run /doctor to inspect the saved learning data, then retry.');
+    }
+  }
 }
 
 function resolvePlayerRows(
@@ -171,10 +204,10 @@ function resolvePlayerRows(
   const exact = groups.filter((group) => normalizeName(group[0]?.playerDisplayName ?? '') === requested);
   const selected = exact.length === 1 ? exact[0] : groups.length === 1 ? groups[0] : null;
   if (!selected) {
-    const names = groups.map((group) => group[0]?.playerDisplayName).filter(Boolean);
-    throw new Error(
+    const names = [...new Set(groups.map((group) => group[0]?.playerDisplayName).filter(Boolean))];
+    throw new ResearchDataError(
       names.length > 0
-        ? `The player name is ambiguous. Matches: ${names.join(', ')}.`
+        ? `The player name is ambiguous. Use a full name. Matches: ${names.slice(0, 10).join(', ')}${names.length > 10 ? ', and more' : ''}.`
         : `nflverse found no completed games for ${requestedName}.`,
     );
   }
@@ -192,7 +225,7 @@ function resolveSleeperPlayer(
       player.full_name ?? [player.first_name, player.last_name].filter(Boolean).join(' '),
     ) === normalized,
   );
-  if (matches.length > 1) throw new Error('The current player profile is ambiguous. Resolve a source identity first.');
+  if (matches.length > 1) throw new ResearchDataError('The current player profile is ambiguous. Resolve a source identity first.');
   return matches[0] ?? null;
 }
 
@@ -205,5 +238,5 @@ function normalizedPosition(value: string): 'QB' | 'RB' | 'WR' | 'TE' | 'K' {
   if (['QB', 'RB', 'WR', 'TE', 'K'].includes(normalized)) {
     return normalized as 'QB' | 'RB' | 'WR' | 'TE' | 'K';
   }
-  throw new Error(`Seb cannot project the ${value} position.`);
+  throw new ResearchDataError(`Seb cannot project the ${value} position.`);
 }

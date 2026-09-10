@@ -1,4 +1,5 @@
 import { dirname, resolve } from 'node:path';
+import { normalizePlayerName } from '../identity/normalize.js';
 
 import { CachedResource, type ResourcePolicy } from '../data/cached-resource.js';
 import {
@@ -345,11 +346,7 @@ function validateWeek(week: number): number {
 }
 
 function normalizeName(value: string): string {
-  return value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
+  return normalizePlayerName(value).replace(/\s/g, '');
 }
 
 function playerName(player: SleeperPlayer): string {

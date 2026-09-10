@@ -136,7 +136,9 @@ export class SebConversationRunner {
       }
 
       if (!response) {
-        messages.splice(turnStartIndex);
+        // Keep the user's request so "try again" still identifies the question.
+        // Discard partial answers and approval state from the failed attempt.
+        messages.splice(turnStartIndex + 1);
         streamWithoutPrompt = false;
         prompt = undefined;
         continue;

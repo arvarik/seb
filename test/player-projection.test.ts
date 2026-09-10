@@ -22,6 +22,14 @@ const scoring = {
 };
 
 describe('scoring-aware player projections', () => {
+  it.each(['DEF', 'LB'])('does not return a zero estimate for the unsupported %s position', (position) => {
+    expect(() => projectPlayer({
+      analysisSeason: 2025, projectionSeason: 2026, leagueId: '123', leagueName: 'Test',
+      rows: [1, 2, 3].map((week) => stat({ week, position })),
+      scoringSettings: { fgm: 3, pts_allow_0: 10 }, throughWeek: 3, week: 1,
+    })).toThrow('Do not count them as zero');
+  });
+
   it('calculates completed games from the selected league scoring rules', () => {
     const row = stat({
       attempts: 30,

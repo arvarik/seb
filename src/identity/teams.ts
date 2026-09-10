@@ -147,6 +147,7 @@ export function defaultTeams(): CanonicalTeamIdentity[] {
     const sourceIdentities: SourceIdentity[] = ['nflverse', 'sleeper'].flatMap(
       (provider) => sourceCodes.map((id) => ({ provider, id })),
     );
+    if (team.code === 'LAR') sourceIdentities.push({ provider: 'nflverse', id: 'LA' });
     return {
       canonicalId: `nfl-team:${team.code}`,
       code: team.code,

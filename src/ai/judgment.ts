@@ -8,6 +8,7 @@ type Span = NonNullable<ReturnType<TracerClass['getCurrentSpan']>>;
 
 interface TraceState {
   span: Span;
+  sessionId: string;
   output: string;
   failure: string | undefined;
 }
@@ -55,7 +56,13 @@ async function initialize(environment: NodeJS.ProcessEnv): Promise<void> {
       await shutdownJudgmentTracing();
       return;
     }
-    const telemetry = new OpenTelemetry({ tracer: Tracer.getOTELTracer() });
+    const telemetry = new OpenTelemetry({
+      tracer: Tracer.getOTELTracer(),
+      enrichSpan: () => {
+        const state = currentTrace.getStore();
+        return state ? { 'judgment.session_id': state.sessionId } : undefined;
+      },
+    });
     const onToolEnd = telemetry.onToolExecutionEnd.bind(telemetry);
     telemetry.onToolExecutionEnd = (event) => {
       const output = event.toolOutput;
@@ -187,7 +194,7 @@ function startTrace(sdk: TracerClass, span: Span, options: TraceOptions): TraceS
   sdk.setSpanKind('agent', span);
   sdk.setSessionId(options.sessionId);
   sdk.setInput(options.input, span);
-  return { span, output: '', failure: undefined };
+  return { span, sessionId: options.sessionId, output: '', failure: undefined };
 }
 
 async function endTrace(sdk: TracerClass, state: TraceState): Promise<void> {

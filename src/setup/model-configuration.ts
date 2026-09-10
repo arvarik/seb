@@ -228,6 +228,7 @@ export async function runModelConfigurationWizard(
       now,
       persistedKeys['openai-compatible'] ? compatibleBaseURL : undefined,
     );
+    if (currentCredentials?.environment) nextCredentials.environment = currentCredentials.environment;
     nextSettings = buildSettings(
       currentSettings,
       provider,
@@ -235,7 +236,7 @@ export async function runModelConfigurationWizard(
       now,
     );
     let credentialsChanged = false;
-    if (Object.keys(nextCredentials.keys).length > 0) {
+    if (Object.keys(nextCredentials.keys).length > 0 || Object.keys(nextCredentials.environment ?? {}).length > 0) {
       await options.credentialStore.save(nextCredentials);
       credentialsChanged = true;
     } else if (currentCredentials) {

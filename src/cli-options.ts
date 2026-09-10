@@ -2,7 +2,7 @@ export type CliCommand =
   | { name: 'learn'; action: 'status' | 'update'; season: number; throughWeek?: number; leagueId?: string; json: boolean }
   | { name: 'help' }
   | { name: 'version' }
-  | { name: 'configure' }
+  | { name: 'configure'; importEnv?: string }
   | { name: 'setup'; username?: string }
   | { name: 'completion'; shell: 'bash' | 'fish' | 'zsh' }
   | {
@@ -90,7 +90,8 @@ Commands:
   chat       Start an interactive terminal session. This is the default.
   ask        Ask one question. Seb also reads the question from standard input.
   doctor     Verify the active model provider, local data, and public data APIs.
-  configure  Enter a provider key, endpoint, and model through a private prompt.
+  configure  Save model, application, and private credential settings.
+             Use --import-env <file> to review and import known dotenv settings.
   setup      Save one optional Sleeper username.
   completion Print a shell completion script.
   cache      Inspect or clear the local SQLite cache.
@@ -171,6 +172,9 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
     case 'doctor':
       return parseDoctorArguments(rest);
     case 'configure':
+      if (rest.length === 2 && rest[0] === '--import-env' && rest[1] && !rest[1].startsWith('--')) {
+        return { name: 'configure', importEnv: rest[1] };
+      }
       requireNoArguments(rest, first);
       return { name: 'configure' };
     case 'setup':

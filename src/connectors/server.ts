@@ -4,10 +4,7 @@ import { pathToFileURL } from 'node:url';
 
 import { configureAiDevTools } from '../ai/devtools.js';
 import { configureJudgmentTracing, shutdownJudgmentTracing } from '../ai/judgment.js';
-import {
-  formatIgnoredLocalEnvironment,
-  loadSafeLocalEnvironment,
-} from '../local-environment.js';
+import { loadUserEnvironment } from '../setup/user-configuration.js';
 import {
   createConnectorRuntime,
   isConnectorName,
@@ -103,10 +100,7 @@ export function createConnectorApp(
 }
 
 async function main(): Promise<void> {
-  const localEnvironmentWarning = formatIgnoredLocalEnvironment(
-    loadSafeLocalEnvironment(),
-  );
-  if (localEnvironmentWarning) process.stderr.write(localEnvironmentWarning);
+  await loadUserEnvironment(process.env, true);
   await configureJudgmentTracing();
   if (await configureAiDevTools()) {
     process.stderr.write(

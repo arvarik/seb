@@ -89,7 +89,7 @@ The service cannot ask for remote endpoint approval. Approve and test that endpo
 
 Set compatible endpoint values in the service environment.
 
-The automatic current-directory `.env` loader ignores custom endpoint selection.
+Seb does not load a current-directory `.env` automatically. Import supported settings with `seb configure --import-env .env` before starting connectors.
 
 The connector reports provider-safe error categories. It does not include raw provider errors in user messages.
 

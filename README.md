@@ -29,7 +29,7 @@ Compare him with Saquon Barkley for this week's matchup and weather.
 | 📈 **Weekly Learning** | Learns local player performance trends and forecast accuracy after completed games. |
 | 🌦️ **Kickoff Weather** | Live game-day forecasts and active severe weather alerts from the National Weather Service. |
 | 🤖 **Multi-Provider AI** | Bring your own model: Google Gemini, Anthropic Claude, OpenAI, or local/compatible LLMs. |
-| 🔒 **Privacy First** | Read-only league access. Keys stay local. Telemetry never logs prompts, answers, or credentials. |
+| 🔒 **Privacy First** | Read-only league access. Local usage records exclude prompts and answers. Remote Judgment tracing is optional and off by default. |
 
 ---
 
@@ -159,6 +159,48 @@ Generic AI models often hallucinate injury reports or miscalculate fantasy point
 ---
 
 ## Documentation
+
+### Optional Judgment tracing
+
+Seb works without a Judgment account. Tracing stays off unless you explicitly enable it.
+When tracing is off, Seb does not load the Judgment SDK or send data to Judgment.
+Adding credentials alone does not enable tracing.
+
+To enable tracing, add these values to your local `.env` file or service environment:
+
+```dotenv
+SEB_JUDGMENT_TRACING=true
+JUDGMENT_API_KEY=<your saved Judgment API key>
+JUDGMENT_ORG_ID=<your Judgment organization ID>
+```
+
+Git ignores `.env` and its variants, such as `.env.local`. The repository tracks only `.env.example`.
+Use your own organization ID. Seb sends traces to the `seb` project in that organization.
+Seb loads the environment before it initializes tracing once per process.
+Missing credentials or initialization failures produce a warning, and Seb continues without tracing.
+
+**Enabling tracing exports conversation content.** Judgment receives prompts, answers, model calls, tool inputs and outputs, and error information.
+This content can include league data and personal information that appears in a conversation or tool result.
+Seb does not pass its environment or credential configuration to trace wrappers.
+Local usage records keep their existing metadata-only format.
+
+Tracing covers CLI questions, structured answers, interactive agent turns, and connector replies.
+Each interactive conversation and connector thread groups related traces into a session.
+Model and tool spans come from the AI SDK integration. Stream roots remain open until consumption ends or the consumer cancels.
+Seb records up to 128,000 characters of final text on each root. Child spans can contain additional content.
+Seb flushes completed roots and shuts down tracing when the CLI or connector service stops normally.
+An immediate forced exit, including a broken output pipe, can lose queued traces.
+
+Set `SEB_JUDGMENT_TRACING=false` or remove it, then restart Seb, to disable tracing.
+`JUDGMENT_MONITORING=false` also disables tracing at startup.
+
+After installing dependencies, verify one normal request and one cancelled request in Judgment.
+Check the `seb` project, session grouping, model and tool children, final output, and trace health results.
+An initialization message alone does not prove that export works.
+See the [Judgment tracing guide](https://docs.judgmentlabs.ai/documentation/tracing)
+and [AI SDK integration](https://docs.judgmentlabs.ai/documentation/integrations/agent-frameworks/vercel-ai-sdk).
+
+### Guides
 
 * **Getting Started**: [Setup Guide](docs/SETUP.md) · [Terminal UI Guide](docs/TERMINAL_UI.md) · [Model Configuration](docs/MODELS.md)
 * **Features**: [Interactive Experience](docs/INTERACTIVE.md) · [CLI Reference](docs/CLI.md) · [Skills Guide](docs/SKILLS.md)

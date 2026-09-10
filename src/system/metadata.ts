@@ -43,7 +43,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     keyPrinciples: [
       'Deterministic math over LLM guesswork for projections, waivers, and trades',
       'Grounding evidence required before actions are recommended (Decision Gate)',
-      'Privacy-first architecture: keys and data remain local, telemetry never records prompts',
+      'Local usage records exclude prompts. Optional Judgment tracing exports conversation content only when explicitly enabled.',
       'Three integrated presentation experiences: Explore, My Fantasy, and Analyze',
     ],
     subsystemsOrFiles: [
@@ -173,7 +173,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
       'Directory permissions 0700 and file permissions 0600 restricting access to current OS user',
       'Eight core tables: cache_entries, snapshots, identities, identity_links, cache_generations, usage_runs, usage_steps, usage_tool_calls',
       'Configuration stored in ~/.config/seb/ (profile.json, credentials.json, model-settings.json, history.json)',
-      'Strict privacy: no user prompts, answers, raw tool payloads, or keys are stored in telemetry',
+      'Local usage records exclude prompts, answers, raw tool payloads, and keys. Judgment tracing is optional and off by default.',
     ],
     subsystemsOrFiles: [
       'src/data/sqlite-store.ts',

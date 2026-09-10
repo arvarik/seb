@@ -100,7 +100,7 @@ export function createConnectorApp(
 }
 
 async function main(): Promise<void> {
-  await loadUserEnvironment();
+  await loadUserEnvironment(process.env, true);
   await configureJudgmentTracing();
   if (await configureAiDevTools()) {
     process.stderr.write(

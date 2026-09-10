@@ -6,6 +6,7 @@ import { parseCliArguments } from '../src/cli-options.js';
 import { importUserEnvironment } from '../src/setup/configuration-editor.js';
 import { createSetupCredentials } from '../src/setup/credentials.js';
 import { createModelSettings } from '../src/ai/model-settings.js';
+import { loadModelConfiguration } from '../src/ai/model-configuration.js';
 import { loadUserEnvironment, readEnvironmentImport, savedEnvironment, UserConfigurationStore } from '../src/setup/user-configuration.js';
 import type { SetupPrompt } from '../src/setup/prompt.js';
 
@@ -32,10 +33,11 @@ describe('persistent user configuration', () => {
     expect((await stat(store.credentials.path)).mode & 0o777).toBe(0o600);
     const launched: NodeJS.ProcessEnv = { SEB_CONFIG_HOME: directory, PWD: '/another-directory' };
     await loadUserEnvironment(launched);
-    expect(launched.GOOGLE_GENERATIVE_AI_API_KEY).toBe('test-google-secret');
+    const model = await loadModelConfiguration({ environment: launched, discoverModels: false });
+    expect(model.selection.apiKey).toBe('test-google-secret');
     expect(launched.JUDGMENT_API_KEY).toBe('test-judgment-secret');
     expect(launched.SEB_JUDGMENT_TRACING).toBe('true');
-    expect(launched.GEMINI_MODEL).toBe('gemini-flash');
+    expect(model.selection.model).toBe('gemini-flash');
   });
 
   it('keeps tracing off when users save keys without opting in', async () => {
@@ -47,7 +49,7 @@ describe('persistent user configuration', () => {
   it('preserves shell values and the Gemini key alias', async () => {
     await store.save({ GOOGLE_GENERATIVE_AI_API_KEY: 'saved-key', SEB_JUDGMENT_TRACING: 'true', GEMINI_MODEL: 'gemini-flash' });
     Object.assign(environment, { GEMINI_API_KEY: 'shell-key', SEB_JUDGMENT_TRACING: 'false', GEMINI_MODEL: 'gemini-3.7-flash' });
-    await loadUserEnvironment(environment);
+    await loadUserEnvironment(environment, true);
     expect(environment.GOOGLE_GENERATIVE_AI_API_KEY).toBeUndefined();
     expect(environment.GEMINI_API_KEY).toBe('shell-key');
     expect(environment.SEB_JUDGMENT_TRACING).toBe('false');
@@ -60,8 +62,12 @@ describe('persistent user configuration', () => {
       'openai-compatible': { model: 'model', fallbackModel: 'model', baseURL: 'https://saved.example/v1' },
     }));
     environment.OPENAI_COMPATIBLE_BASE_URL = 'https://different.example/v1';
-    await loadUserEnvironment(environment);
+    await loadUserEnvironment(environment, true);
     expect(environment.OPENAI_COMPATIBLE_API_KEY).toBeUndefined();
+    delete environment.OPENAI_COMPATIBLE_BASE_URL;
+    await loadUserEnvironment(environment);
+    const model = await loadModelConfiguration({ environment, baseURL: 'https://override.example/v1', discoverModels: false });
+    expect(model.selection.apiKey).toBeUndefined();
   });
 
   it('imports aliases and ignores endpoint, bootstrap, and arbitrary variables', async () => {

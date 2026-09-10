@@ -149,8 +149,16 @@ export function savedEnvironment(configuration: UserConfiguration): Record<strin
 }
 
 /** Apply saved values only where the shell supplies no value. Never read the working directory. */
-export async function loadUserEnvironment(environment: NodeJS.ProcessEnv = process.env): Promise<void> {
-  const saved = savedEnvironment(await new UserConfigurationStore(environment).load());
+export async function loadUserEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+  includeModelConfiguration = false,
+): Promise<void> {
+  const configuration = await new UserConfigurationStore(environment).load();
+  // The CLI resolves model settings through loadModelConfiguration. Keep saved
+  // endpoint credentials out of its environment so CLI overrides retain key binding.
+  // Connectors resolve a fixed startup model from their environment instead.
+  const saved = includeModelConfiguration ? savedEnvironment(configuration)
+    : { ...configuration.values, ...configuration.credentials?.environment };
   // A shell endpoint must never inherit a key saved for a different endpoint.
   if (environment.OPENAI_COMPATIBLE_BASE_URL !== undefined &&
       environment.OPENAI_COMPATIBLE_BASE_URL !== saved.OPENAI_COMPATIBLE_BASE_URL) {

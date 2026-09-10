@@ -14,6 +14,7 @@ import {
 } from 'ai';
 
 import type { createFantasyFootballAgent } from '../agent.js';
+import { traceJudgmentStream } from '../ai/judgment.js';
 import {
   runWithRequestSignal,
   throwIfRequestAborted,
@@ -259,11 +260,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         this.uiState.latestPrompt = invocation.prompt;
         this.uiState.recordCommand('skill');
         this.skillPromptByMessageId.set(lastMessage.id, invocation.prompt);
-        const stream = await this.delegate.sendMessages({
-          ...options,
-          messages: this.modelMessages(options.messages),
-        });
-        return decorateResponseStream(
+        return this.sendTracedMessages(options, (stream) => decorateResponseStream(
           stream,
           this.options.session,
           this.options.sources,
@@ -275,7 +272,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           ),
           (error) => usageTelemetry?.closeUnfinished(error),
           (reason) => usageTelemetry?.abortUnfinished(reason),
-        );
+        ));
       }
     }
     const selectedMode = parsed?.command ? experienceModeForCommand(parsed.command.name) : null;
@@ -286,11 +283,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       this.uiState.latestPrompt = parsed.argumentText;
       this.uiState.recordCommand(parsed.command?.name ?? selectedMode);
       this.skillPromptByMessageId.set(lastMessage.id, parsed.argumentText);
-      const stream = await this.delegate.sendMessages({
-        ...options,
-        messages: this.modelMessages(options.messages),
-      });
-      return decorateResponseStream(
+      return this.sendTracedMessages(options, (stream) => decorateResponseStream(
         stream,
         this.options.session,
         this.options.sources,
@@ -302,7 +295,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         ),
         (error) => usageTelemetry?.closeUnfinished(error),
         (reason) => usageTelemetry?.abortUnfinished(reason),
-      );
+      ));
     }
     if (lastMessage?.role === 'user' && parsed) {
       this.markLocalOnlyMessage(lastMessage.id);
@@ -319,11 +312,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     }
 
     if (!approvalContinuation) this.options.sources.clear();
-    const stream = await this.delegate.sendMessages({
-      ...options,
-      messages: this.modelMessages(options.messages),
-    });
-    return decorateResponseStream(
+    return this.sendTracedMessages(options, (stream) => decorateResponseStream(
       stream,
       this.options.session,
       this.options.sources,
@@ -335,7 +324,17 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       approvalContinuation
         ? recommendationToolState(options.messages)
         : [],
-    );
+    ));
+  }
+
+  private sendTracedMessages(
+    options: Parameters<ChatTransport<UIMessage>['sendMessages']>[0],
+    decorate: (stream: ReadableStream<UIMessageChunk>) => ReadableStream<UIMessageChunk>,
+  ): Promise<ReadableStream<UIMessageChunk>> {
+    const messages = this.modelMessages(options.messages);
+    return traceJudgmentStream({
+      name: 'seb.interactive.turn', sessionId: options.chatId, input: messages,
+    }, async () => decorate(await this.delegate.sendMessages({ ...options, messages })));
   }
 
   reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {

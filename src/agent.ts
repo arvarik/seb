@@ -16,6 +16,7 @@ import { fantasyAnalysisSchema } from './analysis/output.js';
 import { pruneFantasyMessages } from './ai/context.js';
 import { bindToolRequestSignals } from './ai/request-signal.js';
 import { activeAiDevToolsTelemetry } from './ai/devtools.js';
+import { judgmentTelemetry } from './ai/judgment.js';
 import {
   createProviderLanguageModel,
   ModelProviderConfigurationError,
@@ -182,12 +183,14 @@ function agentTelemetry(
   recordOutputs: boolean;
 } } | Record<string, never> {
   const devTools = activeAiDevToolsTelemetry();
+  const judgment = judgmentTelemetry();
   const integrations = [
     ...devTools,
+    ...judgment,
     ...(options.telemetryIntegrations ?? []),
   ];
   if (integrations.length === 0) return {};
-  const recordContent = devTools.length > 0;
+  const recordContent = devTools.length > 0 || judgment.length > 0;
   return {
     telemetry: {
       functionId: options.telemetryFunctionId ?? defaultFunctionId,

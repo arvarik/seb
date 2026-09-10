@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { pathToFileURL } from 'node:url';
 
 import { configureAiDevTools } from '../ai/devtools.js';
+import { configureJudgmentTracing, shutdownJudgmentTracing } from '../ai/judgment.js';
 import {
   formatIgnoredLocalEnvironment,
   loadSafeLocalEnvironment,
@@ -106,6 +107,7 @@ async function main(): Promise<void> {
     loadSafeLocalEnvironment(),
   );
   if (localEnvironmentWarning) process.stderr.write(localEnvironmentWarning);
+  await configureJudgmentTracing();
   if (await configureAiDevTools()) {
     process.stderr.write(
       'Seb AI SDK DevTools is active. Local prompts and tool data are recorded in .devtools/.\n',
@@ -163,7 +165,11 @@ async function main(): Promise<void> {
       });
     });
     const tasksDrained = await background.drain(SHUTDOWN_TIMEOUT_MS);
-    await withTimeout(runtime.bot.shutdown(), SHUTDOWN_TIMEOUT_MS, 'connector bot shutdown');
+    try {
+      await withTimeout(runtime.bot.shutdown(), SHUTDOWN_TIMEOUT_MS, 'connector bot shutdown');
+    } finally {
+      await shutdownJudgmentTracing();
+    }
     if (!serverClosed || !tasksDrained) {
       throw new Error('Seb exceeded the connector shutdown deadline.');
     }
@@ -268,9 +274,10 @@ async function withTimeout<T>(
 
 const entryPath = process.argv[1];
 if (entryPath && import.meta.url === pathToFileURL(entryPath).href) {
-  main().catch((error: unknown) => {
+  main().catch(async (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`Seb connector service failed: ${message}\n`);
     process.exitCode = 1;
+    await shutdownJudgmentTracing();
   });
 }

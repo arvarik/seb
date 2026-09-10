@@ -17,6 +17,7 @@ import {
 import { toAiMessages } from 'chat/ai';
 
 import { createFantasyFootballAgent } from '../agent.js';
+import { appendJudgmentOutput, judgmentTelemetry, traceJudgmentOperation } from '../ai/judgment.js';
 import { observeCompletedModelStream } from '../ai/stream-completion.js';
 import {
   resolveModelProvider,
@@ -306,37 +307,41 @@ function createAgentReply(environment: Environment): ConnectorReply {
         buildPrompt(thread, message, context),
         requestSignal,
       );
-      try {
-        await postAgentResponse(
-          thread,
-          primaryAgent,
-          prompt,
-          sources,
-          requestSignal,
-          primaryUsageTelemetry,
-          modelErrorContext,
-        );
-      } catch (error) {
-        if (
-          requestSignal.aborted ||
-          !(error instanceof ModelResponseError) ||
-          error.emittedOutput ||
-          !isModelCapacityError(error.cause) ||
-          fallbackAgent === primaryAgent
-        ) {
-          throw error;
+      await traceJudgmentOperation({
+        name: 'seb.connector.reply', sessionId: thread.id, input: prompt,
+      }, async () => {
+        try {
+          await postAgentResponse(
+            thread,
+            primaryAgent,
+            prompt,
+            sources,
+            requestSignal,
+            primaryUsageTelemetry,
+            modelErrorContext,
+          );
+        } catch (error) {
+          if (
+            requestSignal.aborted ||
+            !(error instanceof ModelResponseError) ||
+            error.emittedOutput ||
+            !isModelCapacityError(error.cause) ||
+            fallbackAgent === primaryAgent
+          ) {
+            throw error;
+          }
+          sources.clear();
+          await postAgentResponse(
+            thread,
+            fallbackAgent,
+            prompt,
+            sources,
+            requestSignal,
+            fallbackUsageTelemetry,
+            modelErrorContext,
+          );
         }
-        sources.clear();
-        await postAgentResponse(
-          thread,
-          fallbackAgent,
-          prompt,
-          sources,
-          requestSignal,
-          fallbackUsageTelemetry,
-          modelErrorContext,
-        );
-      }
+      });
     });
   };
 }
@@ -788,6 +793,7 @@ export async function postConnectorResponse(
   response: AsyncIterable<string | import('chat').StreamChunk>,
   signal: AbortSignal,
 ): Promise<void> {
+  if (judgmentTelemetry().length > 0) response = recordJudgmentResponse(response);
   const limit = thread.adapter.name === 'discord' ? 2_000 : thread.adapter.name === 'telegram' ? 4_096 : undefined;
   if (!limit) {
     await waitForSignal(thread.post(response), signal);
@@ -802,5 +808,15 @@ export async function postConnectorResponse(
   for (const chunk of splitConnectorMessage(text, limit)) {
     signal.throwIfAborted();
     await waitForSignal(thread.post({ raw: chunk }), signal);
+  }
+}
+
+async function* recordJudgmentResponse(
+  response: AsyncIterable<string | import('chat').StreamChunk>,
+): AsyncGenerator<string | import('chat').StreamChunk> {
+  for await (const part of response) {
+    if (typeof part === 'string') appendJudgmentOutput(part);
+    else if (part.type === 'markdown_text') appendJudgmentOutput(part.text);
+    yield part;
   }
 }

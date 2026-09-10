@@ -28,6 +28,13 @@ import {
   type RecommendationToolResult,
 } from './analysis/recommendation-eligibility.js';
 import { configureAiDevTools } from './ai/devtools.js';
+import {
+  appendJudgmentOutput,
+  configureJudgmentTracing,
+  judgmentTelemetry,
+  shutdownJudgmentTracing,
+  traceJudgmentOperation,
+} from './ai/judgment.js';
 import { loadModelConfiguration } from './ai/model-configuration.js';
 import {
   MODEL_PROVIDER_LABELS,
@@ -753,18 +760,30 @@ async function answerOneQuestionWithSignal(
   );
   currentRequestSignal()?.throwIfAborted();
   try {
-    if (command.json) {
-      const result = await generateAnswer(
-        selection,
-        prompt,
-        streams.stderr,
-        environment,
-      );
-      streams.stdout.write(`${JSON.stringify(result)}\n`);
-      return;
-    }
+    await traceJudgmentOperation({
+      name: 'seb.cli.answer', sessionId: randomUUID(), input: prompt,
+    }, async () => {
+      const output = streams.stdout;
+      const tracedStreams: CliStreams = judgmentTelemetry().length === 0 ? streams : { ...streams, stdout: {
+        ...(output.isTTY === undefined ? {} : { isTTY: output.isTTY }),
+        write: (text) => {
+          appendJudgmentOutput(text);
+          return output.write(text);
+        },
+      } };
+      if (command.json) {
+        const result = await generateAnswer(
+          selection,
+          prompt,
+          streams.stderr,
+          environment,
+        );
+        tracedStreams.stdout.write(`${JSON.stringify(result)}\n`);
+        return;
+      }
 
-    await streamAnswer(selection, prompt, streams, command.progress, environment);
+      await streamAnswer(selection, prompt, tracedStreams, command.progress, environment);
+    });
   } catch (error) {
     throw new CliModelResponseError(error, selection.modelProvider);
   }
@@ -1285,6 +1304,10 @@ export async function launchCli(
       loadLocalEnvironment(),
     );
     if (environmentWarning) process.stderr.write(environmentWarning);
+    const command = parseCliArguments(arguments_);
+    if (command.name === 'ask' || command.name === 'chat') {
+      await configureJudgmentTracing();
+    }
     if (await configureAiDevTools()) {
       process.stderr.write(
         'Seb AI SDK DevTools is active. Local prompts and tool data are recorded in .devtools/.\n',
@@ -1305,6 +1328,8 @@ export async function launchCli(
       );
     }
     process.exitCode = error instanceof CliUsageError ? 2 : 1;
+  } finally {
+    await shutdownJudgmentTracing();
   }
 }
 

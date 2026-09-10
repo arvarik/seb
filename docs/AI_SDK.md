@@ -268,6 +268,8 @@ Delete local trace files with a normal file operation when you no longer need th
 DevTools and local usage telemetry have different privacy rules.
 
 DevTools records complete content. Local usage telemetry records metadata only.
+Optional Judgment tracing exports conversation content when `SEB_JUDGMENT_TRACING=true`.
+It stays off by default. See [Judgment setup and data capture](../README.md#optional-judgment-tracing).
 
 ## Verification
 

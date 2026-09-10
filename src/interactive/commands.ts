@@ -636,7 +636,7 @@ _seb_completion() {
   current="\${COMP_WORDS[COMP_CWORD]}"
   previous="\${COMP_WORDS[COMP_CWORD-1]}"
   if [[ "\${COMP_CWORD}" -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "chat ask doctor configure setup cache snapshots replay evaluate learn usage stats completion help version" -- "\${current}") )
+    COMPREPLY=( $(compgen -W "chat resume sessions ask doctor configure setup cache snapshots replay evaluate learn usage stats completion help version" -- "\${current}") )
     return
   fi
   if [[ "\${previous}" == "--provider" || "\${previous}" == "-p" ]]; then
@@ -686,6 +686,8 @@ complete -F _seb_completion seb`;
 function fishCompletion(): string {
   return `# Seb completion for Fish
 complete -c seb -f
+complete -c seb -n '__fish_use_subcommand' -a resume -d 'Resume a saved conversation'
+complete -c seb -n '__fish_use_subcommand' -a sessions -d 'List saved conversations'
 complete -c seb -n '__fish_use_subcommand' -a chat -d 'Start an interactive terminal session'
 complete -c seb -n '__fish_use_subcommand' -a ask -d 'Ask one question'
 complete -c seb -n '__fish_use_subcommand' -a doctor -d 'Check the local setup'
@@ -735,6 +737,8 @@ _seb() {
   local -a commands
   commands=(
     'chat:Start an interactive terminal session'
+    'resume:Resume a saved conversation'
+    'sessions:List saved conversations'
     'ask:Ask one question'
     'doctor:Check the local setup'
     'configure:Configure a model provider privately'

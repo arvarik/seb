@@ -1,3 +1,4 @@
+import { SessionStore, sessionContext, sessionsEnabled } from './sessions.js';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -47,6 +48,8 @@ export interface SebConversationRenderer {
 
 export interface SebConversationRunnerOptions {
   chatId?: string;
+  initialMessages?: readonly UIMessage[];
+  checkpoint?: (messages: readonly UIMessage[]) => Promise<void>;
   modelErrorContext?: () => ModelErrorContext;
   renderer: SebConversationRenderer;
   title: string;
@@ -59,12 +62,16 @@ export interface SebConversationRunnerOptions {
  */
 export class SebConversationRunner {
   private readonly chatId: string;
+  private readonly initialMessages: readonly UIMessage[];
+  private readonly checkpoint: ((messages: readonly UIMessage[]) => Promise<void>) | undefined;
   private readonly modelErrorContext: (() => ModelErrorContext) | undefined;
   private readonly renderer: SebConversationRenderer;
   private readonly title: string;
   private readonly transport: ChatTransport<UIMessage>;
 
   constructor(options: SebConversationRunnerOptions) {
+    this.initialMessages = options.initialMessages ?? [];
+    this.checkpoint = options.checkpoint;
     this.chatId = options.chatId ?? `seb-${randomUUID()}`;
     this.modelErrorContext = options.modelErrorContext;
     this.renderer = options.renderer;
@@ -81,8 +88,8 @@ export class SebConversationRunner {
   }
 
   private async runConversation(): Promise<void> {
-    const messages: UIMessage[] = [];
-    let nextMessageIndex = 0;
+    const messages: UIMessage[] = structuredClone([...this.initialMessages]);
+    if (this.checkpoint) await this.checkpoint(messages);
     let prompt: string | undefined;
     let streamWithoutPrompt = false;
     let turnStartIndex = 0;
@@ -97,9 +104,10 @@ export class SebConversationRunner {
         }
         if (prompt === undefined) return;
         turnStartIndex = messages.length;
-        messages.push(createUserMessage(`message-${++nextMessageIndex}`, prompt));
+        messages.push(createUserMessage(`message-${randomUUID()}`, prompt));
       }
 
+      if (this.checkpoint) await this.checkpoint(messages);
       const abortController = new AbortController();
       const previousAssistant = lastAssistantMessage(messages);
       const uiMessageStream = pendingRequestStream(
@@ -139,6 +147,7 @@ export class SebConversationRunner {
         // Keep the user's request so "try again" still identifies the question.
         // Discard partial answers and approval state from the failed attempt.
         messages.splice(turnStartIndex + 1);
+        if (this.checkpoint) await this.checkpoint(messages);
         streamWithoutPrompt = false;
         prompt = undefined;
         continue;
@@ -163,6 +172,7 @@ export class SebConversationRunner {
         }
       }
 
+      if (this.checkpoint) await this.checkpoint(messages);
       streamWithoutPrompt = false;
       prompt = undefined;
     }
@@ -170,6 +180,7 @@ export class SebConversationRunner {
 }
 
 export interface SebInteractiveTuiOptions {
+  resumeId?: string;
   environment?: NodeJS.ProcessEnv;
   history?: PromptHistory;
   input?: SebTerminalInput;
@@ -207,14 +218,59 @@ export async function runSebInteractiveTui(
     uiState,
     version: options.version ?? 'development',
   });
-  await new SebConversationRunner({
-    modelErrorContext: () => ({
-      providerLabel: uiState.activeModel?.providerLabel ?? 'model provider',
-    }),
-    renderer,
-    title: options.title,
-    transport: options.transport,
-  }).run();
+  const store = sessionsEnabled(environment) ? new SessionStore(environment) : null;
+  if (options.resumeId && !store) throw new Error('Session saving is disabled. Enable SEB_SESSIONS and SEB_HISTORY to resume.');
+  const chatId = options.resumeId ?? `seb-${randomUUID()}`;
+  let locked = false;
+  let saved = false;
+  let warning = '';
+  try {
+    if (store) {
+      try { await store.acquire(chatId); locked = true; }
+      catch (error) { if (options.resumeId) throw error; warning = 'Seb cannot save this session. Check the session directory permissions.'; uiState.notification = warning; }
+    }
+    const previous = options.resumeId ? await store!.load(chatId) : null;
+    if (previous) {
+      if (previous.context.user !== options.session.user) throw new Error('This session belongs to a different Sleeper account. Connect that account before resuming.');
+      Object.assign(options.session, previous.context);
+      if (options.session.leagueId && !options.session.leagues.some(l => l.leagueId === options.session.leagueId)) {
+        options.session.leagueId = null; options.session.rosterId = null;
+        uiState.notification = 'The saved league is no longer available. Choose a current league.';
+      }
+      for (const evidence of previous.evidence) uiState.recordAnswerEvidence(evidence);
+      const latest = [...previous.messages].reverse().find(m => m.role === 'assistant');
+      uiState.latestAnswer = latest?.parts.filter(p => p.type === 'text').map(p => p.text).join('\n') ?? '';
+      uiState.latestPrompt = [...previous.messages].reverse().find(m => m.role === 'user')?.parts.filter(p => p.type === 'text').map(p => p.text).join('\n') ?? '';
+      renderer.restoreMessages(previous.messages);
+      uiState.notification ||= `Resumed conversation · ${previous.messages.length} messages`;
+      saved = true;
+    }
+    await new SebConversationRunner({
+      chatId, initialMessages: previous?.messages ?? [],
+      checkpoint: async messages => {
+        if (!store || !locked) return;
+        try {
+          await store.save({ version: 1, id: chatId, updatedAt: new Date().toISOString(), messages: [...messages],
+            context: sessionContext(options.session), evidence: uiState.savedEvidence() });
+          saved = true;
+          if (uiState.notification === warning) uiState.notification = '';
+          warning = '';
+        } catch { warning = 'Seb could not save the latest turn. The previous saved conversation remains available.'; uiState.notification = warning; }
+      },
+
+      modelErrorContext: () => ({
+        providerLabel: uiState.activeModel?.providerLabel ?? 'model provider',
+      }),
+      renderer,
+      title: options.title,
+      transport: options.transport,
+    }).run();
+  } finally {
+    renderer.close();
+    if (locked) await store!.release(chatId);
+    if (warning) output.write(`\n${warning}\n`);
+    if (saved) output.write(`\nResume this session: seb resume ${chatId}\n`);
+  }
 }
 
 function createUserMessage(id: string, text: string): UIMessage {

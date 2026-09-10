@@ -13,6 +13,7 @@ COPY bin/ ./bin/
 COPY src/ ./src/
 
 ENV NODE_ENV=production
+ENV SEB_CONFIG_HOME=/root/.seb
 VOLUME ["/root/.seb"]
 
 ENTRYPOINT ["node", "bin/seb.mjs"]

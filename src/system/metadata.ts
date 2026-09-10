@@ -72,9 +72,9 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     topic: 'architecture',
     title: 'Agent Loop & System Architecture',
     summary:
-      'Seb coordinates requests through a 23-step pipeline using the Vercel AI SDK ToolLoopAgent with a 12-step execution budget. Dynamic Zod validation safeguards all tool inputs, while message pruning strips raw reasoning and stale tool records to preserve context.',
+      'Seb coordinates requests using the Vercel AI SDK ToolLoopAgent with a 32-step execution budget. Dynamic Zod validation safeguards all tool inputs, while message pruning removes older history and preserves all active-turn research and provider signatures.',
     keyPrinciples: [
-      'ToolLoopAgent bounded to 12 maximum steps with step 11 disabling tools to force synthesis',
+      'ToolLoopAgent allows 32 model steps and reserves the final step for an answer without tool calls',
       'Zod-enforced schemas validating seasons, weeks, players, and IDs before execution',
       'Strict context boundaries (32k max prompt, 120k max session characters)',
       'Decision gate enforces prerequisite evidence before start/sit, trade, or waiver recommendations',
@@ -95,7 +95,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
       '3. Synchronizes Sleeper NFL state, leagues, and owned rosters.',
       '4. Transport routes query to Explore, My Fantasy, or Analyze experience.',
       '5. ToolLoopAgent executes with tools bound to dynamic request AbortSignals.',
-      '6. Message pruning discards intermediate reasoning traces to preserve token limits.',
+      '6. Message pruning preserves active-turn research and provider signatures.',
       '7. Decision Gate verifies that recommendations are backed by returned tool evidence.',
       '8. Terminal renderer outputs responsive markdown tables, badges, and sparklines.',
     ].join('\n'),
@@ -109,10 +109,10 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     keyPrinciples: [
       'Scoring-aware calculation (PPR, half-PPR, standard, custom bonuses, TE premium, turnover deductions)',
       'Exponential recency decay weighting recent performances over early-season games',
-      'Opportunity metrics: target share, air yards, rush attempts, snap rates, and red-zone looks',
+      'Separate D/ST forecasts blend team and opponent outcomes with NFL averages and a stronger rare-touchdown prior',
       'Opponent defense-vs-position adjustment using nflverse historical allowances',
       'Weather damping: wind speed (>15mph), cold temperature (<32°F), and precipitation factors',
-      'Outputs expected points, 10th-90th percentile confidence ranges, and recommendation eligibility flags',
+      'Outputs expected points, forecast ranges with explicit calibration limits, and recommendation eligibility flags',
     ],
     subsystemsOrFiles: [
       'src/projection/',
@@ -181,6 +181,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
       'src/setup/credentials.ts',
       'src/ai/model-settings.ts',
       'src/interactive/history.ts',
+      'src/interactive/sessions.ts',
     ],
     documentation: 'docs/STORAGE.md',
     content: [
@@ -189,7 +190,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
       '- SQLite Database: `.cache/seb.sqlite` under the working directory.',
       '- Security: Files written with mode 0600, directories created with mode 0700.',
       '- Privacy Guarantee: Prompt texts, answers, and secret API keys are never recorded to the usage database.',
-      '- Config Directory: `~/.config/seb/` holds credentials, model settings, and prompt history.',
+      '- Config Directory: `~/.config/seb/` holds credentials, model settings, prompt history, and private resumable conversations.',
     ].join('\n'),
   },
 

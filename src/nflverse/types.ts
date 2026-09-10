@@ -33,6 +33,11 @@ export interface NflversePlayerWeek {
     madeDistances: number[] | null;
     missedDistances: number[] | null;
   } | undefined;
+  specialTeamsForcedFumbles?: number | null | undefined;
+  specialTeamsRecoveries?: number | null | undefined;
+  specialTeamsTackles?: number | null | undefined;
+  kickReturnYards?: number | null | undefined;
+  puntReturnYards?: number | null | undefined;
   specialTeamsTouchdowns?: number | null | undefined;
   fumbleRecoveryTouchdowns?: number | null | undefined;
 

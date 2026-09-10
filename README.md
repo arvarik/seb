@@ -5,7 +5,7 @@
 [![CI](https://github.com/arvarik/seb/actions/workflows/ci.yml/badge.svg)](https://github.com/arvarik/seb/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 ![Node.js](https://img.shields.io/badge/Node.js->=22-339933?logo=node.js&logoColor=white)
-[![Version](https://img.shields.io/badge/version-1.0.1-informational.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-1.0.2-informational.svg)](package.json)
 
 Seb unifies real-time NFL news, live Sleeper leagues, nflverse statistics, and kickoff weather into a single conversational agent. 
 
@@ -221,3 +221,11 @@ and [AI SDK integration](https://docs.judgmentlabs.ai/documentation/integrations
 Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md), our [Code of Conduct](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md).
 
 Licensed under the [Apache-2.0 License](LICENSE).
+
+### Saved conversations and tool details
+
+After `/exit`, Seb prints `seb resume <session-id>`. Run `seb sessions` to list saved conversations.
+Resume restores questions, answers, completed tool details, and answer evidence. It refreshes the current NFL calendar.
+Click a purple tool row to inspect its input and result. Click a grouped row to list its calls, then click a call for details.
+
+Seb now projects team D/ST with league scoring and opponent history. See [the model and benchmark](docs/DEFENSE_AND_SPECIAL_TEAMS.md).

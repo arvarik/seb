@@ -1,3 +1,4 @@
+import { SEB_VERSION } from '../src/version.js';
 import { describe, expect, it } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
 
@@ -169,7 +170,7 @@ describe('system metadata & self-awareness', () => {
     };
 
     const aboutGeneral = await sendCommand('/about');
-    expect(aboutGeneral).toContain('Seb v1.0.1: System Architecture & Capabilities');
+    expect(aboutGeneral).toContain(`Seb v${SEB_VERSION}: System Architecture & Capabilities`);
     expect(aboutGeneral).toContain('/about architecture');
 
     const aboutStorage = await sendCommand('/about storage');
@@ -177,7 +178,7 @@ describe('system metadata & self-awareness', () => {
     expect(aboutStorage).toContain('docs/STORAGE.md');
 
     const archAlias = await sendCommand('/architecture');
-    expect(archAlias).toContain('Seb v1.0.1: System Architecture & Capabilities');
+    expect(archAlias).toContain(`Seb v${SEB_VERSION}: System Architecture & Capabilities`);
 
     const archTopic = await sendCommand('/arch projections');
     expect(archTopic).toContain('Deterministic Projection Engine');

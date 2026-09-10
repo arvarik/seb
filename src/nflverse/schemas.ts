@@ -38,6 +38,11 @@ export const nflversePlayerWeekSchema: z.ZodType<NflversePlayerWeek> = z.object(
     madeDistances: z.array(z.number().int().nonnegative()).nullable(),
     missedDistances: z.array(z.number().int().nonnegative()).nullable(),
   }).optional(),
+  specialTeamsForcedFumbles: nullableNumber.optional(),
+  specialTeamsRecoveries: nullableNumber.optional(),
+  specialTeamsTackles: nullableNumber.optional(),
+  kickReturnYards: nullableNumber.optional(),
+  puntReturnYards: nullableNumber.optional(),
   specialTeamsTouchdowns: nullableNumber.optional(),
   fumbleRecoveryTouchdowns: nullableNumber.optional(),
 

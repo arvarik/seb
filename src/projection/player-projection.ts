@@ -1,3 +1,4 @@
+import { DEFENSE_SETTINGS } from './defense.js';
 import { ResearchDataError } from '../data/research-error.js';
 import { KICKING_SETTINGS, scoreKicking } from './kicking.js';
 import { DEFAULT_PROJECTION_PARAMETERS, forecastMean, forecastInterval, rollingResiduals, PROJECTION_MODEL_VERSION, type ProjectionParameters } from './statistics.js';
@@ -34,7 +35,7 @@ export interface ScoringAwarePlayerProjection {
   expectedPoints: number;
   scoreScope: 'weekly-estimate' | 'partial-scoring' | 'historical-baseline';
   interval: ReturnType<typeof forecastInterval>;
-  model: { version: string; parameters: ProjectionParameters; learningThroughWeek: number | null; learningSeason: number | null; manualOverride: boolean };
+  model: { version: string; parameters: ProjectionParameters | { teamPriorGames: number; touchdownPriorGames: number; maximumTeamWeight: number; maximumOpponentWeight: number }; learningThroughWeek: number | null; learningSeason: number | null; manualOverride: boolean };
 
   opponent: string | null;
   player: {
@@ -80,7 +81,7 @@ export interface ProjectPlayerInput {
 }
 
 const SUPPORTED_SETTINGS = new Set([
-  'st_td', 'fum_rec_td', 'fum', 'fum_lost', 'pass_2pt', 'rush_2pt', 'rec_2pt',
+  'st_ff', 'st_fum_rec', 'st_tkl_solo', 'kr_yd', 'pr_yd', 'st_td', 'fum_rec_td', 'fum', 'fum_lost', 'pass_2pt', 'rush_2pt', 'rec_2pt',
   'pass_cmp', 'pass_att', 'pass_inc', 'rush_att', 'rec_tgt',
   'bonus_rec_rb', 'bonus_rec_wr', 'bonus_rec_te',
   'pass_yd',
@@ -240,6 +241,11 @@ export function scorePlayerWeek(
 ): number {
   const points =
     (row.position.toUpperCase() === 'K' ? scoreKicking(row, settings) : 0) +
+    optionalScore(row.specialTeamsForcedFumbles, settings, 'st_ff') +
+    optionalScore(row.specialTeamsRecoveries, settings, 'st_fum_rec') +
+    optionalScore(row.specialTeamsTackles, settings, 'st_tkl_solo') +
+    optionalScore(row.kickReturnYards, settings, 'kr_yd') +
+    optionalScore(row.puntReturnYards, settings, 'pr_yd') +
     optionalScore(row.specialTeamsTouchdowns, settings, 'st_td') +
     optionalScore(row.fumbleRecoveryTouchdowns, settings, 'fum_rec_td') +
     optionalScore(row.fumbles, settings, 'fum') +
@@ -281,9 +287,9 @@ export function inspectPlayerScoringSettings(settings: SleeperSettings, position
     .map(([key]) => key)
     .sort();
   return {
-    usedSettings: active.filter((key) => position?.toUpperCase() === 'K' ? KICKING_SETTINGS.has(key) : SUPPORTED_SETTINGS.has(key)),
+    usedSettings: active.filter((key) => position?.toUpperCase() === 'K' ? KICKING_SETTINGS.has(key) || /^(st_|kr_yd$|pr_yd$|fum)/u.test(key) && SUPPORTED_SETTINGS.has(key) : SUPPORTED_SETTINGS.has(key)),
     ignoredSettings: active.filter(
-      (key) => !SUPPORTED_SETTINGS.has(key) && !NON_PLAYER_SETTINGS.has(key) && !KICKING_SETTINGS.has(key),
+      (key) => !SUPPORTED_SETTINGS.has(key) && !NON_PLAYER_SETTINGS.has(key) && !DEFENSE_SETTINGS.has(key) && !KICKING_SETTINGS.has(key),
     ),
   };
 }

@@ -1,3 +1,4 @@
+import { enrichSpecialTeams, PLAYER_SPECIAL_TEAMS_SETTINGS } from '../nflverse/defense.js';
 import { throwIfRequestAborted } from '../ai/request-signal.js';
 import { NflverseClient } from '../nflverse/client.js';
 import type { SleeperSettings } from '../sleeper/types.js';
@@ -20,8 +21,11 @@ export class LearningService {
     return this.store.exclusive(async () => {
       const games = await this.client.getSchedule({ season: input.season, gameType: 'REG' });
       const throughWeek = completedLearningWeek(games, input.season, input.throughWeek, this.now());
-      const scoring = input.scoring ?? PPR_SCORING;
-      const rows = await this.client.getPlayerWeeklyStats({ season: input.season, seasonType: 'REG', throughWeek });
+      const scoring: SleeperSettings = input.scoring ?? PPR_SCORING;
+      let rows = await this.client.getPlayerWeeklyStats({ season: input.season, seasonType: 'REG', throughWeek });
+      if (PLAYER_SPECIAL_TEAMS_SETTINGS.some(key => Number(scoring[key] ?? 0) !== 0)) {
+        rows = enrichSpecialTeams(rows, await this.client.getDefenseData(input.season));
+      }
       const completed = games.filter((game) => game.season === input.season && game.gameType === 'REG' && game.week <= throughWeek);
       const gamesById = new Map(completed.map((game) => [game.gameId, game]));
       if (rows.some((row) => {

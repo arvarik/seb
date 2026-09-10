@@ -61,7 +61,6 @@ export async function projectLeagueMatchup(
         }
         return { ...base, status: 'unavailable', reason: 'The game started, but a completed individual score is not verified.' };
       }
-      if (player.position === 'DEF') return { ...base, status: 'unavailable', reason: 'Team defense projections are unavailable.' };
       return { ...base, status: 'projected', reason: null };
     }) };
   });

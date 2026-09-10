@@ -63,10 +63,10 @@ Sources:
 
 ## Remaining model limits
 
-Team defense and individual defender projections remain unsupported.
-Weekly player data does not separate special-teams forced fumbles and recoveries from other plays.
-Active `st_ff` and `st_fum_rec` rules therefore remain explicit scoring omissions.
-Such estimates cannot support a complete matchup score or a final starter recommendation.
+The initial review left defense and individual special-teams projections unsupported.
+Version 1.0.2 adds both through play-level data and official weekly totals.
+See [Defense and special teams](DEFENSE_AND_SPECIAL_TEAMS.md) for the implementation and verification.
+Individual defender projections remain unsupported.
 
 Kicker projections use historical results and default forecast parameters, or an explicit manual override.
 They do not reuse learned offensive parameters.

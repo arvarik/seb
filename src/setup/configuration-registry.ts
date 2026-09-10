@@ -33,6 +33,7 @@ export const CONFIGURATION_SETTINGS: readonly SettingDefinition[] = [
   { name: 'SEB_DEVTOOLS', label: 'Record full content locally with AI SDK DevTools', group: 'Terminal', kind: 'boolean', defaultValue: 'false' },
   { name: 'SEB_THEME', label: 'Terminal theme', group: 'Terminal', choices: ['default', 'high-contrast', 'compact'], defaultValue: 'default' },
   { name: 'SEB_ICONS', label: 'Terminal icons', group: 'Terminal', choices: ['unicode', 'ascii'], defaultValue: 'unicode' },
+  { name: 'SEB_SESSIONS', label: 'Save resumable conversations', group: 'Terminal', kind: 'boolean', defaultValue: 'true' },
   { name: 'SEB_HISTORY', label: 'Save prompt history', group: 'Terminal', kind: 'boolean', defaultValue: 'true' },
   { name: 'SEB_HISTORY_FILE', label: 'Prompt history file (absolute path)', group: 'Terminal', kind: 'path' },
   { name: 'NWS_USER_AGENT', label: 'Weather request identification', group: 'Data' },

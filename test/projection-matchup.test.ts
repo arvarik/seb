@@ -41,9 +41,9 @@ describe('deterministic matchup totals', () => {
     const f = fixture(); const result = await f.run();
     expect(result.rosters[0]).toMatchObject({ rosterId: 1, completedPoints: 7.25,
       remainingProjectedPoints: 10.55, projectedSubtotal: 17.8, complete: true });
-    expect(result.rosters[1]).toMatchObject({ rosterId: 2, projectedSubtotal: 20.1, complete: false,
-      missingStarters: [{ name: 'Miami Dolphins', reason: 'Team defense projections are unavailable.' }] });
-    expect(f.service.project.mock.calls.map(([input]) => input.playerName)).toEqual(['Player A', 'Player B']);
+    expect(result.rosters[1]).toMatchObject({ rosterId: 2, projectedSubtotal: 40.2, complete: true,
+      missingStarters: [] });
+    expect(f.service.project.mock.calls.map(([input]) => input.playerName)).toEqual(['Player A', 'Player B', 'Miami Dolphins']);
     expect(f.sleeper.getLeagueMatchups).toHaveBeenCalledWith('123', 1);
     expect(result.winProbability).toBeNull();
   });
@@ -77,7 +77,7 @@ describe('deterministic matchup totals', () => {
     const f = fixture(); f.service.project.mockRejectedValueOnce(new ResearchDataError('No prior games.'));
     const result = await f.run();
     expect(result.rosters[0]).toMatchObject({ projectedSubtotal: 7.25, complete: false });
-    expect(result.rosters[1]!.projectedSubtotal).toBe(20.1);
+    expect(result.rosters[1]!.projectedSubtotal).toBe(40.2);
   });
   it('excludes historical baselines and labels unsupported scoring rules', async () => {
     const f = fixture(); f.service.project.mockResolvedValueOnce({ expectedPoints: 99, scoreScope: 'historical-baseline' } as ScoringAwarePlayerProjection);
@@ -85,7 +85,7 @@ describe('deterministic matchup totals', () => {
       scoring: { usedSettings: ['fgm'], ignoredSettings: ['st_ff'] } } as ScoringAwarePlayerProjection);
     const result = await f.run();
     expect(result.rosters[0]!.projectedSubtotal).toBe(7.25);
-    expect(result.rosters[1]).toMatchObject({ projectedSubtotal: 20.1, ignoredSettings: ['st_ff'], complete: false });
+    expect(result.rosters[1]).toMatchObject({ projectedSubtotal: 40.2, ignoredSettings: ['st_ff'], complete: false });
   });
   it('marks commissioner score overrides separately from projected totals', async () => {
     const f = fixture(); f.sides[0]!.custom_points = 100;

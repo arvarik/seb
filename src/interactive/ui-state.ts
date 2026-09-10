@@ -61,6 +61,8 @@ export class InteractiveUiState {
     return this.evidenceByAnswerId.get(answerId) ?? null;
   }
 
+  savedEvidence(): SourceEvidenceSnapshot[] { return [...this.evidenceByAnswerId.values()]; }
+
   latestEvidence(): SourceEvidenceSnapshot | null {
     return this.evidenceForAnswer(this.latestAnswerId);
   }

@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { aggregateDefense, defenseDataSchema, DEFENSE_COLUMNS, reconcileDefense, type DefenseData } from './defense.js';
 import { resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { setImmediate } from 'node:timers/promises';
@@ -40,7 +42,7 @@ const MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 128 * 1024 * 1024;
 const MAX_ERROR_BYTES = 4 * 1024;
 const CACHE_SCHEMA_VERSION = 'v3';
-const STATS_SCHEMA_VERSION = 'v5';
+const STATS_SCHEMA_VERSION = 'v6';
 const SCHEDULE_TTL_MS = 6 * 60 * 60 * 1_000;
 const STATS_TTL_MS = 6 * 60 * 60 * 1_000;
 const STALE_IF_ERROR_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -128,6 +130,38 @@ export class NflverseClient {
     this.onSource = options.onSource;
   }
 
+  async getDefenseData(season: number): Promise<DefenseData> {
+    validateSeason(season);
+    const sourceUrl = `${this.baseUrl}/pbp/play_by_play_${season}.csv.gz`;
+    const resource = new CachedResource<DefenseData>(this.database, 'nflverse', `defense-v2-${season}`, sourceUrl, {
+      schemaVersion: 'v2', snapshotKind: 'nflverse-defense', snapshotRetention: 2,
+      staleIfErrorMs: STALE_IF_ERROR_MS, ttlMs: STATS_TTL_MS,
+      validate: value => defenseDataSchema.parse(value),
+    }, this);
+    const signal = currentRequestSignal();
+    const loaded = await resource.read(async conditional => {
+      const downloaded = await this.fetchCsv(sourceUrl, conditional, DEFENSE_COLUMNS);
+      if ('notModified' in downloaded) return downloaded;
+      conditional.signal.throwIfAborted();
+      return { etag: downloaded.etag, lastModified: downloaded.lastModified,
+        sourceTimestamp: downloaded.lastModified, value: aggregateDefense(downloaded.rows, season), valueValidated: true };
+    }, signal ? { signal } : {});
+    this.recordSource(`nflverse-defense-${season}`, `nflverse ${season} defense and special teams`, sourceUrl, loaded);
+    const teamUrl = `${this.baseUrl}/stats_team/stats_team_week_${season}.csv.gz`;
+    const teamResource = new CachedResource<CsvRow[]>(this.database, 'nflverse', `defense-team-v1-${season}`, teamUrl, {
+      schemaVersion: 'v1', snapshotKind: 'nflverse-defense-team', snapshotRetention: 2,
+      staleIfErrorMs: STALE_IF_ERROR_MS, ttlMs: STATS_TTL_MS,
+      validate: value => z.array(z.record(z.string(), z.string())).parse(value),
+    }, this);
+    const totals = await teamResource.read(async conditional => {
+      const result = await this.fetchCsv(teamUrl, conditional);
+      if ('notModified' in result) return result;
+      return { etag: result.etag, lastModified: result.lastModified, sourceTimestamp: result.lastModified, value: result.rows };
+    }, signal ? { signal } : {});
+    this.recordSource(`nflverse-defense-team-${season}`, `nflverse ${season} official weekly team statistics`, teamUrl, totals);
+    return reconcileDefense(loaded.value, totals.value);
+  }
+
   async getSchedule(
     filters: NflverseScheduleFilters = {},
   ): Promise<NflverseGame[]> {
@@ -196,6 +230,7 @@ export class NflverseClient {
   private async fetchCsv(
     url: string,
     conditional: ResourceLoadContext,
+    columns?: ReadonlySet<string>,
   ): Promise<
     | { notModified: true }
     | { etag: string | null; lastModified: string | null; rows: CsvRow[] }
@@ -243,7 +278,7 @@ export class NflverseClient {
       if (expanded.byteLength > MAX_EXPANDED_BYTES) {
         throw new Error(`The expanded nflverse file exceeds ${MAX_EXPANDED_BYTES} bytes.`);
       }
-      const rows = await parseCsv(expanded.toString('utf8'), conditional.signal);
+      const rows = await parseCsv(expanded.toString('utf8'), conditional.signal, columns);
       return {
         etag: response.headers.get('etag'),
         lastModified: response.headers.get('last-modified'),
@@ -386,6 +421,8 @@ function parsePlayerWeek(row: CsvRow): NflversePlayerWeek {
         kickDistances(row.fg_blocked_list, row.fg_blocked),
       ),
     },
+    kickReturnYards: nullableNumber(row.kickoff_return_yards),
+    puntReturnYards: nullableNumber(row.punt_return_yards),
     specialTeamsTouchdowns: nullableNumber(row.special_teams_tds),
     fumbleRecoveryTouchdowns: nullableNumber(row.fumble_recovery_tds),
 
@@ -502,11 +539,11 @@ function requireColumns(row: CsvRow, columns: readonly string[]): void {
   }
 }
 
-async function parseCsv(text: string, signal: AbortSignal): Promise<CsvRow[]> {
+async function parseCsv(text: string, signal: AbortSignal, columns?: ReadonlySet<string>): Promise<CsvRow[]> {
   const source = Readable.from(csvChunks(text, signal));
   const parser = source.pipe(parse({
     bom: true,
-    columns: true,
+    columns: columns ? (headers: string[]) => headers.map(key => columns.has(key) ? key : false) : true,
     skip_empty_lines: true,
   }));
   const onSourceError = (error: Error): void => {

@@ -1,0 +1,19 @@
+{
+  "season": 2024,
+  "firstTestWeek": 5,
+  "forecasts": 416,
+  "model": {
+    "mae": 4.2858653846153825,
+    "rmse": 5.416952201547116
+  },
+  "teamMean": {
+    "mae": 4.557820204635108,
+    "rmse": 5.777580999984796
+  },
+  "leagueMean": {
+    "mae": 4.424593935676006,
+    "rmse": 5.604285639612221
+  },
+  "historicalIntervalCoverage": 0.8125,
+  "limits": "Rolling evaluation uses revised public data. It does not reconstruct historical source availability or prove future accuracy."
+}

@@ -147,7 +147,9 @@ describe('runModelConfigurationWizard', () => {
   });
 
   it('tests and saves an OpenAI key separately from model settings', async () => {
-    const credentials = new MemoryCredentialStore();
+    const original = createSetupCredentials();
+    original.environment = { JUDGMENT_API_KEY: 'private-judgment-key' };
+    const credentials = new MemoryCredentialStore(original);
     const settings = new MemorySettingsStore();
     const prompt = new QueuePrompt(
       ['openai'],
@@ -169,6 +171,7 @@ describe('runModelConfigurationWizard', () => {
 
     expect(prompt.secrets).toEqual(['OpenAI API key']);
     expect(credentials.saved?.keys).toEqual({ openai: 'private-openai-key' });
+    expect(credentials.saved?.environment).toEqual({ JUDGMENT_API_KEY: 'private-judgment-key' });
     expect(settings.saved?.providers.openai).toEqual({
       fallbackModel: 'gpt-test',
       model: 'gpt-test',

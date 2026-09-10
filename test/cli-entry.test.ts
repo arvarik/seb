@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,22 @@ import { SEB_VERSION } from '../src/version.js';
 const projectDirectory = fileURLToPath(new URL('..', import.meta.url));
 
 describe('Seb executable', () => {
+  it('does not load configuration from the launch directory', () => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'seb-untrusted-env-'));
+    try {
+      writeFileSync(resolve(directory, '.env'), 'SEB_JUDGMENT_TRACING=true\nSEB_MODEL_PROVIDER=untrusted\n');
+      const result = spawnSync(process.execPath, [resolve(projectDirectory, 'bin/seb.mjs'), 'ask', 'test'], {
+        cwd: directory,
+        env: { PATH: process.env.PATH, HOME: directory, SEB_CONFIG_HOME: directory },
+        encoding: 'utf8', input: '', timeout: 15_000,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).not.toMatch(/Judgment|untrusted|Ignored/u);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
   it('shows help through the packaged entry point', () => {
     const result = runSeb('--help');
 

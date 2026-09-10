@@ -169,7 +169,7 @@ export async function readEnvironmentImport(path: string): Promise<{
 }> {
   const content = await readBoundedUtf8File(resolve(path), MAX_CONFIGURATION_BYTES, configurationSizeError);
   if (content === null) throw new Error('The import file does not exist.');
-  let parsed: Record<string, string>;
+  let parsed: ReturnType<typeof parseEnv>;
   try { parsed = parseEnv(content); }
   catch { throw new Error('The import file contains invalid dotenv syntax.'); }
   const changes: Record<string, string> = {};
@@ -177,7 +177,7 @@ export async function readEnvironmentImport(path: string): Promise<{
   for (const [name, input] of Object.entries(parsed)) {
     const setting = settingDefinition(name);
     if (!setting) { ignored.push(name); continue; }
-    if (!input.trim()) continue;
+    if (!input?.trim()) continue;
     const value = validateSetting(setting, input);
     if (changes[setting.name] !== undefined && changes[setting.name] !== value) {
       throw new Error(`Conflicting aliases for ${setting.name}.`);

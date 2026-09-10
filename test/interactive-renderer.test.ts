@@ -11,6 +11,47 @@ import { createSessionState } from '../src/interactive/session.js';
 import { InteractiveUiState } from '../src/interactive/ui-state.js';
 import { SourceTracker } from '../src/sources.js';
 
+describe('tool detail disclosure', () => {
+  it.each([1, 3])('opens %i tool calls with the required click depth', async count => {
+    const terminal = createTerminal(); terminal.output.rows = 50;
+    const renderer = createRenderer(terminal);
+    renderer.restoreMessages([{ id: 'details', role: 'assistant', parts: Array.from({ length: count }, (_, i) => ({
+      type: 'dynamic-tool' as const, toolName: 'projectPlayer', toolCallId: `t${i}`, state: 'output-available' as const,
+      input: { playerName: `Player ${i}` }, output: { expectedPoints: 12 + i, confidence: 'low' },
+    })) }]);
+    const prompt = renderer.readPrompt();
+    const frame = () => stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    const click = (label: string) => {
+      const row = frame().split('\r\n').findIndex(line => line.includes(label));
+      expect(row).toBeGreaterThanOrEqual(0);
+      terminal.input.type(`\x1b[<0;4;${row + 1}M\x1b[<0;4;${row + 1}m`);
+    };
+    expect(frame()).not.toContain('expectedPoints');
+    click('Build a scoring-aware projection');
+    if (count > 1) {
+      expect(frame()).toContain('Player 0'); expect(frame()).toContain('Player 2');
+      expect(frame()).not.toContain('expectedPoints'); click('playerName: Player 1');
+      expect(frame()).toContain('"expectedPoints": 13');
+      click('playerName: Player 1'); expect(frame()).not.toContain('expectedPoints');
+    } else {
+      expect(frame()).toContain('"expectedPoints": 12');
+    }
+    click('Build a scoring-aware projection'); expect(frame()).not.toContain('expectedPoints');
+    terminal.input.type('/exit\r'); await prompt; renderer.close();
+  });
+  it('collapses provider reasoning and expands its full text on one click', async () => {
+    const terminal = createTerminal(), renderer = createRenderer(terminal);
+    renderer.restoreMessages([{ id: 'reasoning', role: 'assistant', parts: [{ type: 'reasoning', text: 'Check the matchup.\nThen verify the league scoring.', state: 'done' }] }]);
+    const prompt = renderer.readPrompt();
+    const frame = () => stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame()).not.toContain('Then verify');
+    const row = frame().split('\r\n').findIndex(line => line.includes('Reasoning'));
+    terminal.input.type(`\x1b[<0;4;${row + 1}M\x1b[<0;4;${row + 1}m`);
+    expect(frame()).toContain('Then verify the league scoring.');
+    terminal.input.type('/exit\r'); await prompt; renderer.close();
+  });
+});
+
 describe('SebTerminalRenderer prompt input', () => {
   it.each(['success', 'error', 'cancel'] as const)('keeps an editable draft after %s', async (outcome) => {
     const terminal = createTerminal();
@@ -247,7 +288,7 @@ describe('SebTerminalRenderer prompt input', () => {
         },
       }),
     });
-    await expect.poll(() => terminal.output.text()).toContain('Type your next prompt');
+    await expect.poll(() => stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '')).toContain('Search current news');
     terminal.input.type('\x1b');
     await rendered;
     const frame = stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
@@ -1112,7 +1153,7 @@ describe('SebTerminalRenderer prompt input', () => {
     const output = terminal.output.text();
     expect(output).toContain('EXPLORE');
     expect(output).toContain('SLEEPER NOT CONNECTED');
-    expect(output).toContain('SOURCE NO SOURCE YET');
+    expect(output).not.toContain('SOURCE NO SOURCE YET');
     expect(output).not.toContain('LEAGUE —');
     expect(output).not.toContain('ROSTER —');
     terminal.input.type('\u0003');
@@ -1136,7 +1177,7 @@ describe('SebTerminalRenderer prompt input', () => {
 
     expect(stripAnsi(
       terminal.output.text().split('\x1b[H').at(-1) ?? '',
-    )).toContain('MODEL OPENAI · gpt-test');
+    )).toContain('gpt-test');
 
     uiState.setActiveModel({
       model: 'claude-test',
@@ -1147,7 +1188,7 @@ describe('SebTerminalRenderer prompt input', () => {
 
     await expect.poll(() => stripAnsi(
       terminal.output.text().split('\x1b[H').at(-1) ?? '',
-    )).toContain('MODEL ANTHROPIC · claude-test');
+    )).toContain('claude-test');
     terminal.input.type('\u0003');
     await expect(prompt).rejects.toThrow('Interrupted');
   });
@@ -1294,11 +1335,11 @@ describe('SebTerminalRenderer prompt input', () => {
     const prompt = renderer.readPrompt();
     const output = terminal.output.text();
 
-    expect(output).toContain('Ask naturally');
+    expect(output).not.toContain('Ask naturally');
     expect(output).toContain('EXPLORE');
     expect(output).toContain('MY FANTASY');
     expect(output).toContain('ANALYZE');
-    expect(output).toContain('/connect <Sleeper username>');
+    expect(output).toContain('Lineup review · Waivers · Matchup forecast');
     terminal.input.type('\u0003');
     await expect(prompt).rejects.toThrow('Interrupted');
   });
@@ -1394,7 +1435,7 @@ describe('SebTerminalRenderer prompt input', () => {
     expect(output).not.toContain('Fantasy playoffs start next week');
     expect(output).toContain('MY FANTASY');
     expect(output).toContain('ANALYZE');
-    expect(output).toContain('Use a numbered action below');
+    expect(output).not.toContain('Use a numbered action below');
     terminal.input.type('\u0003');
     await expect(prompt).rejects.toThrow('Interrupted');
   });

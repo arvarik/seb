@@ -1,3 +1,5 @@
+import { enrichSpecialTeams, PLAYER_SPECIAL_TEAMS_SETTINGS } from '../nflverse/defense.js';
+import { projectDefense } from './defense.js';
 import { ResearchDataError } from '../data/research-error.js';
 import { easternKickoff } from '../time.js';
 import { resolveCompletedAnalysisWindow } from '../analysis/window.js';
@@ -40,10 +42,7 @@ export class PlayerProjectionService {
 
   async project(request: PlayerProjectionRequest): Promise<ScoringAwarePlayerProjection> {
     throwIfRequestAborted();
-    const team = new TeamIdentityRegistry().resolve(request.playerName);
-    if (team.status === 'resolved') {
-      throw new ResearchDataError('Team defense projections are unavailable. Do not count a missing defense projection as zero.');
-    }
+    const team = new TeamIdentityRegistry().resolve(request.playerName.replace(/\s+(?:D\/ST|DST|DEF|defense)$/iu, ''));
     let analysisSeason = request.analysisSeason ??
       (request.week === 1 ? request.season - 1 : request.season);
     let throughWeek = request.throughWeek ??
@@ -67,6 +66,34 @@ export class PlayerProjectionService {
       throughWeek = completed.throughWeek;
     }
     resolveCompletedAnalysisWindow(String(request.season), state, { analysisSeason, throughWeek });
+    if (team.status === 'resolved') {
+      const code = team.identity.code;
+      const [league, data, schedule] = await Promise.all([
+        this.sleeper.getLeague(request.leagueId), (async () => {
+          const automatic = request.analysisSeason === undefined && request.throughWeek === undefined && analysisSeason === request.season;
+          let data = await this.nflverse.getDefenseData(analysisSeason).catch((error: unknown) => {
+            throwIfRequestAborted();
+            if (automatic && error instanceof NflverseApiError && error.status === 404) return { weeks: [], specialTeams: {} };
+            throw error;
+          });
+          if (automatic && !data.weeks.some(row => row.team === code && row.week <= throughWeek)) {
+            analysisSeason = request.season - 1; throughWeek = 18;
+            data = await this.nflverse.getDefenseData(analysisSeason);
+          }
+          return data;
+        })(),
+        this.nflverse.getSchedule({ season: request.season, week: request.week, team: code, gameType: 'REG' }),
+      ]);
+      if (league.season !== String(request.season)) throw new ResearchDataError('The league season does not match the projection.');
+      if (schedule.length > 1) throw new ResearchDataError('The defense has multiple scheduled games.');
+      const game = schedule[0];
+      const kickoff = game ? easternKickoff(game.gameDate, game.gameTime) : null;
+      return projectDefense({ rows: data.weeks, team: code, name: `${team.identity.city} ${team.identity.name}`,
+        opponent: game ? game.homeTeam === code ? game.awayTeam : game.homeTeam : null,
+        analysisSeason, throughWeek, season: request.season, week: request.week,
+        leagueId: league.league_id, leagueName: league.name, scoringSettings: league.scoring_settings,
+        scheduled: Boolean(kickoff), gameStarted: Boolean(kickoff && kickoff.getTime() <= Date.now()) });
+    }
     const automaticCurrentSeason = request.analysisSeason === undefined && request.throughWeek === undefined && analysisSeason === request.season;
     const historicalTarget = request.season < Number(state.season) ||
       (request.season === Number(state.season) && request.week < state.week);
@@ -99,7 +126,7 @@ export class PlayerProjectionService {
         throughWeek,
       });
     }
-    const rows = resolvePlayerRows(matchingRows, request.playerName);
+    let rows = resolvePlayerRows(matchingRows, request.playerName);
     const latest = rows.at(-1);
     if (!latest) throw new ResearchDataError(`nflverse found no completed games for ${request.playerName}.`);
     if (!['QB', 'RB', 'WR', 'TE', 'K'].includes(latest.position.toUpperCase())) {
@@ -122,6 +149,13 @@ export class PlayerProjectionService {
         throughWeek,
       }),
     ]);
+    if (PLAYER_SPECIAL_TEAMS_SETTINGS.some(k => Number(league.scoring_settings[k] ?? 0) !== 0)) {
+      const data = await this.nflverse.getDefenseData(analysisSeason);
+      try {
+        rows = enrichSpecialTeams(rows, data);
+        positionRows.splice(0, positionRows.length, ...enrichSpecialTeams(positionRows, data));
+      } catch { throw new ResearchDataError('Special-teams data lacks a completed player game.'); }
+    }
     if (schedule.length > 1) throw new ResearchDataError('The schedule contains multiple games for this team and week.');
     const game = schedule[0] ?? null;
     const opponent = game

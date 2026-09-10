@@ -1,5 +1,6 @@
 export type CliCommand =
   | { name: 'learn'; action: 'status' | 'update'; season: number; throughWeek?: number; leagueId?: string; json: boolean }
+  | { name: 'sessions' }
   | { name: 'help' }
   | { name: 'version' }
   | { name: 'configure'; importEnv?: string }
@@ -42,7 +43,7 @@ export type CliCommand =
       retainDays?: number;
       scope: 'today' | '7d' | '30d' | 'all';
     }
-  | { name: 'chat'; model?: string; provider?: ModelProviderOption }
+  | { name: 'chat'; resumeId?: string; model?: string; provider?: ModelProviderOption }
   | {
       name: 'ask';
       json: boolean;
@@ -71,6 +72,8 @@ export const CLI_HELP = `Seb reads Sleeper, nflverse, weather, and grounded news
 Usage:
   seb
   seb chat [--provider NAME] [--model MODEL]
+  seb resume <SESSION_ID>
+  seb sessions
   seb ask [OPTIONS] [QUESTION]
   seb doctor [--offline] [--json]
   seb configure
@@ -88,6 +91,8 @@ Usage:
 
 Commands:
   chat       Start an interactive terminal session. This is the default.
+  resume     Continue a saved session by its unique identifier.
+  sessions   List saved session identifiers and update times.
   ask        Ask one question. Seb also reads the question from standard input.
   doctor     Verify the active model provider, local data, and public data APIs.
   configure  Save model, application, and private credential settings.
@@ -165,6 +170,12 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
     case 'version':
       requireNoArguments(rest, first);
       return { name: 'version' };
+    case 'sessions':
+      requireNoArguments(rest, first);
+      return { name: 'sessions' };
+    case 'resume':
+      if (rest.length !== 1 || !/^seb-[0-9a-f-]{36}$/u.test(rest[0] ?? '')) throw new CliUsageError('Use seb resume <SESSION_ID>. Use seb sessions to list saved sessions.');
+      return { name: 'chat', resumeId: rest[0]! };
     case 'chat':
       return parseChatArguments(rest);
     case 'ask':

@@ -82,7 +82,7 @@ Use `seb configure`, a shell environment, or a deployment environment for these 
 Add a contact value to the NWS user agent.
 
 ```dotenv
-NWS_USER_AGENT=seb/1.0.1 (you@example.com)
+NWS_USER_AGENT=seb/1.0.2 (you@example.com)
 ```
 
 The default value identifies the public Seb repository. A direct contact value helps the NWS contact you about request problems.
@@ -606,3 +606,34 @@ Run `/sources` to identify the source and refresh error.
 Run `/refresh SOURCE` to force the next request to contact that source.
 
 Seb does not use a stale value after its allowed backup period ends.
+
+## Resume a conversation
+
+Exit with `/exit`. Seb prints the unique identifier and an exact command. The session list shows each conversation’s first question:
+
+```sh
+seb resume seb-00000000-0000-0000-0000-000000000000
+seb sessions
+```
+
+Use the identifier from your terminal. The example identifier does not select a real conversation.
+Seb saves conversations in the `sessions` folder beside its prompt-history file.
+`SEB_CONFIG_HOME` selects the normal configuration folder. `SEB_HISTORY_FILE` also changes the parent folder for sessions.
+Session files contain prompts, answers, tool inputs, tool results, and source evidence. Files use owner-only permissions.
+Seb does not save provider credentials or configuration in the session snapshot.
+Set `SEB_SESSIONS=off` to stop session saving. `SEB_HISTORY=off` disables both prompt history and session saving.
+These settings do not delete existing files. Delete a session JSON file to remove that conversation after closing it.
+
+Seb saves the question before requesting an answer. A failed answer leaves the question available for a natural retry after resume.
+A resumed conversation never executes an unfinished approval. Ask again if an approved action did not finish.
+One terminal can write a saved session at a time. A session larger than 32 MiB keeps its previous snapshot and shows a warning.
+A damaged snapshot stays untouched. The session list omits damaged files.
+The current model and NFL calendar come from the new session startup. Seb restores player, team, skill, and available league focus.
+Resume requires the same connected Sleeper account. It does not restore credentials or switch accounts.
+
+## Inspect tool details
+
+Click a purple tool row to expand its input and result. Click it again to collapse the details.
+A grouped row first expands into individual calls. Each call shows a short identifier and elapsed time.
+Click an individual call to inspect its details. Drag across text to select and copy it.
+The display limits each tool detail to 64,000 characters and labels any shortened result.

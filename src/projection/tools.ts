@@ -19,7 +19,7 @@ export function createProjectionTools(
   const service = new PlayerProjectionService(sleeper, nflverse, weather);
   return {
     projectLeagueMatchup: tool({
-      description: 'Calculate both roster subtotals for a selected league matchup. Reads the selected week starters, completed player scores, and remaining projections. Use the returned totals directly instead of adding player scores yourself. Missing defense scores and unsupported scoring rules remain explicit.',
+      description: 'Calculate both roster subtotals for a selected league matchup. Reads the selected week starters, completed player scores, and remaining projections. Use the returned totals directly instead of adding player scores yourself. Includes team D/ST and individual special teams. Missing scores and unsupported scoring rules remain explicit.',
       inputSchema: z.object({
         leagueId: z.string().trim().regex(/^\d+$/),
         rosterId: z.number().int().positive(),
@@ -29,7 +29,7 @@ export function createProjectionTools(
       execute: (request) => projectLeagueMatchup(sleeper, nflverse, service, request),
     }),
     projectPlayers: tool({
-      description: 'Project several QB, RB, WR, TE, or K players in one selected league. Use this for roster or matchup analysis instead of repeated projectPlayer calls. Each result includes uncertainty and eligibility. Defense and missing projections remain unavailable. This tool does not add news adjustments or infer missing scores.',
+      description: 'Project several QB, RB, WR, TE, K, or team D/ST starters in one selected league. Use this for roster or matchup analysis instead of repeated projectPlayer calls. Each result includes uncertainty and eligibility. Use a team name or code for D/ST. Missing projections remain unavailable. This tool does not add news adjustments or infer missing scores.',
       inputSchema: z.object({
         leagueId: z.string().trim().regex(/^\d+$/),
         playerNames: z.array(z.string().trim().min(2).max(100)).min(1).max(40),
@@ -49,7 +49,7 @@ export function createProjectionTools(
       inputSchema: z.object({
         leagueId: z.string().trim().regex(/^\d+$/),
         playerNames: z.array(z.string().trim().min(2).max(100)).min(2).max(6),
-        slot: z.enum(['QB', 'RB', 'WR', 'TE', 'FLEX', 'SUPER_FLEX', 'REC_FLEX', 'WRRB_FLEX']).optional(),
+        slot: z.enum(['QB', 'RB', 'WR', 'TE', 'FLEX', 'SUPER_FLEX', 'REC_FLEX', 'WRRB_FLEX', 'DEF', 'K']).optional(),
         season: seasonSchema, week: z.number().int().min(1).max(18),
       }),
       execute: async ({ playerNames, slot, ...request }) => compareProjections(await Promise.all(
@@ -58,7 +58,7 @@ export function createProjectionTools(
     }),
     projectPlayer: tool({
       description:
-        'Project one player with the selected Sleeper league scoring rules. The result includes expected points, an 80% target interval, evidence completeness, adjustments, and limits.',
+        'Project one player or team D/ST with the selected Sleeper league scoring rules. The result includes expected points, an 80% target interval, evidence completeness, adjustments, and limits.',
       inputSchema: z.object({
         leagueId: z.string().trim().regex(/^\d+$/),
         playerName: z.string().trim().min(2).max(100),

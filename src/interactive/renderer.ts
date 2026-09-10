@@ -29,7 +29,6 @@ import {
   renderAnalysisText,
   sanitizeTerminalText,
   sliceTerminalColumns,
-  sourceBadge,
   stripAnsi,
   terminalGraphemes,
   visibleLength,
@@ -40,7 +39,6 @@ import {
   type FantasyLeagueAction,
 } from '../sleeper/action-center.js';
 import {
-  experienceTitle,
   getContextualSuggestions,
   type SessionState,
 } from './session.js';
@@ -114,12 +112,15 @@ interface Section {
   kind: SectionKind;
   title: string;
   completedTool?: string;
+  details?: string;
+  identifier?: string;
   durationMs?: number;
   evidenceCount?: number;
   evidenceGroup?: string;
 }
 
 interface BodyRow {
+  toggleId?: string;
   sectionId?: string;
   sectionRowCount?: number;
   sectionRowIndex?: number;
@@ -240,6 +241,16 @@ export class SebTerminalRenderer {
     options.uiState.theme = parseThemeName(options.environment.SEB_THEME);
     options.uiState.iconMode = parseIconMode(options.environment.SEB_ICONS);
     this.theme = createTheme(options.environment, options.uiState);
+  }
+
+  private readonly expandedDetails = new Set<string>();
+
+  restoreMessages(messages: readonly UIMessage[]): void {
+    for (const message of messages) {
+      if (message.role === 'user') {
+        this.upsert({ id: message.id, kind: 'user', title: 'You', content: message.parts.filter(p => p.type === 'text').map(p => p.text).join('\n') });
+      } else if (message.role === 'assistant') this.renderMessage(message, true);
+    }
   }
 
   async readPrompt(options?: SebRendererSessionOptions): Promise<string | undefined> {
@@ -941,6 +952,8 @@ export class SebTerminalRenderer {
           id,
           kind: failed ? 'error' : 'tool',
           title: running ? 'Working' : 'Tool',
+          details: toolDetails(part),
+          identifier: toolIdentifier(part.input),
           ...(state === 'output-available' ? {
             completedTool: name,
             durationMs: this.toolDurations.get(id) ?? 0,
@@ -1225,6 +1238,16 @@ export class SebTerminalRenderer {
       return true;
     }
     this.stopSelectionDrag();
+    if (!selection.moved) {
+      const toggle = selection.bodyRows?.[selection.anchor.row - 1]?.toggleId;
+      if (toggle) {
+        const oldLength = selection.bodyRows!.length;
+        this.screenSelection = undefined;
+        if (this.expandedDetails.has(toggle)) this.expandedDetails.delete(toggle);
+        else this.expandedDetails.add(toggle);
+        this.scrollOffset = Math.max(0, this.scrollOffset + this.renderBodyRows(Math.max(1, this.options.output.columns ?? 80)).length - oldLength);
+      }
+    }
     if (!selection.moved || !this.copyScreenSelection()) {
       this.screenSelection = undefined;
       this.status = 'Ready';
@@ -1527,15 +1550,13 @@ export class SebTerminalRenderer {
   private renderHeader(width: number): string[] {
     const session = this.options.session;
     const activeModel = this.options.uiState.activeModel;
-    const recentSource = this.options.sources.list()[0];
-    const source = recentSource ? sourceBadge(recentSource) : 'NO SOURCE YET';
     const phase = session.seasonType?.toUpperCase() ?? 'NFL';
     const title = sanitizeTerminalText(
-      ` SEB ${this.options.version}  ${experienceTitle(session.mode).toUpperCase()}  ${session.season} ${phase}${session.week ? ` W${session.week}` : ''}`,
+      ` SEB ${this.options.version}  ${session.season} ${phase}${session.week ? ` W${session.week}` : ''}`,
     );
     const context = [
       ...(activeModel
-        ? [`MODEL ${activeModel.providerLabel.toUpperCase()} · ${activeModel.model}`]
+        ? [activeModel.model]
         : []),
       ...(session.user
         ? [`SLEEPER @${session.user} · ${session.leagues.length} LEAGUE${session.leagues.length === 1 ? '' : 'S'}`]
@@ -1550,7 +1571,6 @@ export class SebTerminalRenderer {
         ? [`WORKFLOW ${getSkill(session.skillId).title}`]
         : []),
       ...(session.accountError ? [`ACCOUNT WARNING ${session.accountError}`] : []),
-      `SOURCE ${source}`,
     ];
     const contextRows = packRows(context.map(sanitizeTerminalText), width - 1).map((row) =>
       paint(this.theme, 'dim', fit(` ${row}`, width)));
@@ -1609,15 +1629,30 @@ export class SebTerminalRenderer {
         const content = count > 1
           ? `${symbol(this.theme, 'done')} ${friendlyToolName(section.completedTool!)} ×${count} · ${formatElapsed(duration)} total`
           : section.content;
-        const lines = wrapTerminalLine(sanitizeTerminalText(content), Math.max(20, width - 2));
-        rows.push(...lines.map((line, sectionRowIndex) => ({
-          sectionId: section.id,
-          sectionRowCount: lines.length,
-          sectionRowIndex,
+        const toggleId = count > 1 ? `group:${section.id}` : section.id;
+        const expanded = this.expandedDetails.has(toggleId);
+        const lines = wrapTerminalLine(sanitizeTerminalText(`${expanded ? '▾' : '▸'} ${content}`), Math.max(20, width - 2));
+        rows.push(...lines.map((line, sectionRowIndex) => ({ toggleId,
+          sectionId: section.id, sectionRowCount: lines.length, sectionRowIndex,
           text: paint(this.theme, section.kind === 'error' ? 'danger' : 'tool', `  ${line}`),
         })));
+        if (expanded) {
+          for (const child of this.sections.slice(index, index + count)) {
+            if (count > 1) rows.push({ sectionId: child.id, toggleId: child.id,
+              text: paint(this.theme, 'tool', fit(`    ${this.expandedDetails.has(child.id) ? '▾' : '▸'} ${child.identifier || friendlyToolName(child.completedTool!)} · ${formatElapsed(child.durationMs ?? 0)}`, width)) });
+            if (count === 1 || this.expandedDetails.has(child.id)) {
+              for (const line of sanitizeTerminalText(child.details ?? child.content).split('\n')) {
+                rows.push(...wrapTerminalLine(line, Math.max(20, width - 6)).map(text => ({ sectionId: child.id, text: `      ${text}` })));
+              }
+            }
+          }
+        }
         index += count - 1;
         if (this.sections[index + 1]?.kind !== 'tool' && !this.theme.compact) rows.push({ text: '' });
+        continue;
+      }
+      if (section.kind === 'reasoning' && !this.expandedDetails.has(section.id)) {
+        rows.push({ sectionId: section.id, toggleId: section.id, text: paint(this.theme, 'tool', fit(`  ▸ ${sanitizeTerminalText(section.title)} · ${sanitizeTerminalText(section.content.split('\n')[0] ?? '')}`, width)) });
         continue;
       }
       const color = section.kind === 'reasoning' ? 'dim' : section.kind === 'error' ? 'danger' : section.kind === 'tool' ? 'tool' : section.kind === 'assistant' ? 'assistant' : 'accent';
@@ -1638,6 +1673,7 @@ export class SebTerminalRenderer {
         sectionId: section.id,
         sectionRowCount: lines.length,
         sectionRowIndex,
+        ...(section.kind === 'reasoning' && sectionRowIndex === 0 ? { toggleId: section.id } : {}),
         text,
       })));
     }
@@ -1668,9 +1704,6 @@ export class SebTerminalRenderer {
     const promptLines = this.overlay === 'none'
       ? renderEditor(this.editor, width - 4, this.theme, maximumPromptRows)
       : [];
-    if (this.ticker && this.overlay === 'none' && !this.editor.text()) {
-      promptLines[0] += paint(this.theme, 'dim', ' Type your next prompt');
-    }
     const status = this.overlay !== 'none'
       ? 'Panel open · PgUp/PgDn or the mouse wheel scrolls · Escape closes'
       : this.ticker && this.editor.text()
@@ -1718,18 +1751,11 @@ export class SebTerminalRenderer {
     const attention = homeFantasyActions(session);
     const visibleAttention = attention.slice(0, 2);
     const remainingAttention = attention.length - visibleAttention.length;
-    const fantasy = session.user
-      ? session.accountError
-        ? `Connected as @${session.user}. Refresh warning: ${session.accountError}`
-        : `Connected as @${session.user} with ${session.leagues.length} discovered league${session.leagues.length === 1 ? '' : 's'}.`
-      : 'Optional. Run /connect <Sleeper username> once for automatic league context.';
     const experienceRow = (title: string, description: string): string => fit(
       `${paint(this.theme, 'accent', title.padEnd(12))}${sanitizeTerminalText(description)}`,
       width,
     );
     return [
-      '',
-      fit(paint(this.theme, 'assistant', `${symbol(this.theme, 'assistant')} Ask naturally. Seb selects the current NFL week and the right data.`), width),
       '',
       ...(session.user
         ? [
@@ -1754,11 +1780,10 @@ export class SebTerminalRenderer {
             '',
           ]
         : []),
-      experienceRow('EXPLORE', 'Players, teams, statistics, schedules, and verified news.'),
-      experienceRow('MY FANTASY', fantasy),
-      experienceRow('ANALYZE', 'Compare players with matchup, usage, roster, news, and weather.'),
+      experienceRow('EXPLORE', 'Player information · Team information · News'),
+      experienceRow('MY FANTASY', 'Lineup review · Waivers · Matchup forecast'),
+      experienceRow('ANALYZE', 'Start or sit · Trade review · Projections'),
       '',
-      paint(this.theme, 'dim', fit('Use a numbered action below, or type any question.', width)),
     ];
   }
 
@@ -2145,4 +2170,17 @@ function promptWithoutModelConfigurationArguments(prompt: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function toolIdentifier(input: unknown): string {
+  if (!input || typeof input !== 'object') return '';
+  const values = input as Record<string, unknown>;
+  return ['playerName', 'playerNames', 'team', 'leagueId', 'query', 'url', 'season', 'week', 'rosterId']
+    .filter(key => values[key] !== undefined).slice(0, 3)
+    .map(key => `${key}: ${String(values[key])}`).join(' · ');
+}
+function toolDetails(part: unknown): string {
+  const value = part as Record<string, unknown>;
+  const text = JSON.stringify({ input: value.input, output: value.output, error: value.errorText, state: value.state }, null, 2) ?? '';
+  return text.length > 64000 ? `${text.slice(0, 64000)}\n[Display limited to 64,000 characters.]` : text;
 }

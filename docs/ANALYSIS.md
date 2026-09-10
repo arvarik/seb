@@ -372,7 +372,9 @@ Large machine-learning models and causal player claims remain outside this imple
 
 ## Missing projections
 
-The player model supports QB, RB, WR, TE, and K scoring. It does not project team defenses or individual defenders.
+The player model supports QB, RB, WR, TE, and K scoring. A separate model supports team D/ST. Individual defender projections remain unavailable.
+
+See [Defense and special teams](DEFENSE_AND_SPECIAL_TEAMS.md) for scoring rules, the forecast method, and benchmark results.
 
 Seb reports these positions as unavailable. It does not use zero as a replacement.
 
@@ -386,7 +388,7 @@ Weekly data does not separate player special-teams forced fumbles and recoveries
 A matchup subtotal excludes missing projections. It does not represent a complete final score.
 
 `projectLeagueMatchup` calculates both sides from the selected week's starting lineups.
-It uses verified completed individual scores, including completed defenses, and projects the remaining supported players.
+It uses verified completed individual scores, including completed defenses, and projects the remaining supported players and team defenses.
 It excludes bench players, missing scores, unverified in-progress outcomes, and historical-only baselines.
 The tool returns completed points, remaining projected points, and their calculated subtotal for each roster.
 It keeps commissioner score overrides separate. It does not calculate a win probability.

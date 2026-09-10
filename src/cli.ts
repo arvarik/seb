@@ -1,3 +1,4 @@
+import { SessionStore, sessionsEnabled } from './interactive/sessions.js';
 import { TerminalTextSanitizer, sanitizeTerminalText } from './terminal-text.js';
 import { completedLearningWeek } from './learning/completed-week.js';
 import { DEFAULT_PROJECTION_PARAMETERS } from './projection/statistics.js';
@@ -372,6 +373,11 @@ export async function runCli(
       }
       return 0;
     }
+    case 'sessions': {
+      const saved = await new SessionStore(environment).list();
+      streams.stdout.write(saved.length ? saved.map(s => `${s.id}  ${s.updatedAt}\n  ${sanitizeTerminalText(s.title)}`).join('\n') + '\n' : 'No saved sessions.\n');
+      return 0;
+    }
     case 'chat':
       await startInteractiveChat(command, streams, environment);
       return 0;
@@ -454,6 +460,10 @@ async function startInteractiveChat(
     );
   }
 
+  if (command.resumeId) {
+    if (!sessionsEnabled(environment)) throw new CliUsageError('Session saving is disabled. Enable SEB_SESSIONS and SEB_HISTORY to resume.');
+    await new SessionStore(environment).load(command.resumeId);
+  }
   const selection = await selectModels(
     environment,
     command.model,
@@ -499,6 +509,7 @@ async function startInteractiveChat(
   const provider = activeModelProvider.provider;
   const providerLabel = MODEL_PROVIDER_LABELS[provider];
   await runSebInteractiveTui({
+    ...(command.resumeId ? { resumeId: command.resumeId } : {}),
     transport: new SebInteractiveTransport({
       agent,
       doctor: (offline) => runDoctor({

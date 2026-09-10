@@ -6,6 +6,16 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-09-10
+
+- Add scoring-aware D/ST forecasts from completed NFL plays and official weekly team totals.
+- Separate defense, team special teams, and individual special teams. Apply points-allowed exclusions and net-yardage tiers.
+- Blend team and opponent outcomes with NFL averages. Shrink rare touchdowns and disclose uncalibrated forecast ranges.
+- Add a reproducible defense benchmark and document scoring sources, assumptions, and accuracy limits.
+- Expand purple tool rows on click. Expand grouped calls into identifiable rows, then open each call for details.
+- Save private conversations with stable identifiers. Print a resume command on exit and add `seb resume <id>` and `seb sessions`.
+- Preserve failed questions, completed tool results, and answer evidence across resumes. Never replay unfinished approvals.
+- Simplify the header and home page. Show the model name and three rows of skill names. Remove redundant prompt instructions.
 - Preserve active-turn research and provider signatures across long tool conversations.
 - Raise the model-step limit to 32 and reserve a final answer with Gemini function calling explicitly disabled.
 - Add batch player projections with bounded concurrency and explicit missing-player results.
@@ -13,7 +23,7 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Calculate kicker projections from made, missed, and blocked kicks, distance ranges, and yardage rules.
 - Fix punctuation and suffix matching, recover from missing current-season statistics, and exclude current injuries and teams from historical forecasts.
 - Map nflverse Rams team codes consistently so schedules, opponents, and weather remain available.
-- Recognize defense names without searching unrelated players. Keep unsupported defense scores and special-teams rules explicit.
+- Resolve defense names without searching unrelated players. Keep missing scores and unsupported scoring rules explicit.
 - Mark partial scoring and historical baselines so batch results cannot claim complete weekly scores.
 - Reject duplicate opponent data and invalid comparison ranges. Explain invalid local learning data without exposing its contents.
 - Keep failed questions for natural retries without resending partial answers or approval state.

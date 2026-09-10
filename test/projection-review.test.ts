@@ -65,6 +65,7 @@ describe('kicker scoring audit', () => {
 function serviceFixture(options: { status?: number; learning?: LearningStore; history?: boolean } = {}) {
   const request = { leagueId: '123', playerName: 'Example Runner', season: 2026, week: 2 };
   const nflverse = {
+    getDefenseData: vi.fn(async () => ({ weeks: [], specialTeams: {} })),
     getPlayerWeeklyStats: vi.fn(async ({ season }: { season: number }) => {
       if (season === 2026) throw new NflverseApiError('private source error', options.status ?? 404, 'https://example.com/stats');
       return [1, 2, 3].map((week) => stat({ week }));
@@ -83,8 +84,9 @@ function serviceFixture(options: { status?: number; learning?: LearningStore; hi
 describe('projection service recovery and evidence', () => {
   it.each(['DET', 'JAX', 'PHI', 'NE', 'Detroit Lions'])('recognizes %s as a defense instead of a partial player name', async (playerName) => {
     const { service, request, nflverse } = serviceFixture();
-    await expect(service.project({ ...request, playerName })).rejects.toThrow('Team defense projections are unavailable');
+    await expect(service.project({ ...request, playerName })).rejects.toThrow('needs completed team games');
     expect(nflverse.getPlayerWeeklyStats).not.toHaveBeenCalled();
+    expect(nflverse.getDefenseData).toHaveBeenCalled();
   });
   it('falls back to prior-season history when the new-season file does not exist', async () => {
     const { service, request, nflverse } = serviceFixture();

@@ -619,6 +619,7 @@ seb sessions
 Use the identifier from your terminal. The example identifier does not select a real conversation.
 Seb saves conversations in the `sessions` folder beside its prompt-history file.
 `SEB_CONFIG_HOME` selects the normal configuration folder. `SEB_HISTORY_FILE` also changes the parent folder for sessions.
+The Docker image sets `SEB_CONFIG_HOME=/root/.seb` to use its mounted persistent volume.
 Session files contain prompts, answers, tool inputs, tool results, and source evidence. Files use owner-only permissions.
 Seb does not save provider credentials or configuration in the session snapshot.
 Set `SEB_SESSIONS=off` to stop session saving. `SEB_HISTORY=off` disables both prompt history and session saving.

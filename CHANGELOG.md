@@ -13,6 +13,7 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Blend team and opponent outcomes with NFL averages. Shrink rare touchdowns and disclose uncalibrated forecast ranges.
 - Add a reproducible defense benchmark and document scoring sources, assumptions, and accuracy limits.
 - Expand purple tool rows on click. Expand grouped calls into identifiable rows, then open each call for details.
+- Align the Docker configuration folder with its persistent volume so profiles and resumed conversations survive container replacement.
 - Save private conversations with stable identifiers. Print a resume command on exit and add `seb resume <id>` and `seb sessions`.
 - Preserve failed questions, completed tool results, and answer evidence across resumes. Never replay unfinished approvals.
 - Simplify the header and home page. Show the model name and three rows of skill names. Remove redundant prompt instructions.

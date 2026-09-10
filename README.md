@@ -183,6 +183,7 @@ Use `seb configure` to edit Gemini credentials, models, Judgment settings, and o
 See [Persistent configuration](docs/CONFIGURATION.md) for storage, security, and override rules.
 Use your own organization ID. Seb sends traces to the `seb` project in that organization.
 Seb loads the environment before it initializes tracing once per process.
+Every span in a traced request carries the same `judgment.session_id`, including model calls, tool calls, and streaming work.
 Missing credentials or initialization failures produce a warning, and Seb continues without tracing.
 
 **Enabling tracing exports conversation content.** Judgment receives prompts, answers, model calls, tool inputs and outputs, and error information.

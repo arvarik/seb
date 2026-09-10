@@ -26,6 +26,7 @@ The request therefore did not explicitly disable further function calls.
 | Research limit ended without an answer | Allow 32 model steps and reserve the final step for an answer. Keep function declarations so Gemini receives `NONE`. | `gemini-model.test.ts`, `agent-harness.test.ts` |
 | Early tool results disappeared | Preserve the active turn and its provider signatures. Prune older conversation history only. | `ai-sdk-features.test.ts`, `gemini-model.test.ts` |
 | Repeated single-player projections consumed steps | Project up to 40 players in a batch with four concurrent requests. Preserve successful results when one player lacks data. | `projection-batch.test.ts` |
+| The model added a live roster subtotal incorrectly | Calculate both rosters from verified weekly starters. Add completed and projected points exactly once. Keep missing and partial scores explicit. | `projection-matchup.test.ts` |
 | Kicking data disappeared during parsing | Preserve kicking counts and distance lists. Calculate league points from those fields. | `nflverse-client.test.ts`, `projection-review.test.ts` |
 | New distance rules blocked offensive projections | Recognize 50–59 and 60-plus kicking rules alongside the older 50-plus rule. | `projection-review.test.ts` |
 | Name punctuation and suffixes hid player history | Use the same player-name normalization for source searches and identity resolution. | `nflverse-client.test.ts`, `sleeper-client.test.ts` |
@@ -75,11 +76,12 @@ Current news supplements the estimate and does not change the numerical model au
 
 ## Verification
 
-- `npm run check`: 77 files and 1,072 tests passed.
-- `npm run test:coverage`: 1,072 tests passed. All coverage thresholds passed.
+- `npm run check`: 78 files and 1,085 tests passed.
+- `npm run test:coverage`: 1,085 tests passed. All coverage thresholds passed.
 - `npm audit --omit=dev`: zero vulnerabilities.
 - `npm run doctor`: all required checks passed, including live source access, Gemini local-tool continuation, and grounded search.
 - A real terminal smoke test verified typing, queuing, follow-up submission, transcript retention, collapsed evidence, and normal exit.
+- Direct live matchup calculations verified all four roster subtotals, including a completed offensive player and a completed defense.
 
 The source checks establish calculation and integration behavior.
 They do not establish the accuracy of a future fantasy score.

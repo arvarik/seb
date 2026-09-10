@@ -13,6 +13,7 @@ The language model explains these calculations. It does not invent the numerical
 | Find waiver targets | `rankWaiverTargets` | League availability, production, roster need, demand, and budget constraints |
 | Compare a trade | `analyzeTradeImpact` | Best legal offensive lineup before and after the trade |
 | Project several starters | `projectPlayers` | Up to 40 names, league scoring, explicit missing projections |
+| Predict matchup scores | `projectLeagueMatchup` | Verified starters, completed points, calculated subtotals, and missing scoring |
 | Compare fantasy rosters | `predictMatchup` | Completed roster scores and a stated probability heuristic |
 | Estimate playoff qualification | `simulatePlayoffOdds` | Repeated simulations against the actual remaining fantasy schedule |
 | Review season learning | `inspectLearning` | Saved validation results and public player or team summaries |
@@ -383,5 +384,12 @@ The batch reports `complete: true` only when every result has a complete weekly 
 Weekly data does not separate player special-teams forced fumbles and recoveries. The active `st_ff` and `st_fum_rec` rules remain explicit omissions.
 
 A matchup subtotal excludes missing projections. It does not represent a complete final score.
+
+`projectLeagueMatchup` calculates both sides from the selected week's starting lineups.
+It uses verified completed individual scores, including completed defenses, and projects the remaining supported players.
+It excludes bench players, missing scores, unverified in-progress outcomes, and historical-only baselines.
+The tool returns completed points, remaining projected points, and their calculated subtotal for each roster.
+It keeps commissioner score overrides separate. It does not calculate a win probability.
+Answers must use these returned totals without adding the player scores again.
 
 The historical roster-score model needs at least two completed scores per roster. Week 1 analysis uses supported player projections from the prior season.

@@ -9,6 +9,7 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Preserve active-turn research and provider signatures across long tool conversations.
 - Raise the model-step limit to 32 and reserve a final answer with Gemini function calling explicitly disabled.
 - Add batch player projections with bounded concurrency and explicit missing-player results.
+- Calculate matchup subtotals from verified weekly starters and completed scores instead of asking the model to add player points.
 - Calculate kicker projections from made, missed, and blocked kicks, distance ranges, and yardage rules.
 - Fix punctuation and suffix matching, recover from missing current-season statistics, and exclude current injuries and teams from historical forecasts.
 - Map nflverse Rams team codes consistently so schedules, opponents, and weather remain available.

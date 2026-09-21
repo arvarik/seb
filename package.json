@@ -34,11 +34,11 @@
     "version:check": "node scripts/check-version.mjs"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.49",
-    "@ai-sdk/google": "^4.0.64",
-    "@ai-sdk/openai": "^4.0.60",
-    "@ai-sdk/openai-compatible": "^3.0.44",
-    "@ai-sdk/otel": "1.0.94",
+    "@ai-sdk/anthropic": "^4.0.57",
+    "@ai-sdk/google": "^4.0.75",
+    "@ai-sdk/openai": "^4.0.70",
+    "@ai-sdk/openai-compatible": "^3.0.52",
+    "@ai-sdk/otel": "1.0.106",
     "@chat-adapter/discord": "^4.40.0",
     "@chat-adapter/slack": "^4.40.0",
     "@chat-adapter/state-memory": "^4.40.0",
@@ -50,20 +50,20 @@
     "chat": "^4.40.0",
     "cheerio": "^1.2.0",
     "csv-parse": "^7.0.2",
-    "hono": "^4.13.7",
+    "hono": "^4.13.8",
     "judgeval": "^1.3.3",
     "robots-parser": "^3.0.1",
     "string-width": "^8.2.2",
     "tsx": "^4.23.13",
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@ai-sdk/devtools": "^1.0.15",
+    "@ai-sdk/devtools": "^1.0.22",
     "@chat-adapter/tests": "^4.40.0",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.6.1",
     "@vitest/coverage-v8": "^4.1.11",
-    "oxlint": "^1.81.0",
+    "oxlint": "^1.83.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   },

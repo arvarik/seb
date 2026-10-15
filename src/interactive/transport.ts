@@ -1134,6 +1134,7 @@ export function decorateResponseStream(
     addStreamSubject(confirmed.team, teamCandidates);
   }
   let bufferedText = '';
+  let streamedDecision = false;
   let hasAnswerText = false;
   let answerId = `answer-${crypto.randomUUID()}`;
   let consumerCancelRecorded = false;
@@ -1269,6 +1270,7 @@ export function decorateResponseStream(
           }
           if (
             decisionRequested &&
+            !streamedDecision &&
             (completed || chunk.finishReason !== 'tool-calls')
           ) {
             const answer = completed
@@ -1318,8 +1320,26 @@ export function decorateResponseStream(
           decisionRequested &&
           (chunk.type === 'text-start' || chunk.type === 'text-delta' || chunk.type === 'text-end')
         ) {
-          if (chunk.type === 'text-delta') bufferedText += chunk.delta;
-          return;
+          const evidence = streamedDecision ? undefined : buildFreeformRecommendationEvidence({
+            question: recommendationQuestion,
+            sources: sources.list(),
+            toolResults,
+          });
+          if (
+            streamedDecision ||
+            (evidence !== undefined &&
+              (evidence.identity === 'resolved' || evidence.leagueScoring === 'present' || evidence.projection === 'eligible') &&
+              enforceFreeformRecommendation('', evidence).eligibility.outcome === 'allowed')
+          ) {
+            streamedDecision = true;
+            if (chunk.type === 'text-delta' && bufferedText) {
+              chunk = { ...chunk, delta: `${bufferedText}${chunk.delta}` };
+              bufferedText = '';
+            }
+          } else {
+            if (chunk.type === 'text-delta') bufferedText += chunk.delta;
+            return;
+          }
         }
         controller.enqueue(chunk);
       },

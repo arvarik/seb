@@ -67,6 +67,7 @@ import {
 } from './evaluation/nflverse-runner.js';
 import { serializeReplayReport } from './evaluation/serialization.js';
 import { generateShellCompletion } from './interactive/commands.js';
+import { friendlyToolName } from './interactive/presentation.js';
 import { SebInteractiveTransport } from './interactive/transport.js';
 import { runSebInteractiveTui } from './interactive/tui.js';
 import { InteractiveUiState } from './interactive/ui-state.js';
@@ -177,7 +178,7 @@ export async function runCli(
 
   switch (command.name) {
     case 'evaluate': {
-      const client = new NflverseClient({ database: false });
+      const client = new NflverseClient();
       completedLearningWeek(await client.getSchedule({ season: command.season, gameType: 'REG' }), command.season, command.throughWeek);
       const allRows = await client.getPlayerWeeklyStats({ season: command.season, seasonType: 'REG', throughWeek: command.throughWeek });
       const rows = command.positions ? allRows.filter((row) => command.positions!.includes(row.position)) : allRows;
@@ -193,7 +194,7 @@ export async function runCli(
     }
     case 'learn': {
       const scoring = command.leagueId
-        ? (await new SleeperClient({ database: false }).getLeague(command.leagueId)).scoring_settings
+        ? (await new SleeperClient().getLeague(command.leagueId)).scoring_settings
         : PPR_SCORING;
       const result = command.action === 'update'
         ? await new LearningService().update({ season: command.season, scoring,
@@ -671,10 +672,11 @@ async function runSetupWizard(
     username?: string;
   },
 ) {
+  const username = options.username ?? (environment.SEB_SLEEPER_USER?.trim() || (await store.load())?.sleeper?.username);
   return runFirstRunSetup({
     environment,
     store,
-    ...(options.username ? { username: options.username } : {}),
+    ...(username ? { username } : {}),
   });
 }
 
@@ -1024,8 +1026,17 @@ async function streamAnswer(
 
     for await (const part of observeUsageStreamErrors(observeCompletedModelStream(result.fullStream, signal, { onPartial: (warning) => { completionWarning = warning.message; } }), usageTelemetry)) {
         if (part.type === 'text-delta') {
-          if (decisionRequested) bufferedText += part.text;
-          else {
+          const evidence = decisionRequested ? buildFreeformRecommendationEvidence({
+            question: prompt,
+            sources: directSources.list(),
+            toolResults: decisionToolResults,
+          }) : undefined;
+          if (evidence && !(
+            (evidence.identity === 'resolved' || evidence.leagueScoring === 'present' || evidence.projection === 'eligible') &&
+            enforceFreeformRecommendation('', evidence).eligibility.outcome === 'allowed'
+          )) {
+            bufferedText += part.text;
+          } else {
             stopProgress();
             const text = terminalText.push(part.text);
             streams.stdout.write(text);
@@ -1037,7 +1048,7 @@ async function streamAnswer(
             toolName: part.toolName,
           });
           if (progressEnabled && streams.stderr.isTTY === true) {
-            streams.stderr.write(`\r\x1b[2K• ${describeTool(part.toolName)}\n`);
+            streams.stderr.write(`\r\x1b[2K• ${friendlyToolName(part.toolName)}\n`);
           }
         } else if (part.type === 'source' && part.sourceType === 'url') {
           const url = normalizeWebUrl(part.url);
@@ -1093,7 +1104,7 @@ async function streamAnswer(
     }
   }
 
-  if (decisionRequested) {
+  if (decisionRequested && (!wroteText || bufferedText)) {
     if (!bufferedText.trim()) {
       throw new Error('The model provider returned an empty answer. Try again.');
     }
@@ -1242,38 +1253,6 @@ function modelErrorContext(modelProvider: ResolvedModelProvider): {
         providerLabel: MODEL_PROVIDER_LABELS['openai-compatible'],
       };
   }
-}
-
-function describeTool(toolName: string): string {
-  const descriptions: Record<string, string> = {
-    analyzeLeague: 'Analyzing the league',
-    findPlayers: 'Finding Sleeper players',
-    getLeagueMatchups: 'Reading league matchups',
-    getLeagueTeams: 'Read league team names',
-    getLeagueOverview: 'Reading the league',
-    getLeagueTransactions: 'Reading league transactions',
-    getNflState: 'Reading the current NFL state',
-    getNflSchedule: 'Reading the nflverse schedule',
-    getPlayerWeeklyStats: 'Reading nflverse weekly statistics',
-    comparePlayerTrends: 'Comparing player usage trends',
-    getTeamPerformance: 'Analyzing NFL team performance',
-    getDefenseVsPosition: 'Measuring defense by position',
-    getStadiumForecast: 'Reading the stadium forecast',
-    getGameWeather: 'Assessing kickoff weather',
-    getWeekWeather: 'Screening weekly weather risk',
-    getGameEnvironment: 'Analyzing the game environment',
-    getRosterPlayers: 'Reading roster players',
-    getTrendingPlayers: 'Reading player trends',
-    getUserLeagues: 'Reading the user leagues',
-    readNewsUrl: 'Reading the supplied web page',
-    searchFirstClassNews: 'Searching first-class news sources',
-    searchCurrentNews: 'Searching current news',
-    predictMatchup: 'Estimating the matchup',
-    projectPlayer: 'Building a scoring-aware projection',
-    rankWaiverTargets: 'Ranking waiver and FAAB targets',
-    analyzeTradeImpact: 'Comparing trade impact',
-  };
-  return descriptions[toolName] ?? `Running ${toolName}`;
 }
 
 function createDataClients(

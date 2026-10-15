@@ -50,6 +50,23 @@ describe('tool detail disclosure', () => {
     expect(frame()).toContain('Then verify the league scoring.');
     terminal.input.type('/exit\r'); await prompt; renderer.close();
   });
+  it('omits bogus durations on restored tools and keeps expanded details visible at the bottom of a 24-row terminal', async () => {
+    const terminal = createTerminal(); terminal.output.rows = 24;
+    const renderer = createRenderer(terminal);
+    renderer.restoreMessages([{ id: 'restored', role: 'assistant', parts: [
+      { type: 'text', text: Array.from({ length: 16 }, (_, i) => `Context line ${i + 1}`).join('\n') },
+      { type: 'dynamic-tool', toolName: 'compareStartSit', toolCallId: 't1', state: 'output-available', input: { playerNames: ['A', 'B'] }, output: { edge: 'Player A' } },
+    ] }]);
+    const prompt = renderer.readPrompt();
+    const frame = () => stripAnsi(terminal.output.text().split('\x1b[H').at(-1) ?? '');
+    expect(frame()).toContain('✓ Compare start or sit options');
+    expect(frame()).not.toMatch(/Compare start or sit options · \d+/u);
+    const row = frame().split('\r\n').findIndex(line => line.includes('Compare start or sit options'));
+    expect(row).toBeGreaterThanOrEqual(0);
+    terminal.input.type(`\x1b[<0;4;${row + 1}M\x1b[<0;4;${row + 1}m`);
+    expect(frame()).toContain('"edge": "Player A"');
+    terminal.input.type('/exit\r'); await prompt; renderer.close();
+  });
 });
 
 describe('SebTerminalRenderer prompt input', () => {

@@ -94,6 +94,7 @@ const SCORING_TOOLS = new Set([
   'analyzeLeague',
   'getLeagueOverview',
   'predictMatchup',
+  'projectLeagueMatchup',
   'projectPlayer',
   'rankWaiverTargets',
   'analyzeTradeImpact',
@@ -465,6 +466,7 @@ function leagueScoringEvidenceState(
   const scoringResults = toolResults.filter((result) =>
     SCORING_TOOLS.has(result.toolName) &&
     (result.toolName === 'predictMatchup' ||
+      (result.toolName === 'projectLeagueMatchup' && hasMatchupScoring(result.output)) ||
       (result.toolName === 'projectPlayer' && hasProjectionScoring(result.output)) ||
       (result.toolName === 'rankWaiverTargets' && hasWaiverScoring(result.output)) ||
       (result.toolName === 'analyzeTradeImpact' && hasTradeScoring(result.output)) ||
@@ -584,10 +586,21 @@ function hasTradeScoring(value: unknown): boolean {
     isEmptyArray(scoring?.ignoredSettings);
 }
 
-function isIndividualPlayerTool(toolName: string): boolean {
+function hasMatchupScoring(value: unknown): boolean {
+  const rosters = asRecord(value)?.rosters;
+  return Array.isArray(rosters) && rosters.length > 0 &&
+    rosters.every((roster) => isEmptyArray(asRecord(roster)?.ignoredSettings ?? []));
+}
+
+function isIndividualPlayerTool(toolName: string, hasQuestionMatch = false): boolean {
   return toolName === 'findPlayers' ||
     toolName === 'projectPlayer' ||
-    toolName === 'resolvePlayerIdentity';
+    toolName === 'resolvePlayerIdentity' ||
+    (hasQuestionMatch && (
+      toolName === 'getRosterPlayers' ||
+      toolName === 'rankWaiverTargets' ||
+      toolName === 'getTrendingPlayers'
+    ));
 }
 
 function individualPlayerResultMatchesQuestion(
@@ -605,13 +618,18 @@ function relevantPlayerSubjects(
   toolResults: readonly RecommendationToolResult[],
   question: string,
 ): string[] {
+  const hasQuestionMatch = toolResults.some((result) =>
+    PLAYER_IDENTITY_TOOLS.has(result.toolName) &&
+    [...toolInputPlayerSubjects(result), ...playerSubjects([result.output])]
+      .some((subject) => textMentionsSubject(question, subject)),
+  );
   const subjects = toolResults.flatMap((result) => {
     if (!PLAYER_IDENTITY_TOOLS.has(result.toolName)) return [];
     const candidates = [
       ...toolInputPlayerSubjects(result),
       ...playerSubjects([result.output]),
     ];
-    return isIndividualPlayerTool(result.toolName)
+    return isIndividualPlayerTool(result.toolName, hasQuestionMatch)
       ? candidates.filter((subject) => textMentionsSubject(question, subject))
       : candidates;
   });
@@ -752,6 +770,9 @@ function collectLeagueIds(
   for (const [key, item] of Object.entries(record)) {
     if ((key === 'leagueId' || key === 'league_id') && typeof item === 'string') {
       output.push(item);
+    } else if (key === 'league' && typeof asRecord(item)?.id === 'string') {
+      output.push(asRecord(item)!.id as string);
+      collectLeagueIds(item, output, traversal, depth + 1);
     } else if (typeof item === 'object' && item !== null) {
       collectLeagueIds(item, output, traversal, depth + 1);
     }

@@ -16,8 +16,10 @@ import { GameWeatherService } from '../weather/game-weather.js';
 import { WeatherClient } from '../weather/client.js';
 import {
   projectPlayer,
+  scorePlayerWeek,
   type ScoringAwarePlayerProjection,
 } from './player-projection.js';
+import { DEFAULT_PROJECTION_PARAMETERS, rollingResiduals, type ProjectionParameters } from './statistics.js';
 
 export interface PlayerProjectionRequest {
   analysisSeason?: number;
@@ -134,8 +136,9 @@ export class PlayerProjectionService {
     }
     const player = historicalTarget ? null : resolveSleeperPlayer(playerMatches, latest.playerDisplayName, latest.position);
     const currentTeam = player?.team?.toUpperCase() ?? latest.team;
+    const hasSpecialTeams = PLAYER_SPECIAL_TEAMS_SETTINGS.some(k => Number(league.scoring_settings[k] ?? 0) !== 0);
 
-    const [schedule, positionRows] = await Promise.all([
+    const [schedule, positionRows, defenseData, { overrides, learned }] = await Promise.all([
       this.nflverse.getSchedule({
         gameType: 'REG',
         season: request.season,
@@ -148,12 +151,13 @@ export class PlayerProjectionService {
         seasonType: 'REG',
         throughWeek,
       }),
+      hasSpecialTeams ? this.nflverse.getDefenseData(analysisSeason) : Promise.resolve(null),
+      this.learningContext(request, analysisSeason, throughWeek, latest.position, league.scoring_settings),
     ]);
-    if (PLAYER_SPECIAL_TEAMS_SETTINGS.some(k => Number(league.scoring_settings[k] ?? 0) !== 0)) {
-      const data = await this.nflverse.getDefenseData(analysisSeason);
+    if (defenseData) {
       try {
-        rows = enrichSpecialTeams(rows, data);
-        positionRows.splice(0, positionRows.length, ...enrichSpecialTeams(positionRows, data));
+        rows = enrichSpecialTeams(rows, defenseData);
+        positionRows.splice(0, positionRows.length, ...enrichSpecialTeams(positionRows, defenseData));
       } catch { throw new ResearchDataError('Special-teams data lacks a completed player game.'); }
     }
     if (schedule.length > 1) throw new ResearchDataError('The schedule contains multiple games for this team and week.');
@@ -167,10 +171,20 @@ export class PlayerProjectionService {
           return null;
         })
       : null;
-
-    const { overrides, learned } = await this.learningContext(request, analysisSeason, throughWeek, latest.position, league.scoring_settings);
     throwIfRequestAborted();
     const parameters = overrides?.enabled === false ? undefined : overrides?.parameters ?? learned?.parameters;
+    const eligiblePositionRows = positionRows.filter(
+      (row) => row.season === analysisSeason && row.seasonType === 'REG' && row.week <= throughWeek,
+    );
+    const learnedResiduals = learned && !overrides?.parameters ? learned.residuals[latest.position] : undefined;
+    const pooledResiduals = !learnedResiduals || learnedResiduals.length < 20
+      ? pooledPositionResiduals(eligiblePositionRows, league.scoring_settings, parameters)
+      : undefined;
+    const calibrationResiduals = learnedResiduals && learnedResiduals.length >= 20
+      ? learnedResiduals
+      : pooledResiduals && pooledResiduals.length >= 20
+        ? pooledResiduals
+        : learnedResiduals;
     return projectPlayer({
       projectionSeason: request.season,
       scheduled: Boolean(game),
@@ -178,10 +192,10 @@ export class PlayerProjectionService {
       currentProfileKnown: Boolean(player?.team && player.active !== false),
       gameStarted: Boolean(game && (easternKickoff(game.gameDate, game.gameTime)?.getTime() ?? Infinity) <= Date.now()),
       manualOverride: Boolean(overrides?.parameters) && overrides?.enabled !== false,
-      priorMean: positionPrior(positionRows.filter((row) => row.season === analysisSeason && row.seasonType === 'REG' && row.week <= throughWeek), latest.position, latest.playerId, league.scoring_settings),
+      priorMean: positionPrior(eligiblePositionRows, latest.position, latest.playerId, league.scoring_settings),
       ...(parameters ? { parameters } : {}),
+      ...(calibrationResiduals ? { calibrationResiduals } : {}),
       ...(learned && !overrides?.parameters ? {
-        calibrationResiduals: learned.residuals[latest.position] ?? [],
         learningThroughWeek: learned.throughWeek,
         learningSeason: learned.season,
       } : {}),
@@ -273,4 +287,33 @@ function normalizedPosition(value: string): 'QB' | 'RB' | 'WR' | 'TE' | 'K' {
     return normalized as 'QB' | 'RB' | 'WR' | 'TE' | 'K';
   }
   throw new ResearchDataError(`Seb cannot project the ${value} position.`);
+}
+
+function pooledPositionResiduals(
+  rows: readonly NflversePlayerWeek[],
+  scoring: import('../sleeper/types.js').SleeperSettings,
+  parameters: ProjectionParameters = DEFAULT_PROJECTION_PARAMETERS,
+): number[] {
+  const byPlayer = new Map<string, NflversePlayerWeek[]>();
+  for (const row of rows) {
+    const group = byPlayer.get(row.playerId) ?? [];
+    group.push(row);
+    byPlayer.set(row.playerId, group);
+  }
+  const residuals: number[] = [];
+  for (const group of byPlayer.values()) {
+    if (group.length < 4) continue;
+    const ordered = [...group].sort((a, b) => a.week - b.week);
+    if (new Set(ordered.map((r) => r.week)).size !== ordered.length) continue;
+    try {
+      const scores = ordered.map((row) => scorePlayerWeek(row, scoring));
+      for (const residual of rollingResiduals(scores, parameters)) {
+        residuals.push(residual);
+        if (residuals.length >= 200) return residuals;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return residuals;
 }

@@ -558,7 +558,7 @@ export class NewsClient {
       {
         schemaVersion: SOURCE_SCHEMA_VERSION,
         staleIfErrorMs: 7 * DAY_MS,
-        ttlMs: 0,
+        ttlMs: 60_000,
         validate: (value) => articleMetadataSchema.parse(value),
       },
       this,
@@ -956,8 +956,8 @@ function sourceAllowsArticle(
 }
 
 function sourceTtl(source: NewsSourceDefinition): number {
-  if (source.id === 'cbs-nfl' || source.id === 'pff') return 0;
-  if (source.id === 'nfl') return 5_000;
+  if (source.id === 'cbs-nfl' || source.id === 'pff') return 60_000;
+  if (source.id === 'nfl') return 30_000;
   if (source.id === 'fox-nfl') return 20 * MINUTE_MS;
   if (source.id.startsWith('fantasypros-')) return 10 * MINUTE_MS;
   if (source.id === 'profootballtalk' || source.id === 'rotoworld-player-news') {

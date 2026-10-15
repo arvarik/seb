@@ -1,6 +1,7 @@
 import { LearningStore } from '../learning/store.js';
 import { resolveCompletedAnalysisWindow } from '../analysis/window.js';
 import { NflverseClient } from '../nflverse/client.js';
+import { enrichSpecialTeams, PLAYER_SPECIAL_TEAMS_SETTINGS } from '../nflverse/defense.js';
 import type { NflversePlayerWeek } from '../nflverse/types.js';
 import { SleeperClient } from '../sleeper/client.js';
 import {
@@ -56,6 +57,9 @@ export class WaiverAssistantService {
       analysisSeason -= 1;
       throughWeek = 18;
       rows = await this.readStats(analysisSeason, throughWeek);
+    }
+    if (PLAYER_SPECIAL_TEAMS_SETTINGS.some((k) => Number(league.scoring_settings[k] ?? 0) !== 0) && typeof this.nflverse.getDefenseData === 'function') {
+      rows = enrichSpecialTeams(rows, await this.nflverse.getDefenseData(analysisSeason));
     }
     const learned = this.learning ? await this.learning.context(analysisSeason, throughWeek, league.scoring_settings) : null;
     return rankWaiverTargets({

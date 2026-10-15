@@ -59,7 +59,7 @@ describe('deterministic matchup totals', () => {
   });
   it('does not mistake in-progress points for a completed final score', async () => {
     const f = fixture(); f.schedule[1]!.gameDate = '2026-09-10'; f.schedule[1]!.gameTime = '13:00';
-    expect((await f.run()).rosters[0]).toMatchObject({ completedPoints: 0, projectedSubtotal: 10.55, complete: false });
+    expect((await f.run()).rosters[0]).toMatchObject({ completedPoints: 0, inProgressPoints: 7.25, projectedSubtotal: 10.55, complete: false });
   });
   it('keeps a completed player unavailable when the individual score is missing', async () => {
     const f = fixture(); f.sides[0]!.players_points = {};

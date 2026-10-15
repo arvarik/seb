@@ -44,7 +44,7 @@ import { createSystemTools } from './system/tools.js';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash';
 export const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-3.6-flash';
-export const MAX_AGENT_STEPS = 32;
+export const MAX_AGENT_STEPS = 16;
 const RESEARCH_CONTEXT_CHARACTER_LIMIT = 200_000;
 const RUNTIME_CONTEXT_CHARACTER_LIMIT = 24_000;
 const RUNTIME_CONTEXT_KEY_PRIORITY = [
@@ -113,13 +113,16 @@ export interface FantasyFootballAgentOptions {
 export function createFantasyFootballAgent(
   options: FantasyFootballAgentOptions,
 ) {
-  const { languageModel, newsToolMode, tools } = createAgentComponents(options);
+  const { activeProvider, languageModel, newsToolMode, tools } =
+    createAgentComponents(options);
+  let callInstructions = runtimeInstructions(options, newsToolMode);
 
   return new ToolLoopAgent({
     model: languageModel,
-    instructions: runtimeInstructions(options, newsToolMode),
+    instructions: callInstructions,
     prepareCall: ({ options: _options, messages, prompt, ...call }) => {
       const runtimeContext = runtimeContextMessage(options.getRuntimeContext?.());
+      callInstructions = runtimeInstructions(options, newsToolMode);
       return {
         ...call,
         ...(messages
@@ -132,13 +135,33 @@ export function createFantasyFootballAgent(
                 : combineRuntimeContext(runtimeContext, prompt),
             }
           : {}),
-        instructions: runtimeInstructions(options, newsToolMode),
+        instructions: callInstructions,
       };
     },
     prepareStep: ({ messages, stepNumber }) => {
       const prepared = pruneFantasyMessages(messages);
       const conclude = stepNumber >= MAX_AGENT_STEPS - 1 ||
         JSON.stringify(prepared).length >= RESEARCH_CONTEXT_CHARACTER_LIMIT;
+      if (conclude) {
+        prepared.push({
+          role: 'user',
+          content:
+            "The research budget is complete. Answer the user's question now using the research already returned. Do not request more tools. State any missing evidence and give only estimates that the available evidence supports.",
+        });
+      }
+      if (activeProvider === 'anthropic' && prepared.length > 0) {
+        const last = prepared[prepared.length - 1]!;
+        prepared[prepared.length - 1] = {
+          ...last,
+          providerOptions: {
+            ...last.providerOptions,
+            anthropic: {
+              ...last.providerOptions?.anthropic,
+              cacheControl: { type: 'ephemeral' },
+            },
+          },
+        };
+      }
       return {
         messages: prepared,
         ...(conclude ? {
@@ -147,7 +170,6 @@ export function createFantasyFootballAgent(
           activeTools: (Object.keys(tools) as Array<keyof typeof tools>)
             .filter((name) => tools[name]?.type !== 'provider'),
           toolChoice: 'none' as const,
-          instructions: `${runtimeInstructions(options, newsToolMode)}\n\nThe research budget is complete. Answer the user's question now using the research already returned. Do not request more tools. State any missing evidence and give only estimates that the available evidence supports.`,
         } : {}),
       };
     },
@@ -259,7 +281,7 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
       ? createGroundedNewsTools(toolProvider)
       : {}),
   });
-  return { languageModel, newsToolMode, tools };
+  return { activeProvider, languageModel, newsToolMode, tools };
 }
 
 function createLanguageModel(options: FantasyFootballAgentOptions) {
@@ -459,20 +481,23 @@ function fitRuntimeContextArray(
   maximumCharacters: number,
 ): BoundedRuntimeContext {
   const output: RuntimeContextValue[] = [];
+  let currentLength = 2;
   let truncated = false;
   for (const value of values) {
-    const full = [...output, value];
-    if (JSON.stringify(full).length <= maximumCharacters) {
+    const separatorLength = output.length > 0 ? 1 : 0;
+    const itemLength = JSON.stringify(value).length;
+    if (currentLength + separatorLength + itemLength <= maximumCharacters) {
       output.push(value);
+      currentLength += separatorLength + itemLength;
       continue;
     }
-    const remaining = maximumCharacters - JSON.stringify(output).length -
-      (output.length > 0 ? 1 : 0);
+    const remaining = maximumCharacters - currentLength - separatorLength;
     if (remaining > 1) {
       const child = fitRuntimeContextValue(value, remaining);
-      const partial = [...output, child.value];
-      if (JSON.stringify(partial).length <= maximumCharacters) {
+      const childLength = JSON.stringify(child.value).length;
+      if (currentLength + separatorLength + childLength <= maximumCharacters) {
         output.push(child.value);
+        currentLength += separatorLength + childLength;
       }
     }
     truncated = true;
@@ -492,25 +517,28 @@ function fitRuntimeContextObject(
   const entries = Object.entries(value).sort(
     ([left], [right]) => runtimeContextKeyRank(left) - runtimeContextKeyRank(right),
   );
+  let currentLength = 2;
   let included = 0;
   let childTruncated = false;
   for (const [key, item] of entries) {
-    const currentLength = JSON.stringify(output).length;
     const separatorLength = included > 0 ? 1 : 0;
+    const keyLength = JSON.stringify(key).length;
     const remaining = maximumCharacters - currentLength - separatorLength -
-      JSON.stringify(key).length - 1;
+      keyLength - 1;
     if (remaining < 2) break;
     const child = fitRuntimeContextValue(item, remaining);
+    const entryLength = separatorLength + keyLength + 1 +
+      JSON.stringify(child.value).length;
+    if (currentLength + entryLength > maximumCharacters) {
+      break;
+    }
     Object.defineProperty(output, key, {
       configurable: true,
       enumerable: true,
       value: child.value,
       writable: true,
     });
-    if (JSON.stringify(output).length > maximumCharacters) {
-      delete output[key];
-      break;
-    }
+    currentLength += entryLength;
     included += 1;
     childTruncated ||= child.truncated;
   }

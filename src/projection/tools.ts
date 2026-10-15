@@ -1,5 +1,5 @@
 import { compareProjections } from './comparison.js';
-import { tool } from 'ai';
+import { tool, type JSONValue } from 'ai';
 import { z } from 'zod';
 
 import { NflverseClient } from '../nflverse/client.js';
@@ -27,6 +27,10 @@ export function createProjectionTools(
         week: z.number().int().min(1).max(18),
       }),
       execute: (request) => projectLeagueMatchup(sleeper, nflverse, service, request),
+      toModelOutput: ({ output: { projections: _projections, ...rest } }) => ({
+        type: 'json',
+        value: rest as unknown as JSONValue,
+      }),
     }),
     projectPlayers: tool({
       description: 'Project several QB, RB, WR, TE, K, or team D/ST starters in one selected league. Use this for roster or matchup analysis instead of repeated projectPlayer calls. Each result includes uncertainty and eligibility. Use a team name or code for D/ST. Missing projections remain unavailable. This tool does not add news adjustments or infer missing scores.',

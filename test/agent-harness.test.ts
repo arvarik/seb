@@ -354,9 +354,75 @@ describe('fantasy football agent harness', () => {
     expect(result.finishReason).toBe('stop');
     expect(model.doGenerateCalls).toHaveLength(MAX_AGENT_STEPS);
     expect(model.doGenerateCalls[MAX_AGENT_STEPS - 1]?.tools?.length).toBeGreaterThan(0);
-    expect(JSON.stringify(model.doGenerateCalls[MAX_AGENT_STEPS - 1]?.prompt)).toContain('call-1');
-    expect(JSON.stringify(model.doGenerateCalls[MAX_AGENT_STEPS - 1]?.prompt)).toContain('research budget is complete');
+    const firstSystem = model.doGenerateCalls[0]?.prompt.find((m) => m.role === 'system');
+    const finalPrompt = model.doGenerateCalls[MAX_AGENT_STEPS - 1]?.prompt;
+    const finalSystem = finalPrompt?.find((m) => m.role === 'system');
+    expect(finalSystem).toEqual(firstSystem);
+    expect(finalPrompt?.at(-1)).toMatchObject({
+      role: 'user',
+      content: expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining('research budget is complete') }),
+      ]),
+    });
+    expect(JSON.stringify(finalPrompt)).toContain('call-1');
     expect(model.doGenerateCalls[MAX_AGENT_STEPS - 1]?.toolChoice).toEqual({ type: 'none' });
+  });
+
+  it('compacts tool outputs via toModelOutput while preserving full execute outputs', async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: [
+        {
+          content: [
+            { type: 'tool-call', toolCallId: 'c1', toolName: 'getLeagueOverview', input: '{"leagueId":"123"}' },
+            { type: 'tool-call', toolCallId: 'c2', toolName: 'getPlayerWeeklyStats', input: '{"season":2026,"playerName":"Justin Jefferson"}' },
+            { type: 'tool-call', toolCallId: 'c3', toolName: 'projectLeagueMatchup', input: '{"leagueId":"123","rosterId":1,"season":2026,"week":1}' },
+          ],
+          finishReason: { unified: 'tool-calls', raw: undefined },
+          usage,
+          warnings: [],
+        },
+        {
+          content: [{ type: 'text', text: 'Compacted.' }],
+          finishReason: { unified: 'stop', raw: undefined },
+          usage,
+          warnings: [],
+        },
+      ],
+    });
+    const sleeperClient = {
+      getLeague: async () => ({ league_id: '123', name: 'Test', season: '2026', scoring_settings: { rec: 1, pass_2pt: 0 } }),
+      getLeagueUsers: async () => [],
+      getLeagueRosters: async () => [],
+      getLeagueMatchups: async () => [
+        { matchup_id: 1, roster_id: 1, starters: ['4046'] },
+        { matchup_id: 1, roster_id: 2, starters: ['4047'] },
+      ],
+      getPlayers: async () => ({ '4046': { player_id: '4046', full_name: 'Justin Jefferson', position: 'WR', team: 'MIN' } }),
+    } as unknown as SleeperClient;
+    const nflverseClient = {
+      getSchedule: async () => [],
+      getPlayerWeeklyStats: async () => [{
+        playerId: '00-1', playerDisplayName: 'Justin Jefferson', position: 'WR', team: 'MIN', season: 2026, week: 1,
+        kicking: { fgAtt: 0, fgMade: 0 },
+      }],
+    } as unknown as NflverseClient;
+    const agent = createFantasyFootballAgent({
+      languageModel: model,
+      identityRepository: false,
+      sleeperClient,
+      nflverseClient,
+      weatherClient: new WeatherClient({ database: false }),
+    });
+
+    const result = await agent.generate({ prompt: 'Compact check.' });
+    const step2Prompt = JSON.stringify(model.doGenerateCalls[1]?.prompt);
+    expect(step2Prompt).toContain('"rec":1');
+    expect(step2Prompt).not.toContain('pass_2pt');
+    expect(step2Prompt).not.toContain('"kicking"');
+    expect(step2Prompt).not.toContain('"projections"');
+    expect(JSON.stringify(result.steps[0]?.toolResults)).toContain('pass_2pt');
+    expect(JSON.stringify(result.steps[0]?.toolResults)).toContain('"kicking"');
+    expect(JSON.stringify(result.steps[0]?.toolResults)).toContain('"projections"');
   });
 
   it('passes the agent abort signal into a source fetch', async () => {

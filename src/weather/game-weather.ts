@@ -67,6 +67,13 @@ export class GameWeatherService {
       });
     }
 
+    if (game.location && game.location.toLowerCase() !== 'home') {
+      return baseResult(game, kickoff, {
+        status: 'unavailable',
+        reason: 'This game uses a neutral venue. Seb does not apply the home-stadium coordinate.',
+      });
+    }
+
     if (kickoff && kickoff.getTime() < Date.now() - 60 * 60 * 1_000) {
       return {
         ...baseResult(game, kickoff, {
@@ -76,13 +83,6 @@ export class GameWeatherService {
         fantasyImpact: historicalImpact(game),
         risk: historicalRisk(game),
       };
-    }
-
-    if (game.location && game.location.toLowerCase() !== 'home') {
-      return baseResult(game, kickoff, {
-        status: 'unavailable',
-        reason: 'This game uses a neutral venue. Seb does not apply the home-stadium coordinate.',
-      });
     }
 
     const stadium = findHomeStadium(game.homeTeam);

@@ -6,6 +6,42 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-15
+
+### Added
+
+- **GroupMe Chat Connector (`src/connectors/groupme.ts`)**: First-class Chat SDK adapter for GroupMe league group chats with timing-safe `GROUPME_WEBHOOK_SECRET` verification, `@bot` mention detection, and 1,000-character plain-text message chunking.
+- **Expanded First-Class News Registry (`47` live-verified sources)**: Added **Pro Football Rumors** (`profootballrumors`), **NFL Trade Rumors** (`nfltraderumors`), **Draft Sharks Shark Bites** (`draftsharks`), and **RotoBaller Fantasy Football** (`rotoballer`) RSS feeds, plus an explicit 3-tier source priority hierarchy (`NewsSourceTier = 1 | 2 | 3`) and `<category>` tag matching.
+
+### Changed
+
+- **Agent Harness & Token Optimization**:
+  - Preserve KV prefix cache stability on the final `conclude` step by returning `{ activeTools: [] }` without mutating system instructions.
+  - Enable Anthropic ephemeral prompt caching (`cacheControl: { type: 'ephemeral' }`) on system instructions.
+  - Prune intra-turn intermediate reasoning parts from prior tool steps while preserving provider signatures.
+  - Replace $O(N^2)$ `JSON.stringify` prompt-fitting loops with an $O(N)$ character estimator and reduce `MAX_AGENT_STEPS` from `32` to `16`.
+  - Add `toModelOutput` token compaction to `searchFirstClassNews`, `projectLeagueMatchup`, `getLeagueOverview`, and `getPlayerWeeklyStats` (~45–60% token savings on tool results while keeping `execute` outputs intact).
+- **Performance, Projections & Recommendation Eligibility**:
+  - Add an in-memory L1 Map cache in `CachedResource` (`max 256` entries) with cross-process generation validation to avoid repeated SQLite reads and JSON/Zod parsing on hot data paths.
+  - Add a fast path for HTML entity decoding in `cleanText` and memoize parsed `RobotsPolicy` instances per origin in `NewsClient`.
+  - Skip per-article HTML metadata downloads for dated news-sitemap entries (`nfl`, `team-was`) that have zero query token matches.
+  - Pool positional empirical residual quantiles across games in `PlayerProjectionService` to unlock calibrated 80% uncertainty intervals earlier in the season.
+  - Separate `inProgressPoints` from `completedPoints` and `projectedRemainingPoints` in `projectLeagueMatchup` for live in-progress NFL games.
+  - Enrich `TradeImpactService` and `WaiverAssistantService` with nflverse special-teams return yardage when leagues score individual return yards.
+  - Scope `recommendation-eligibility.ts` player status and news verification to recommended/starter subjects so one unverified bench player does not block an entire answer.
+  - Check neutral-venue games before roof type in `GameWeatherService` so neutral indoor games return `neutral-venue-unmapped` consistently.
+- **Terminal UI/UX & CLI**:
+  - Fix restored session tool activity duration bugs (`1792106340s`), preserve viewport scroll offsets when expanding/collapsing tool rows on click, and reveal prompt suggestions when switching experiences or skills.
+  - Enforce `SEB_ICONS=ascii` consistently across markdown bullets, quotes, code fences, links, and table borders.
+  - Preserve existing saved Sleeper accounts in `seb setup <username>` and share the default SQLite cache in `seb learn`.
+  - Add `TELEGRAM_ALLOWED_USER_IDS` validation, cached connector runtime context (60s TTL), compacted connector thread history, and markdown-link-safe message splitting across Discord, Telegram, and GroupMe.
+
+### Dependencies
+
+- Remove `string-width` and `robots-parser` runtime dependencies (`-30` transitive packages in `node_modules`) in favor of native `Intl.Segmenter` grapheme width calculation and an inline ESM RFC 9309 robots policy parser.
+- Upgrade `ai` to `7.0.142`, `@ai-sdk/google` to `4.0.98`, `@ai-sdk/openai` to `4.0.95`, `@ai-sdk/anthropic` to `4.0.81`, `@ai-sdk/openai-compatible` to `3.0.70`, `@ai-sdk/otel` to `1.0.142`, and `@ai-sdk/devtools` to `1.0.45`.
+- Upgrade `chat` and `@chat-adapter/*` packages to `4.42.0`, `hono` to `4.13.13`, `@hono/node-server` to `2.1.5`, `zod` to `4.6.7`, `csv-parse` to `7.0.3`, `judgeval` to `1.3.5`, `tsx` to `4.23.15`, `oxlint` to `1.88.0`, `@types/node` to `26.6.5`, and `vitest` / `@vitest/coverage-v8` to `5.0.5`.
+
 ## [1.0.2] - 2026-09-10
 
 - Add scoring-aware D/ST forecasts from completed NFL plays and official weekly team totals.

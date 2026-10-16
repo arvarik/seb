@@ -39,7 +39,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     topic: 'overview',
     title: 'Seb System Overview',
     summary:
-      'Seb (Sports Evidence Bot) is a source-grounded NFL and fantasy football AI assistant built in TypeScript on Node.js 22+ and the Vercel AI SDK. It replaces LLM hallucinations with deterministic projection math, live Sleeper league synchronization, nflverse statistics, National Weather Service kickoff forecasts, and 44+ verified beat newsrooms.',
+      'Seb (Sports Evidence Bot) is a source-grounded NFL and fantasy football AI assistant built in TypeScript on Node.js 22+ and the Vercel AI SDK. It replaces LLM hallucinations with deterministic projection math, live Sleeper league synchronization, nflverse statistics, National Weather Service kickoff forecasts, and 47+ verified beat newsrooms.',
     keyPrinciples: [
       'Deterministic math over LLM guesswork for projections, waivers, and trades',
       'Grounding evidence required before actions are recommended (Decision Gate)',
@@ -61,7 +61,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
       '# Seb: Source-Grounded NFL & Fantasy AI Agent',
       '',
       'Seb unifies live Sleeper leagues, nflverse play-by-play statistics, National Weather Service forecasts,',
-      'and 44+ curated NFL newsrooms into a conversational assistant.',
+      'and 47+ curated NFL newsrooms into a conversational assistant.',
       '',
       'Unlike generic chatbots, Seb uses deterministic algorithms to calculate player projections and evaluate trades.',
       'A strict Decision Gate withholds recommendations if they are not backed by verified tool evidence.',
@@ -137,12 +137,12 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     topic: 'sources',
     title: 'Grounding Data Sources',
     summary:
-      'Seb grounds all decisions in real-time and historical sources: Sleeper API for leagues, nflverse for deep statistics, National Weather Service for stadium forecasts, and 44+ curated newsrooms.',
+      'Seb grounds all decisions in real-time and historical sources: Sleeper API for leagues, nflverse for deep statistics, National Weather Service for stadium forecasts, and 47+ curated newsrooms.',
     keyPrinciples: [
       'Sleeper API: Live league rosters, matchups, transactions, and add/drop trends with tiered TTL caching',
       'nflverse: Official schedules, play-by-play data, weekly player statistics, and defensive rankings',
       'National Weather Service: Kickoff weather, wind, temperature, precipitation, and active alerts',
-      '44+ verified beat newsrooms: All 32 NFL team beats, official NFL feeds, and trusted fantasy analysts',
+      '47+ verified beat newsrooms: All 32 NFL team beats, official NFL feeds, and trusted fantasy analysts',
       'Cryptographic SHA-256 provenance tracking for source snapshots',
     ],
     subsystemsOrFiles: [

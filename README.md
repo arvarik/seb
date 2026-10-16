@@ -5,7 +5,7 @@
 [![CI](https://github.com/arvarik/seb/actions/workflows/ci.yml/badge.svg)](https://github.com/arvarik/seb/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 ![Node.js](https://img.shields.io/badge/Node.js->=22-339933?logo=node.js&logoColor=white)
-[![Version](https://img.shields.io/badge/version-1.0.2-informational.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-1.1.0-informational.svg)](package.json)
 
 Seb unifies real-time NFL news, live Sleeper leagues, nflverse statistics, and kickoff weather into a single conversational agent. 
 
@@ -23,7 +23,7 @@ Compare him with Saquon Barkley for this week's matchup and weather.
 
 | Feature | What Seb Delivers |
 | --- | --- |
-| 🏈 **44+ Built-In Newsrooms** | Direct reporting from all 32 NFL team beat sources, official NFL feeds, and fantasy analysts. |
+| 🏈 **47+ Built-In Newsrooms** | Direct reporting from all 32 NFL team beat sources, official NFL feeds, transaction wires, and fantasy analysts. |
 | 🏆 **Instant Sleeper Sync** | Discovers your leagues, rosters, scoring settings, and weekly matchup needs automatically. |
 | 🛡️ **Grounded Decisions** | Deterministic projections, legal trade validation, FAAB waiver tiers, and playoff simulations. |
 | 📈 **Weekly Learning** | Learns local player performance trends and forecast accuracy after completed games. |
@@ -135,8 +135,9 @@ Turn research into winning start-sit, trade, and waiver actions.
 
 Deploy Seb directly into your league's group chat! Seb includes built-in read-only connectors for:
 * **Slack** (Socket Mode & Webhooks)
-* **Discord** (Bot client)
-* **Telegram** (Bot polling)
+* **Discord** (Bot client & Interactions)
+* **Telegram** (Bot polling & Webhooks)
+* **GroupMe** (Bot webhooks)
 
 See the [Chat Connectors Guide](docs/CONNECTORS.md) for step-by-step bot setup.
 
@@ -147,12 +148,12 @@ See the [Chat Connectors Guide](docs/CONNECTORS.md) for step-by-step bot setup.
 Generic AI models often hallucinate injury reports or miscalculate fantasy points. Seb prevents this through a 4-step safety architecture:
 
 1. **Resolve**: Resolves the exact player, team, roster, and league scoring rules.
-2. **Gather**: Pulls live facts from Sleeper, nflverse, NWS weather, and 44+ newsrooms.
+2. **Gather**: Pulls live facts from Sleeper, nflverse, NWS weather, and 47+ newsrooms.
 3. **Compute**: Deterministic functions compute projections, trade impacts, and ranking scores.
 4. **Validate**: A safety gate verifies that all facts match the requested player and league. If facts are missing or conflicting, Seb withholds the action rather than guessing.
 
 ### Transparent Limits
-* **Offensive Focus**: Projections and lineup comparisons currently support offensive skill positions (QB, RB, WR, TE, K).
+* **Supported Positions**: Projections and lineup comparisons support offensive skill positions (QB, RB, WR, TE, K) and team D/ST (with individual special-teams return scoring).
 * **Public Latency**: News and nflverse game logs rely on public feeds and can lag breaking live game events.
 * **Weather Coverage**: NWS weather forecasts cover United States venues only.
 

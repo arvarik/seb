@@ -45,6 +45,7 @@ export interface DiscoveredNewsArticle {
 export interface NewsArticle extends DiscoveredNewsArticle {
   cacheOutcome: CacheOutcome;
   category: NewsSourceCategory;
+  corroboratedBy?: string[];
   fetchedAt: string;
   publisherId: string;
   publisherLabel: string;

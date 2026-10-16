@@ -309,9 +309,16 @@ export class NewsClient {
     }
 
     const tokens = queryTokens(query);
+    const ftsScores =
+      this.database && typeof this.database.searchNewsArticlesFts === 'function'
+        ? this.database.searchNewsArticlesFts(
+            tokens,
+            loaded.map((item) => item.source.id),
+          )
+        : new Map<string, number>();
     const enriched = await Promise.all(loaded.map(async (source) => {
       if (!source.source.enrichArticles) return source;
-      const candidates = rankDiscovered(source.articles, query, this.now())
+      const candidates = rankDiscovered(source.articles, query, this.now(), ftsScores)
         .filter((article) =>
           !article.publishedAt ||
           (Boolean(source.source.enrichDatedArticles) &&
@@ -383,22 +390,34 @@ export class NewsClient {
         }];
       })
     );
-    const relevant = filterRelevantArticles(articles, query);
+    const relevant = filterRelevantArticles(articles, query, ftsScores);
     const ranked = diversifyArticles(
       deduplicateArticles(relevant).sort((left, right) =>
-        compareArticles(left, right, query, this.now())
+        compareArticles(left, right, query, this.now(), ftsScores)
       ),
       limit,
     );
-    const publisherCount = new Set(ranked.map((article) => article.publisherId)).size;
+    const publisherCount = new Set(
+      ranked.flatMap((article) => [
+        article.publisherId,
+        ...(article.corroboratedBy ?? []).map((label) => publisherIdentity(label, label)),
+      ]),
+    ).size;
     const currentArticles = ranked.filter((article) => !article.stale);
     const currentPublisherCount = new Set(
-      currentArticles.map((article) => article.publisherId),
+      currentArticles.flatMap((article) => [
+        article.publisherId,
+        ...(article.corroboratedBy ?? []).map((label) => publisherIdentity(label, label)),
+      ]),
     ).size;
     const requiredPublisherCount = input.sourceIds?.length ? 1 : 2;
     const requiredResultCount = Math.min(limit, 5);
+    const totalCorroboratedArticles = currentArticles.reduce(
+      (sum, article) => sum + 1 + (article.corroboratedBy?.length ?? 0),
+      0,
+    );
     const fallbackRecommended =
-      currentArticles.length < requiredResultCount ||
+      totalCorroboratedArticles < requiredResultCount ||
       currentPublisherCount < requiredPublisherCount;
 
     for (const article of ranked) {
@@ -613,6 +632,9 @@ export class NewsClient {
         value: parsed,
       };
     }, signal ? { signal } : {});
+    if (this.database && typeof this.database.indexNewsArticles === 'function') {
+      this.database.indexNewsArticles(source.id, result.value);
+    }
     this.recordSource(source, result);
     return {
       articles: result.value,
@@ -1141,10 +1163,11 @@ function rankDiscovered(
   articles: readonly DiscoveredNewsArticle[],
   query: string,
   now: Date,
+  ftsScores?: ReadonlyMap<string, number>,
 ): DiscoveredNewsArticle[] {
   return [...articles].sort((left, right) => {
-    const difference = scoreDiscovered(right, query, now) -
-      scoreDiscovered(left, query, now);
+    const difference = scoreDiscovered(right, query, now, ftsScores) -
+      scoreDiscovered(left, query, now, ftsScores);
     return difference || compareDiscoveredDates(left, right);
   });
 }
@@ -1162,6 +1185,7 @@ function hasQueryTokenMatch(
 function filterRelevantArticles(
   articles: readonly NewsArticle[],
   query: string,
+  ftsScores?: ReadonlyMap<string, number>,
 ): NewsArticle[] {
   const tokens = queryTokens(query);
   if (tokens.length === 0) return [...articles];
@@ -1170,8 +1194,12 @@ function filterRelevantArticles(
     const text = searchTokenSet(
       `${article.title} ${article.excerpt ?? ''} ${article.categories.join(' ')} ${article.url}`,
     );
-    return tokens.filter((token) => searchTokenMatches(token, text)).length >=
-      minimumMatches;
+    const lexicalMatches = tokens.filter((token) => searchTokenMatches(token, text)).length;
+    if (lexicalMatches >= minimumMatches) return true;
+    if (!ftsScores?.has(article.url)) return false;
+    return tokens.filter((token) =>
+      searchTokenMatches(token, text) || porterStemMatches(token, text)
+    ).length >= minimumMatches;
   });
 }
 
@@ -1180,16 +1208,27 @@ function compareArticles(
   right: NewsArticle,
   query: string,
   now: Date,
+  ftsScores?: ReadonlyMap<string, number>,
 ): number {
-  const difference = scoreArticle(right, query, now) - scoreArticle(left, query, now);
+  const difference =
+    scoreArticle(right, query, now, ftsScores) -
+    scoreArticle(left, query, now, ftsScores);
   return difference || right.publishedAt.localeCompare(left.publishedAt) ||
     left.title.localeCompare(right.title);
 }
 
-function scoreArticle(article: NewsArticle, query: string, now: Date): number {
-  let score = scoreDiscovered(article, query, now);
+function scoreArticle(
+  article: NewsArticle,
+  query: string,
+  now: Date,
+  ftsScores?: ReadonlyMap<string, number>,
+): number {
+  let score = scoreDiscovered(article, query, now, ftsScores);
   if (article.category === 'official') score += 1;
   if (article.team) score += 2;
+  if (article.corroboratedBy?.length) {
+    score += Math.min(3, article.corroboratedBy.length);
+  }
   const tier = findNewsSource(article.sourceId)?.tier;
   if (tier === 3 || article.sourceId === 'yahoo-nfl') score -= 1;
   return score;
@@ -1199,12 +1238,13 @@ function scoreDiscovered(
   article: DiscoveredNewsArticle,
   query: string,
   now: Date,
+  ftsScores?: ReadonlyMap<string, number>,
 ): number {
   const title = searchTokenSet(article.title);
   const excerpt = searchTokenSet(article.excerpt ?? '');
   const categories = searchTokenSet(article.categories.join(' '));
   const url = searchTokenSet(article.url);
-  let score = 0;
+  let score = ftsScores?.get(article.url) ?? 0;
   for (const token of queryTokens(query)) {
     if (searchTokenMatches(token, title)) score += 6;
     else if (searchTokenMatches(token, excerpt)) score += 3;
@@ -1229,24 +1269,124 @@ function compareDiscoveredDates(
     (right.modifiedAt ?? '').localeCompare(left.modifiedAt ?? '');
 }
 
+interface ArticleCluster {
+  primary: NewsArticle;
+  publishers: Map<string, string>;
+  significantTokens: ReadonlySet<string>;
+  titleKeys: Set<string>;
+  urlKeys: Set<string>;
+}
+
 function deduplicateArticles(articles: readonly NewsArticle[]): NewsArticle[] {
-  const byUrl = new Map<string, NewsArticle>();
-  const titleKeys = new Set<string>();
+  const clusters: ArticleCluster[] = [];
   for (const article of articles) {
     const urlKey = normalizedUrlKey(article.url);
     const titleKey = normalizeSearchText(article.title);
-    const existing = byUrl.get(urlKey);
-    if (existing) {
-      if (sourcePreference(article) > sourcePreference(existing)) {
-        byUrl.set(urlKey, article);
+    const sigTokens = new Set(queryTokens(article.title));
+    const matched = clusters.find((cluster) =>
+      cluster.urlKeys.has(urlKey) ||
+      cluster.titleKeys.has(titleKey) ||
+      isSameEventCluster(article, sigTokens, cluster)
+    );
+    if (matched) {
+      matched.urlKeys.add(urlKey);
+      matched.titleKeys.add(titleKey);
+      matched.publishers.set(article.publisherId, article.publisherLabel);
+      if (sourcePreference(article) > sourcePreference(matched.primary)) {
+        matched.primary = article;
+        matched.significantTokens = sigTokens;
       }
       continue;
     }
-    if (titleKeys.has(titleKey)) continue;
-    byUrl.set(urlKey, article);
-    titleKeys.add(titleKey);
+    clusters.push({
+      primary: article,
+      publishers: new Map([[article.publisherId, article.publisherLabel]]),
+      significantTokens: sigTokens,
+      titleKeys: new Set([titleKey]),
+      urlKeys: new Set([urlKey]),
+    });
   }
-  return [...byUrl.values()];
+  return clusters.map((cluster) => {
+    const corroboratedBy = [...cluster.publishers.entries()]
+      .filter(([id]) => id !== cluster.primary.publisherId)
+      .map(([, label]) => label)
+      .sort();
+    return corroboratedBy.length > 0
+      ? { ...cluster.primary, corroboratedBy }
+      : cluster.primary;
+  });
+}
+
+function isSameEventCluster(
+  article: NewsArticle,
+  sigTokens: ReadonlySet<string>,
+  cluster: ArticleCluster,
+): boolean {
+  if (
+    article.publisherId === cluster.primary.publisherId ||
+    cluster.publishers.has(article.publisherId)
+  ) {
+    return false;
+  }
+  if (article.team && cluster.primary.team && article.team !== cluster.primary.team) {
+    return false;
+  }
+  if (
+    Math.abs(Date.parse(article.publishedAt) - Date.parse(cluster.primary.publishedAt)) >
+    36 * HOUR_MS
+  ) {
+    return false;
+  }
+  if (sigTokens.size < 3 || cluster.significantTokens.size < 3) return false;
+  const rawShared = [...sigTokens].filter((token) =>
+    symmetricTokenMatches(token, cluster.significantTokens)
+  ).length;
+  const shared = Math.min(rawShared, sigTokens.size, cluster.significantTokens.size);
+  if (shared < 3) return false;
+  const union = sigTokens.size + cluster.significantTokens.size - shared;
+  const jaccard = union > 0 ? shared / union : 0;
+  const overlap = shared / Math.min(sigTokens.size, cluster.significantTokens.size);
+  return jaccard >= 0.45 || overlap >= 0.65;
+}
+
+function symmetricTokenMatches(
+  token: string,
+  targetSet: ReadonlySet<string>,
+): boolean {
+  if (searchTokenMatches(token, targetSet)) return true;
+  const singleton = new Set([token]);
+  for (const target of targetSet) {
+    if (searchTokenMatches(target, singleton)) return true;
+  }
+  return false;
+}
+
+function porterStemMatches(
+  queryToken: string,
+  articleTokens: ReadonlySet<string>,
+): boolean {
+  const stem = porterStem(queryToken);
+  if (stem.length < 5) return false;
+  for (const word of articleTokens) {
+    const wordStem = porterStem(word);
+    if (
+      wordStem.length >= 5 &&
+      (wordStem === stem || wordStem.startsWith(stem) || stem.startsWith(wordStem))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function porterStem(word: string): string {
+  if (word.length < 5) return word;
+  return word
+    .replace(
+      /(?:ation|ition|ating|iting|ated|ited|ment|ness|ance|ence|able|ible|pate|pant|ally|ical|ious|eous|ular|ing|ed|es|er|ly|al|ic|s)$/u,
+      '',
+    )
+    .slice(0, 6);
 }
 
 function diversifyArticles(

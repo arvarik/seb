@@ -56,6 +56,9 @@ export function createFirstClassNewsTools(news: NewsClient) {
         value: {
           articles: output.articles.map((article) => ({
             category: article.category,
+            ...(article.corroboratedBy?.length
+              ? { corroboratedBy: article.corroboratedBy }
+              : {}),
             ...(article.excerpt ? { excerpt: article.excerpt.slice(0, 280) } : {}),
             publishedAt: article.publishedAt,
             publisherLabel: article.publisherLabel,

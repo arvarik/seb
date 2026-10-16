@@ -702,6 +702,114 @@ describe('NewsClient cache', () => {
       id: `news-source:${source.id}`,
     }));
   });
+
+  it('clusters cross-source event coverage with corroboration and compacts it in tool output', async () => {
+    const { createFirstClassNewsTools } = await import('../src/news/tools.js');
+    const official = newsSource('official-corroborated', 'official');
+    const independent = newsSource('independent-corroborated', 'independent');
+    const fantasy = newsSource('fantasy-corroborated', 'fantasy');
+    const fetch = routeFetch(new Map([
+      [official.discoveryUrl, rssResponse([
+        article(
+          'Patrick Mahomes returns to Friday practice after ankle injury',
+          '/news/mahomes-friday-practice',
+          '2026-08-29T18:00:00Z',
+        ),
+      ])],
+      [independent.discoveryUrl, rssResponse([
+        article(
+          'Patrick Mahomes practicing Friday following ankle injury',
+          '/news/mahomes-ankle-update',
+          '2026-08-29T18:30:00Z',
+        ),
+      ])],
+      [fantasy.discoveryUrl, rssResponse([
+        article(
+          'Patrick Mahomes ankle injury: practicing on Friday',
+          '/news/mahomes-fantasy-note',
+          '2026-08-29T19:00:00Z',
+        ),
+      ])],
+    ]));
+    const client = createClient([independent, fantasy, official], fetch);
+    const tools = createFirstClassNewsTools(client);
+
+    const result = await client.search({
+      limit: 3,
+      query: 'Patrick Mahomes ankle practice',
+    });
+
+    expect(result.articles).toHaveLength(1);
+    expect(result.articles[0]).toEqual(expect.objectContaining({
+      category: 'official',
+      corroboratedBy: [
+        'fantasy-corroborated news',
+        'independent-corroborated news',
+      ],
+      sourceId: official.id,
+    }));
+    expect(result.coverage.publisherCount).toBe(3);
+    expect(result.fallbackRecommended).toBe(false);
+
+    const modelOutput = await tools.searchFirstClassNews.toModelOutput?.({
+      args: { query: 'Patrick Mahomes ankle practice' },
+      output: result,
+      toolCallId: 'call-corroborated',
+    } as never);
+    expect(modelOutput).toEqual({
+      type: 'json',
+      value: expect.objectContaining({
+        articles: [
+          expect.objectContaining({
+            corroboratedBy: [
+              'fantasy-corroborated news',
+              'independent-corroborated news',
+            ],
+            publisherLabel: 'official-corroborated news',
+          }),
+        ],
+      }),
+    });
+  });
+
+  it('indexes cached articles in SQLite FTS5 for Porter-stemmed recall and BM25 ranking', async () => {
+    const source = newsSource('fts-source', 'official');
+    const database = createDatabase();
+    const fetch = routeFetch(new Map([
+      [source.discoveryUrl, rssResponse([
+        article(
+          'Chiefs roster moves before week one',
+          '/news/roster-moves',
+          '2026-08-29T19:00:00Z',
+          'Patrick Mahomes is rehabilitating his ankle ahead of Sunday.',
+        ),
+        article(
+          'Patrick Mahomes rehabilitating ankle at Friday walkthrough',
+          '/news/mahomes-rehab',
+          '2026-08-29T18:30:00Z',
+          'The quarterback completed rehabilitation drills with trainers.',
+        ),
+      ])],
+    ]));
+    const client = createClient([source], fetch, { database });
+
+    const result = await client.search({
+      limit: 5,
+      query: 'Mahomes rehabilitation',
+      sourceIds: [source.id],
+    });
+
+    expect(result.articles).toHaveLength(2);
+    expect(result.articles[0]?.url).toBe('https://fts-source.example/news/mahomes-rehab');
+    expect(database.searchNewsArticlesFts(['mahomes', 'rehabilitation']).size).toBe(2);
+
+    const reopened = new SebDatabase(database.file);
+    databases.push(reopened);
+    expect(reopened.searchNewsArticlesFts(['rehabilitation']).size).toBe(2);
+
+    client.clearCache();
+    expect(database.searchNewsArticlesFts(['mahomes']).size).toBe(0);
+  });
 });
 
 interface FetchCall {

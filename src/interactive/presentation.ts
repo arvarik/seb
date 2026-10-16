@@ -56,6 +56,7 @@ export function friendlyToolName(toolName: string): string {
     inspectLearning: 'Inspect local projection learning',
     inspectSystemDocs: 'Inspect Seb architecture & design',
     learnCompletedWeek: 'Update completed-week learning',
+    optimizeRosterLineup: 'Optimize the starting lineup',
     predictMatchup: 'Estimate the matchup',
     projectPlayer: 'Build a scoring-aware projection',
     projectPlayers: 'Project the selected players',

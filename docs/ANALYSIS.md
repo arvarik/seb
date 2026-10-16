@@ -9,7 +9,8 @@ The language model explains these calculations. It does not invent the numerical
 | Request | Tool | Numerical method |
 | --- | --- | --- |
 | Project one player | `projectPlayer` | Season mean, exponential recency, and a small position prior |
-| Compare two through six starters | `compareStartSit` | Expected points, legal slot checks, and approximate scoring probabilities |
+| Compare two through six starters | `compareStartSit` | Expected points, legal slot checks, and correlated scoring probabilities |
+| Optimize a full starting lineup | `optimizeRosterLineup` | Full-roster combinatorial slot solver and bench swap recommendations |
 | Find waiver targets | `rankWaiverTargets` | League availability, production, roster need, demand, and budget constraints |
 | Compare a trade | `analyzeTradeImpact` | Best legal offensive lineup before and after the trade |
 | Project several starters | `projectPlayers` | Up to 40 names, league scoring, explicit missing projections |
@@ -102,17 +103,18 @@ This method borrows the residual-rank calculation from conformal prediction.
 It does not claim exact conformal coverage under season drift, player dependence, or parameter selection.
 The confidence score measures evidence completeness. It does not measure the probability of a correct prediction.
 
-Start-sit probabilities approximate independent normal scoring errors.
+Start-sit and matchup probabilities model intra-game stack correlations when complete player intervals are available ($\rho = +0.30$ same-team QB + pass-catcher/RB, $\rho = -0.10$ same-team skill competition, $\rho = -0.25$ offense vs. opposing D/ST, $\rho = +0.12$ opposing shootout pass offenses).
 The output flags the top two players as a close choice below a 60% estimated advantage probability.
-Shared-game correlation, uneven scoring distributions, and availability uncertainty can change that estimate.
+Uneven scoring distributions and availability uncertainty can change that estimate.
 The estimate does not represent a validated personal win rate.
 
 ## Trades, waivers, and playoffs
 
-### Trade lineup value
+### Roster and trade lineup value
 
 Seb assigns each player to at most one eligible starter slot.
-The optimizer searches all reachable slot combinations and maximizes the expected offensive starter total.
+`optimizeRosterLineup` projects active starters and bench candidates for a roster, solves the highest-scoring legal starting lineup across all slots, and recommends specific bench-to-starter swaps when eligible.
+The optimizer searches all reachable slot combinations and maximizes the expected starter total.
 It supports up to 12 offensive starter slots and 60 candidate players.
 
 A trade can increase summed player value while reducing starter value.

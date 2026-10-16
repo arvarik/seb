@@ -105,13 +105,14 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     topic: 'projections',
     title: 'Deterministic Projection Engine',
     summary:
-      'Deterministic player projections calculate expected fantasy points based on exact Sleeper league scoring, volume weighting, recency decay, defensive matchups, and kickoff weather risk.',
+      'Deterministic player projections calculate expected fantasy points based on exact Sleeper league scoring, volume weighting, recency decay, defensive matchups, kickoff weather risk, correlated stack variance, and full-roster lineup optimization (optimizeRosterLineup).',
     keyPrinciples: [
       'Scoring-aware calculation (PPR, half-PPR, standard, custom bonuses, TE premium, turnover deductions)',
       'Exponential recency decay weighting recent performances over early-season games',
       'Separate D/ST forecasts blend team and opponent outcomes with NFL averages and a stronger rare-touchdown prior',
       'Opponent defense-vs-position adjustment using nflverse historical allowances',
       'Weather damping: wind speed (>15mph), cold temperature (<32°F), and precipitation factors',
+      'Correlated stack and matchup variance modeling across same-game QB, skill, and D/ST pairings, plus combinatorial lineup solving via optimizeRosterLineup',
       'Outputs expected points, forecast ranges with explicit calibration limits, and recommendation eligibility flags',
     ],
     subsystemsOrFiles: [
@@ -125,11 +126,12 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
       '# Deterministic Projections',
       '',
       'Seb does not ask the LLM to invent projected fantasy points.',
-      'Instead, projectPlayer and compareStartSit evaluate:',
+      'Instead, projectPlayer, compareStartSit, and optimizeRosterLineup evaluate:',
       '- Exact Sleeper league scoring rules (passing/rushing/receiving yardage ratios, reception points, TD values)',
       '- Recency-weighted player usage (target share, air yards, carry share)',
       '- Defense-vs-position matchup ratings from nflverse',
       '- Stadium weather conditions from National Weather Service',
+      '- Intra-game stack and matchup covariance for joint lineup and head-to-head probabilities',
     ].join('\n'),
   },
 
@@ -137,12 +139,12 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     topic: 'sources',
     title: 'Grounding Data Sources',
     summary:
-      'Seb grounds all decisions in real-time and historical sources: Sleeper API for leagues, nflverse for deep statistics, National Weather Service for stadium forecasts, and 47+ curated newsrooms.',
+      'Seb grounds all decisions in real-time and historical sources: Sleeper API for leagues, nflverse for deep statistics, National Weather Service for stadium forecasts, and 47+ curated newsrooms with cross-source event corroboration.',
     keyPrinciples: [
       'Sleeper API: Live league rosters, matchups, transactions, and add/drop trends with tiered TTL caching',
       'nflverse: Official schedules, play-by-play data, weekly player statistics, and defensive rankings',
       'National Weather Service: Kickoff weather, wind, temperature, precipitation, and active alerts',
-      '47+ verified beat newsrooms: All 32 NFL team beats, official NFL feeds, and trusted fantasy analysts',
+      '47+ verified beat newsrooms: All 32 NFL team beats, official NFL feeds, and trusted fantasy analysts with multi-publisher story clustering (corroboratedBy)',
       'Cryptographic SHA-256 provenance tracking for source snapshots',
     ],
     subsystemsOrFiles: [
@@ -159,7 +161,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
       '- Sleeper: League rosters, match scores, waivers, standings, and global add/drop trends.',
       '- nflverse: Schedules, weekly box scores, advanced rushing/receiving metrics, defense vs position.',
       '- National Weather Service (NWS): Live hourly weather forecasts for all NFL stadiums and alert zones.',
-      '- News Network: Official NFL and team beat reporters with sitemaps and structured article feeds.',
+      '- News Network: Official NFL and team beat reporters with sitemaps, structured article feeds, and cross-publisher event corroboration (corroboratedBy).',
     ].join('\n'),
   },
 
@@ -167,11 +169,11 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     topic: 'storage',
     title: 'Storage, SQLite Cache & Privacy',
     summary:
-      'Local embedded SQLite database (.cache/seb.sqlite) stores normalized source caches, snapshots, canonical player identities, and usage telemetry. User credentials and settings stay isolated under ~/.config/seb/.',
+      'Local embedded SQLite database (.cache/seb.sqlite) stores normalized source caches, snapshots, canonical player identities, SQLite FTS5 BM25 news indexing, and usage telemetry. User credentials and settings stay isolated under ~/.config/seb/.',
     keyPrinciples: [
       'SQLite database schema 6 with WAL mode, foreign keys, and normal synchronous writes',
       'Directory permissions 0700 and file permissions 0600 restricting access to current OS user',
-      'Eight core tables: cache_entries, snapshots, identities, identity_links, cache_generations, usage_runs, usage_steps, usage_tool_calls',
+      'Core tables (cache_entries, snapshots, identities, identity_links, cache_generations, usage_runs, usage_steps, usage_tool_calls) plus SQLite FTS5 BM25 full-text news indexing (news_articles_fts)',
       'Configuration stored in ~/.config/seb/ (profile.json, credentials.json, model-settings.json, history.json)',
       'Local usage records exclude prompts, answers, raw tool payloads, and keys. Judgment tracing is optional and off by default.',
     ],
@@ -187,7 +189,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     content: [
       '# Storage & Privacy Architecture',
       '',
-      '- SQLite Database: `.cache/seb.sqlite` under the working directory.',
+      '- SQLite Database: `.cache/seb.sqlite` under the working directory, including FTS5 BM25 full-text news search (`news_articles_fts`).',
       '- Security: Files written with mode 0600, directories created with mode 0700.',
       '- Privacy Guarantee: Prompt texts, answers, and secret API keys are never recorded to the usage database.',
       '- Config Directory: `~/.config/seb/` holds credentials, model settings, prompt history, and private resumable conversations.',

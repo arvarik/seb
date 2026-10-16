@@ -2,10 +2,12 @@ import { setImmediate } from 'node:timers/promises';
 import { throwIfRequestAborted } from '../ai/request-signal.js';
 import type { LeagueAnalysis } from '../sleeper/analytics.js';
 export interface RemainingMatchup { week: number; rosterA: number; rosterB: number }
+export interface RosterCorrelation { rosterA: number; rosterB: number; correlation: number }
 
 export async function simulatePlayoffOdds(input: {
   analysis: LeagueAnalysis; matchups: readonly RemainingMatchup[];
   playoffTeams: number; simulations?: number; seed?: number; medianMatch?: boolean;
+  correlations?: readonly RosterCorrelation[];
 }) {
   const simulations = input.simulations ?? 10_000;
   const teams = [...input.analysis.teams].sort((a, b) => a.rosterId - b.rosterId);
@@ -17,6 +19,15 @@ export async function simulatePlayoffOdds(input: {
   const ids = new Set(teams.map((team) => team.rosterId));
   if (!input.analysis.historyComplete || ids.size !== teams.length || teams.some((team) => ![team.seasonAverage, team.pointsFor, team.pointsAgainst, team.record.wins, team.record.losses, team.record.ties, team.recentAverage ?? 0, team.weeklyVolatility ?? 0, ...team.recentScores].every(Number.isFinite) || team.recentScores.length < 2)) {
     throw new Error('Playoff simulations need distinct rosters and at least two completed scores per roster.');
+  }
+  const correlationByPair = new Map<string, number>();
+  for (const entry of input.correlations ?? []) {
+    if (!ids.has(entry.rosterA) || !ids.has(entry.rosterB) || entry.rosterA === entry.rosterB ||
+      !Number.isFinite(entry.correlation) || Math.abs(entry.correlation) > 0.8) {
+      throw new Error('Invalid roster correlation.');
+    }
+    correlationByPair.set(`${entry.rosterA}:${entry.rosterB}`, entry.correlation);
+    correlationByPair.set(`${entry.rosterB}:${entry.rosterA}`, entry.correlation);
   }
   const weeks = [...new Set(input.matchups.map((matchup) => matchup.week))].sort((a, b) => a - b);
   if (weeks.some((week, index) => week !== input.analysis.throughWeek + index + 1)) {
@@ -40,8 +51,19 @@ export async function simulatePlayoffOdds(input: {
       wins: team.record.wins + team.record.ties * 0.5, points: team.pointsFor, pointsAgainst: team.pointsAgainst, tie: random(),
     }]));
     for (const week of weeks) {
+      const zScores = new Map(teams.map((team) => [team.rosterId, normal()]));
+      if (correlationByPair.size > 0) {
+        for (const matchup of gamesByWeek.get(week)!) {
+          const rho = correlationByPair.get(`${matchup.rosterA}:${matchup.rosterB}`);
+          if (rho) {
+            const zA = zScores.get(matchup.rosterA)!;
+            const zB = zScores.get(matchup.rosterB)!;
+            zScores.set(matchup.rosterB, rho * zA + Math.sqrt(1 - rho * rho) * zB);
+          }
+        }
+      }
       const scores = new Map(teams.map((team) => [team.rosterId,
-        team.seasonAverage * 0.7 + (team.recentAverage ?? team.seasonAverage) * 0.3 + Math.max(8, team.weeklyVolatility ?? 15) * normal()]));
+        team.seasonAverage * 0.7 + (team.recentAverage ?? team.seasonAverage) * 0.3 + Math.max(8, team.weeklyVolatility ?? 15) * zScores.get(team.rosterId)!]));
       for (const matchup of gamesByWeek.get(week)!) {
         const a = scores.get(matchup.rosterA)!; const b = scores.get(matchup.rosterB)!;
         standings.get(matchup.rosterA)!.pointsAgainst += b;

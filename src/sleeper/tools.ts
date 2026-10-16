@@ -1,4 +1,4 @@
-import { tool } from 'ai';
+import { tool, type JSONValue } from 'ai';
 import { z } from 'zod';
 
 import { SleeperAnalysisService } from './analysis-service.js';
@@ -165,9 +165,6 @@ export function createSleeperTools(client: SleeperClient) {
       description:
         'Get league settings, users, rosters, records, and roster player IDs for a Sleeper league.',
       inputSchema: z.object({ leagueId: leagueIdSchema }),
-      inputExamples: [
-        { input: { leagueId: '123456789012345678' } },
-      ],
       execute: async ({ leagueId }) => {
         const [league, users, rosters] = await Promise.all([
           client.getLeague(leagueId),
@@ -176,6 +173,24 @@ export function createSleeperTools(client: SleeperClient) {
         ]);
         return { league, users, rosters };
       },
+      toModelOutput: ({ output }) => ({
+        type: 'json',
+        value: {
+          ...output,
+          league: {
+            ...output.league,
+            ...(output.league.scoring_settings
+              ? {
+                  scoring_settings: Object.fromEntries(
+                    Object.entries(output.league.scoring_settings).filter(
+                      ([, points]) => points !== 0,
+                    ),
+                  ),
+                }
+              : {}),
+          },
+        } as unknown as JSONValue,
+      }),
     }),
 
     getRosterPlayers: tool({
@@ -185,9 +200,6 @@ export function createSleeperTools(client: SleeperClient) {
         leagueId: leagueIdSchema,
         rosterId: z.number().int().positive(),
       }),
-      inputExamples: [
-        { input: { leagueId: '123456789012345678', rosterId: 4 } },
-      ],
       execute: async ({ leagueId, rosterId }) => {
         const details = await analysis.getRosterDetails(leagueId, rosterId);
         return {
@@ -202,9 +214,6 @@ export function createSleeperTools(client: SleeperClient) {
       description:
         'Get every fantasy roster matchup and score for one Sleeper league week.',
       inputSchema: z.object({ leagueId: leagueIdSchema, week: weekSchema }),
-      inputExamples: [
-        { input: { leagueId: '123456789012345678', week: 8 } },
-      ],
       execute: async ({ leagueId, week }) => ({
         leagueId,
         week,
@@ -216,9 +225,6 @@ export function createSleeperTools(client: SleeperClient) {
       description:
         'Get completed and pending trades, waivers, and free-agent moves for one league week.',
       inputSchema: z.object({ leagueId: leagueIdSchema, week: weekSchema }),
-      inputExamples: [
-        { input: { leagueId: '123456789012345678', week: 8 } },
-      ],
       execute: async ({ leagueId, week }) => ({
         leagueId,
         week,
@@ -234,9 +240,6 @@ export function createSleeperTools(client: SleeperClient) {
         lookbackHours: z.number().int().min(1).max(168).optional().default(24),
         limit: z.number().int().min(1).max(50).optional().default(25),
       }),
-      inputExamples: [
-        { input: { type: 'add', lookbackHours: 24, limit: 10 } },
-      ],
       execute: async ({ type, lookbackHours, limit }) => ({
         type,
         lookbackHours,
@@ -258,9 +261,6 @@ export function createSleeperTools(client: SleeperClient) {
         leagueId: leagueIdSchema,
         throughWeek: analysisWeekSchema,
       }),
-      inputExamples: [
-        { input: { leagueId: '123456789012345678', throughWeek: 8 } },
-      ],
       execute: async ({ leagueId, throughWeek }) =>
         analysis.analyzeLeague(leagueId, throughWeek),
     }),
@@ -274,16 +274,6 @@ export function createSleeperTools(client: SleeperClient) {
         rosterBId: z.number().int().positive(),
         throughWeek: analysisWeekSchema,
       }),
-      inputExamples: [
-        {
-          input: {
-            leagueId: '123456789012345678',
-            rosterAId: 4,
-            rosterBId: 7,
-            throughWeek: 8,
-          },
-        },
-      ],
       execute: async ({ leagueId, rosterAId, rosterBId, throughWeek }) =>
         analysis.predictMatchup(
           leagueId,

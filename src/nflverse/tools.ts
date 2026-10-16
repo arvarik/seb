@@ -22,7 +22,7 @@ export function createNflverseTools(client: NflverseClient) {
         week: weekSchema.optional(),
         team: teamSchema.optional(),
         gameType: z.enum(['PRE', 'REG', 'POST']).optional(),
-        limit: z.number().int().min(1).max(200).optional().default(100),
+        limit: z.number().int().min(1).max(200).optional().default(32),
       }),
       inputExamples: [
         {
@@ -31,7 +31,7 @@ export function createNflverseTools(client: NflverseClient) {
             week: 8,
             team: 'SEA',
             gameType: 'REG',
-            limit: 100,
+            limit: 32,
           },
         },
       ],
@@ -68,7 +68,7 @@ export function createNflverseTools(client: NflverseClient) {
         team: teamSchema.optional(),
         position: z.enum(['QB', 'RB', 'WR', 'TE', 'K']).optional(),
         seasonType: z.enum(['REG', 'POST']).optional().default('REG'),
-        limit: z.number().int().min(1).max(200).optional().default(100),
+        limit: z.number().int().min(1).max(200).optional().default(32),
       }),
       inputExamples: [
         {
@@ -78,7 +78,7 @@ export function createNflverseTools(client: NflverseClient) {
             playerName: 'Justin Jefferson',
             position: 'WR',
             seasonType: 'REG',
-            limit: 100,
+            limit: 32,
           },
         },
       ],
@@ -112,6 +112,15 @@ export function createNflverseTools(client: NflverseClient) {
           source: nflverseStatsSource(season),
         };
       },
+      toModelOutput: ({ output }) => ({
+        type: 'json',
+        value: {
+          ...output,
+          stats: output.stats.map(({ kicking, ...row }) =>
+            row.position === 'K' ? { ...row, kicking } : row,
+          ),
+        },
+      }),
     }),
 
     comparePlayerTrends: tool({

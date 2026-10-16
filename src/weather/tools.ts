@@ -31,10 +31,10 @@ export function createWeatherTools(
         'Get the National Weather Service hourly forecast and active alerts for one NFL home stadium.',
       inputSchema: z.object({
         team: teamSchema,
-        hours: z.number().int().min(1).max(168).optional().default(48),
+        hours: z.number().int().min(1).max(168).optional().default(12),
       }),
       inputExamples: [
-        { input: { team: 'SEA', hours: 48 } },
+        { input: { team: 'SEA', hours: 12 } },
       ],
       execute: async ({ team, hours }) => {
         const stadium = findHomeStadium(team);

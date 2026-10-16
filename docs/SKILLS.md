@@ -162,7 +162,7 @@ It includes validated publisher links and publication dates.
 
 Seb validates every parsed discovery record and article metadata value before it stores the value.
 
-The live source probe checks all 44 built-in sources.
+The live source probe checks all 47 built-in sources.
 
 It uses Sleeper for league facts and nflverse for historical statistics.
 

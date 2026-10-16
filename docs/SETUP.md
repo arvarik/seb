@@ -82,7 +82,7 @@ Use `seb configure`, a shell environment, or a deployment environment for these 
 Add a contact value to the NWS user agent.
 
 ```dotenv
-NWS_USER_AGENT=seb/1.0.2 (you@example.com)
+NWS_USER_AGENT=seb/1.1.0 (you@example.com)
 ```
 
 The default value identifies the public Seb repository. A direct contact value helps the NWS contact you about request problems.
@@ -143,7 +143,7 @@ Run the direct news source smoke test.
 npm run news:smoke
 ```
 
-This test reads all 44 built-in news sources from their live public endpoints.
+This test reads all 47 built-in news sources from their live public endpoints.
 
 It verifies that each source returns at least one valid dated article.
 

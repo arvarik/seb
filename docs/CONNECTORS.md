@@ -51,7 +51,7 @@ Service shutdown cancels every active model reply.
 
 Every connector can use the Sleeper, nflverse, and NWS tools.
 
-Every provider can use the 44 built-in first-class news sources.
+Every provider can use the 47 built-in first-class news sources.
 
 Google Search and URL Context are available only when Google is active.
 

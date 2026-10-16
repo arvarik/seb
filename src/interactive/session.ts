@@ -259,7 +259,6 @@ export function formatSessionData(state: SessionState): string {
         warning: league.warning,
       })),
     },
-    usefulNextRequests: getContextualSuggestions(state),
   };
   return stringifySessionData(sessionData);
 }

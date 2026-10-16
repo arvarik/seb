@@ -812,7 +812,9 @@ export class SebTerminalRenderer {
     const storedPrompt = promptWithoutModelConfigurationArguments(prompt);
     this.answerFocus = null;
     this.scrollOffset = 0;
-    this.options.uiState.showSuggestions = false;
+    const command = parseInteractiveCommandInput(prompt)?.command?.name;
+    this.options.uiState.showSuggestions = command !== undefined &&
+      ['explore', 'fantasy', 'analyze', 'skill', 'next', 'new'].includes(command);
     if (!prompt.startsWith('/')) {
       this.options.uiState.latestPrompt = prompt;
     }
@@ -935,25 +937,28 @@ export class SebTerminalRenderer {
           this.activeToolIds.delete(id);
           const startedAt = this.toolStartedAt.get(id);
           if (startedAt !== undefined && !this.toolDurations.has(id)) {
-            this.toolDurations.set(id, Date.now() - startedAt);
+            this.toolDurations.set(id, Math.max(1, Date.now() - startedAt));
           }
         }
         const failed = state === 'output-denied' || (final && (state === 'output-error' || unfinished));
         const marker = failed ? symbol(this.theme, 'danger') : running ? this.spinner() : symbol(this.theme, 'done');
-        const startedAt = this.toolStartedAt.get(id) ?? this.activeStartedAt;
-        const elapsed = formatElapsed(running
-          ? Date.now() - startedAt
-          : this.toolDurations.get(id) ?? Date.now() - startedAt);
+        const elapsed = running
+          ? formatElapsed(Date.now() - (this.toolStartedAt.get(id) ?? this.activeStartedAt))
+          : this.toolDurations.has(id)
+            ? formatElapsed(this.toolDurations.get(id)!)
+            : '';
         const detail = final && unfinished
           ? this.interrupted ? ' · stopped' : ' · incomplete'
           : failed && 'errorText' in part ? ` · ${part.errorText}` : '';
+        const existing = this.sections.find((candidate) => candidate.id === id);
+        const reuseCompleted = state === 'output-available' && existing?.completedTool === name;
         this.upsert({
-          content: `${marker} ${friendlyToolName(name)} · ${retrying ? 'retrying' : elapsed}${detail}`,
+          content: `${marker} ${friendlyToolName(name)}${retrying ? ' · retrying' : elapsed ? ` · ${elapsed}` : ''}${detail}`,
           id,
           kind: failed ? 'error' : 'tool',
           title: running ? 'Working' : 'Tool',
-          details: toolDetails(part),
-          identifier: toolIdentifier(part.input),
+          details: reuseCompleted && existing.details ? existing.details : toolDetails(part),
+          identifier: reuseCompleted && existing.identifier !== undefined ? existing.identifier : toolIdentifier(part.input),
           ...(state === 'output-available' ? {
             completedTool: name,
             durationMs: this.toolDurations.get(id) ?? 0,
@@ -1245,7 +1250,9 @@ export class SebTerminalRenderer {
         this.screenSelection = undefined;
         if (this.expandedDetails.has(toggle)) this.expandedDetails.delete(toggle);
         else this.expandedDetails.add(toggle);
-        this.scrollOffset = Math.max(0, this.scrollOffset + this.renderBodyRows(Math.max(1, this.options.output.columns ?? 80)).length - oldLength);
+        if (this.scrollOffset > 0) {
+          this.scrollOffset = Math.max(0, this.scrollOffset + this.renderBodyRows(Math.max(1, this.options.output.columns ?? 80)).length - oldLength);
+        }
       }
     }
     if (!selection.moved || !this.copyScreenSelection()) {
@@ -1577,7 +1584,7 @@ export class SebTerminalRenderer {
     return [
       paint(this.theme, 'accent', fit(title, width)),
       ...contextRows,
-      paint(this.theme, 'dim', '─'.repeat(width)),
+      paint(this.theme, 'dim', (this.theme.iconMode === 'unicode' ? '─' : '-').repeat(width)),
     ];
   }
 
@@ -1601,6 +1608,7 @@ export class SebTerminalRenderer {
     }
     const rows: BodyRow[] = [];
     const evidenceGroups = new Set<string>();
+    const disclosure = (open: boolean) => this.theme.iconMode === 'unicode' ? (open ? '▾' : '▸') : (open ? 'v' : '>');
     for (let index = 0; index < this.sections.length; index += 1) {
       const section = this.sections[index]!;
       if (section.kind === 'evidence') {
@@ -1627,11 +1635,11 @@ export class SebTerminalRenderer {
           count += 1;
         }
         const content = count > 1
-          ? `${symbol(this.theme, 'done')} ${friendlyToolName(section.completedTool!)} ×${count} · ${formatElapsed(duration)} total`
+          ? `${symbol(this.theme, 'done')} ${friendlyToolName(section.completedTool!)} ×${count}${duration > 0 ? ` · ${formatElapsed(duration)} total` : ''}`
           : section.content;
         const toggleId = count > 1 ? `group:${section.id}` : section.id;
         const expanded = this.expandedDetails.has(toggleId);
-        const lines = wrapTerminalLine(sanitizeTerminalText(`${expanded ? '▾' : '▸'} ${content}`), Math.max(20, width - 2));
+        const lines = wrapTerminalLine(sanitizeTerminalText(`${disclosure(expanded)} ${content}`), Math.max(20, width - 2));
         rows.push(...lines.map((line, sectionRowIndex) => ({ toggleId,
           sectionId: section.id, sectionRowCount: lines.length, sectionRowIndex,
           text: paint(this.theme, section.kind === 'error' ? 'danger' : 'tool', `  ${line}`),
@@ -1639,7 +1647,7 @@ export class SebTerminalRenderer {
         if (expanded) {
           for (const child of this.sections.slice(index, index + count)) {
             if (count > 1) rows.push({ sectionId: child.id, toggleId: child.id,
-              text: paint(this.theme, 'tool', fit(`    ${this.expandedDetails.has(child.id) ? '▾' : '▸'} ${child.identifier || friendlyToolName(child.completedTool!)} · ${formatElapsed(child.durationMs ?? 0)}`, width)) });
+              text: paint(this.theme, 'tool', fit(`    ${disclosure(this.expandedDetails.has(child.id))} ${child.identifier || friendlyToolName(child.completedTool!)}${child.durationMs ? ` · ${formatElapsed(child.durationMs)}` : ''}`, width)) });
             if (count === 1 || this.expandedDetails.has(child.id)) {
               for (const line of sanitizeTerminalText(child.details ?? child.content).split('\n')) {
                 rows.push(...wrapTerminalLine(line, Math.max(20, width - 6)).map(text => ({ sectionId: child.id, text: `      ${text}` })));
@@ -1652,7 +1660,7 @@ export class SebTerminalRenderer {
         continue;
       }
       if (section.kind === 'reasoning' && !this.expandedDetails.has(section.id)) {
-        rows.push({ sectionId: section.id, toggleId: section.id, text: paint(this.theme, 'tool', fit(`  ▸ ${sanitizeTerminalText(section.title)} · ${sanitizeTerminalText(section.content.split('\n')[0] ?? '')}`, width)) });
+        rows.push({ sectionId: section.id, toggleId: section.id, text: paint(this.theme, 'tool', fit(`  ${disclosure(false)} ${sanitizeTerminalText(section.title)} · ${sanitizeTerminalText(section.content.split('\n')[0] ?? '')}`, width)) });
         continue;
       }
       const color = section.kind === 'reasoning' ? 'dim' : section.kind === 'error' ? 'danger' : section.kind === 'tool' ? 'tool' : section.kind === 'assistant' ? 'assistant' : 'accent';
@@ -1717,7 +1725,7 @@ export class SebTerminalRenderer {
       ...menu,
       ...suggestions.map((value, index) =>
         paint(this.theme, 'source', fit(` ${index + 1}  ${sanitizeTerminalText(value)}`, width))),
-      paint(this.theme, 'dim', '─'.repeat(width)),
+      paint(this.theme, 'dim', (this.theme.iconMode === 'unicode' ? '─' : '-').repeat(width)),
       ...promptLines.map((line, index) => `${index === 0 ? `${symbol(this.theme, 'prompt')} ` : '  '}${line}`),
       ...(promptLines.length > 0 ? [''] : []),
       paint(this.theme, 'dim', fit(` ${sanitizeTerminalText(status)}${this.ticker ? ' · Ctrl+C exits · PgUp/PgDn scrolls' : ' · Ctrl+G context · Ctrl+K commands · ? help'}`, width)),

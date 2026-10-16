@@ -1,6 +1,6 @@
 # Other platforms
 
-Seb ships with Slack, Discord, and Telegram connectors.
+Seb ships with Slack, Discord, Telegram, and GroupMe connectors.
 
 Chat SDK supplies adapters for several other platforms.
 

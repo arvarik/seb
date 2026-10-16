@@ -1,6 +1,18 @@
-export const CONNECTOR_NAMES = ['slack', 'discord', 'telegram'] as const;
+export const CONNECTOR_NAMES = ['slack', 'discord', 'telegram', 'groupme'] as const;
 
 export type ConnectorName = (typeof CONNECTOR_NAMES)[number];
+
+export const CONNECTOR_CHUNK_LIMITS: Readonly<Record<ConnectorName, number | null>> = {
+  discord: 2_000,
+  groupme: 1_000,
+  slack: null,
+  telegram: 4_096,
+};
+
+export function connectorChunkLimit(name: string): number | undefined {
+  const limit = CONNECTOR_CHUNK_LIMITS[name as ConnectorName];
+  return typeof limit === 'number' ? limit : undefined;
+}
 
 export interface ConnectorConfig {
   botName: string;
@@ -101,7 +113,27 @@ function readEnabledConnectors(environment: Environment): ConnectorName[] {
   if (hasValue(environment.TELEGRAM_BOT_TOKEN)) {
     enabled.push('telegram');
   }
+  if (
+    hasValue(environment.GROUPME_BOT_ID) &&
+    hasValue(environment.GROUPME_WEBHOOK_SECRET)
+  ) {
+    enabled.push('groupme');
+  }
   return enabled;
+}
+
+export function readTelegramAllowedUserIds(
+  environment: Environment,
+): string[] | undefined {
+  const raw = environment.TELEGRAM_ALLOWED_USER_IDS?.trim();
+  if (!raw) return undefined;
+  const ids = raw.split(',').map((item) => item.trim()).filter(Boolean);
+  if (ids.length === 0 || ids.some((id) => !/^\d+$/u.test(id))) {
+    throw new Error(
+      'TELEGRAM_ALLOWED_USER_IDS must contain comma-separated numeric user IDs.',
+    );
+  }
+  return ids;
 }
 
 function validateCredentials(
@@ -131,6 +163,10 @@ function validateCredentials(
     if (telegramMode === 'webhook') {
       requireValues(environment, ['TELEGRAM_WEBHOOK_SECRET_TOKEN']);
     }
+    readTelegramAllowedUserIds(environment);
+  }
+  if (enabled.includes('groupme')) {
+    requireValues(environment, ['GROUPME_BOT_ID', 'GROUPME_WEBHOOK_SECRET']);
   }
 }
 

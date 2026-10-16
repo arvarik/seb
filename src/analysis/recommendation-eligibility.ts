@@ -58,7 +58,7 @@ const DIRECT_DECISION_QUESTION =
 const LEADING_FANTASY_ACTION =
   /^(?:please\s+)?(?:add|bench|claim|drop|sit|start)\b/iu;
 const CONTEXTUAL_FANTASY_ACTION =
-  /\b(?:accept|decline)\s+(?:a\s+|the\s+|this\s+)?trade\b|\btrade\b[^?\n]{0,120}\bfor\b|\b(?:rank|prioritize)\s+(?:my\s+)?(?:faab|waiver)\b|\b(?:faab|waiver)\s+(?:bid|claim|range|target|targets)\b|\b(?:build|fix|optimize|set)\s+(?:a\s+|my\s+|the\s+)?lineup\b/iu;
+  /\b(?:accept|decline)\s+(?:a\s+|the\s+|this\s+)?trade\b|\btrade\b[^?\n]{0,120}\bfor\b|\b(?:rank|prioritize)\s+(?:my\s+)?(?:faab|waiver)\b|\b(?:faab|waiver)\s+(?:bid|claim|range|target|targets)\b|\b(?:build|fix|optimize|set)\b[^?\n]{0,40}\b(?:lineup|starters?)\b/iu;
 const TIMEBOXED_PLAYER_COMPARISON =
   /\b(?:or|versus|vs\.?)\b[^?\n]{0,120}\b(?:at\s+flex|in\s+(?:my|the)\s+lineup|rest\s+of\s+season|ros|this\s+week)\b/iu;
 const START_SIT_REQUEST = /\b(?:bench|lineup|sit|start)\b/iu;
@@ -213,23 +213,31 @@ export function buildRecommendationEvidence(
         const record = asRecord(item);
         const proj = record?.status === 'projected' ? asRecord(record.projection) : record?.player ? record : null;
         const playerName = (typeof record?.playerName === 'string' ? record.playerName : asRecord(proj?.player)?.name) as string | undefined;
+        const limitations = Array.isArray(proj?.limitations)
+          ? proj.limitations.filter((entry) => typeof entry !== 'string' || !entry.includes('has no current injury status'))
+          : [];
         return {
           toolName: 'projectPlayer',
           input: { ...asRecord(result.input), playerName },
-          output: proj ? { ...proj, recommendationEligible: proj.recommendationEligible !== false } : { recommendationEligible: false },
+          output: proj
+            ? { ...proj, limitations, recommendationEligible: proj.recommendationEligible !== false }
+            : { recommendationEligible: false },
         };
       });
       const matching = mapped.filter((item) => individualPlayerResultMatchesQuestion(item, input.question));
       if (matching.length > 0) return matching;
       const swaps = Array.isArray(out?.recommendedSwaps) ? out.recommendedSwaps : [];
-      const swapNames = new Set(swaps.flatMap((swap) => [
-        asRecord(asRecord(swap)?.startPlayer)?.name,
-        asRecord(asRecord(swap)?.sitPlayer)?.name,
-      ]).filter((name): name is string => typeof name === 'string'));
-      const selected = swapNames.size > 0
-        ? mapped.filter((item) => typeof item.input.playerName === 'string' && swapNames.has(item.input.playerName))
+      const swapNames = new Set(swaps
+        .map((swap) => asRecord(asRecord(swap)?.startPlayer)?.name)
+        .filter((name): name is string => typeof name === 'string'));
+      const optimalNames = new Set((Array.isArray(out?.optimalLineup) ? out.optimalLineup : [])
+        .map((entry) => asRecord(entry)?.name)
+        .filter((name): name is string => typeof name === 'string'));
+      const targetNames = swapNames.size > 0 ? swapNames : optimalNames;
+      const selected = targetNames.size > 0
+        ? mapped.filter((item) => typeof item.input.playerName === 'string' && targetNames.has(item.input.playerName))
         : mapped;
-      const generalLineup = /\blineup\b/iu.test(input.question);
+      const generalLineup = /\b(?:lineup|starters?)\b|\b(?:who|which|what)\b[^?\n]{0,40}\b(?:start|sit|bench)\b/iu.test(input.question);
       return (selected.length > 0 ? selected : mapped).map((item) => ({
         ...item,
         input: { ...item.input, ...(generalLineup ? { fromLineupOptimization: true } : {}) },
@@ -659,13 +667,16 @@ function relevantPlayerSubjects(
     [...toolInputPlayerSubjects(result), ...playerSubjects([result.output])]
       .some((subject) => textMentionsSubject(question, subject)),
   );
+  const hasLineupOptimization = toolResults.some(
+    (result) => asRecord(result.input)?.fromLineupOptimization === true,
+  );
   const subjects = toolResults.flatMap((result) => {
     if (!PLAYER_IDENTITY_TOOLS.has(result.toolName)) return [];
     const candidates = [
       ...toolInputPlayerSubjects(result),
       ...playerSubjects([result.output]),
     ];
-    return isIndividualPlayerTool(result.toolName, hasQuestionMatch) &&
+    return isIndividualPlayerTool(result.toolName, hasQuestionMatch || hasLineupOptimization) &&
         asRecord(result.input)?.fromLineupOptimization !== true
       ? candidates.filter((subject) => textMentionsSubject(question, subject))
       : candidates;

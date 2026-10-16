@@ -72,9 +72,9 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     topic: 'architecture',
     title: 'Agent Loop & System Architecture',
     summary:
-      'Seb coordinates requests using the Vercel AI SDK ToolLoopAgent with a 32-step execution budget. Dynamic Zod validation safeguards all tool inputs, while message pruning removes older history and preserves all active-turn research and provider signatures.',
+      'Seb coordinates requests using the Vercel AI SDK ToolLoopAgent with a 16-step execution budget. Dynamic Zod validation safeguards all tool inputs, while message pruning removes older history and preserves all active-turn research and provider signatures.',
     keyPrinciples: [
-      'ToolLoopAgent allows 32 model steps and reserves the final step for an answer without tool calls',
+      'ToolLoopAgent allows 16 model steps and reserves the final step for an answer without tool calls',
       'Zod-enforced schemas validating seasons, weeks, players, and IDs before execution',
       'Strict context boundaries (32k max prompt, 120k max session characters)',
       'Decision gate enforces prerequisite evidence before start/sit, trade, or waiver recommendations',

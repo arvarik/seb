@@ -43,8 +43,8 @@ import { SleeperClient } from '../sleeper/client.js';
 import { WeatherClient } from '../weather/client.js';
 import {
   createSessionState,
-  formatSessionContext,
   formatSessionData,
+  formatSessionInstructions,
 } from '../interactive/session.js';
 import { FileSetupProfileStore } from '../setup/profile.js';
 import { applySetupProfile, refreshAutomaticSession } from '../setup/wizard.js';
@@ -303,21 +303,19 @@ function createAgentReply(environment: Environment): ConnectorReply {
     } catch {
       // Ignore optional profile errors in connector mode.
     }
-    if (preferredUser || session.user) {
-      try {
-        await refreshAutomaticSession(
-          contextSleeperClient,
-          session,
-          preferredUser || session.user || undefined,
-        );
-      } catch {
-        // Degrade gracefully when Sleeper is unreachable.
-      }
+    try {
+      await refreshAutomaticSession(
+        contextSleeperClient,
+        session,
+        preferredUser || session.user || undefined,
+      );
+    } catch {
+      // Degrade gracefully when Sleeper is unreachable.
     }
     cachedContext = {
       data: formatSessionData(session),
       expiresAt: Date.now() + CONNECTOR_CONTEXT_TTL_MS,
-      instructions: formatSessionContext(session),
+      instructions: formatSessionInstructions(session),
     };
     return cachedContext;
   };

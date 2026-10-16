@@ -419,7 +419,10 @@ function parseFantasyProsDate(value: string, referenceDate: Date): string | null
   let year = referenceDate.getUTCFullYear();
   if (month > referenceDate.getUTCMonth() + 1) year -= 1;
   const offsetHours = zone === 'EDT' ? 4 : 5;
-  const timestamp = Date.UTC(year, month, day, hour + offsetHours, minute);
+  let timestamp = Date.UTC(year, month, day, hour + offsetHours, minute);
+  if (timestamp > referenceDate.getTime() + 24 * 60 * 60 * 1_000) {
+    timestamp = Date.UTC(year - 1, month, day, hour + offsetHours, minute);
+  }
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 

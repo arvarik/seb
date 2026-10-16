@@ -151,7 +151,7 @@ Missing schedules and division-based seeding stop the simulation.
 Seb never invents future opponents.
 
 The simulation blends season and recent roster averages at 70% and 30%.
-It uses independent normal weekly scores with a minimum standard deviation of eight points.
+It uses normal weekly scores with a minimum standard deviation of eight points and supports optional correlated head-to-head matchup shocks (`matchupCorrelation`).
 It ranks simulated records by wins, then points scored, then higher points against, then a random draw for exact ties.
 This order follows [Sleeper standings tiebreakers](https://support.sleeper.com/en/articles/4238872-can-i-set-tiebreakers).
 Custom commissioner seeding remains outside the model.
@@ -368,7 +368,7 @@ Doctor checks local overrides without a language-model call.
 | [Playoff-aware fantasy trade optimization preprint](https://arxiv.org/abs/2511.17535) | Motivation for separating roster value from summed player value | Seb uses exact weekly slot assignment, not the paper's genetic algorithm or dynasty claims |
 | [Sleeper scoring reference](https://support.sleeper.com/en/articles/3998131-what-scoring-options-are-available) | Scoring categories and exclusive yardage bonus ranges | Unknown active rules still require explicit support |
 
-A later model can add play-by-play expected opportunity, role changes, and correlated lineup simulations.
+A later model can add play-by-play expected opportunity and explicit role-change features.
 Those additions need aligned historical inputs and the same chronological tests before automatic promotion.
 Large machine-learning models and causal player claims remain outside this implementation.
 
@@ -393,7 +393,7 @@ A matchup subtotal excludes missing projections. It does not represent a complet
 It uses verified completed individual scores, including completed defenses, and projects the remaining supported players and team defenses.
 It excludes bench players, missing scores, unverified in-progress outcomes, and historical-only baselines.
 The tool returns completed points, remaining projected points, and their calculated subtotal for each roster.
-It keeps commissioner score overrides separate. It does not calculate a win probability.
+It keeps commissioner score overrides separate. When all starters are complete and have uncertainty intervals, it also calculates a correlation-adjusted `winProbability` and `stackCorrelations`.
 Answers must use these returned totals without adding the player scores again.
 
 The historical roster-score model needs at least two completed scores per roster. Week 1 analysis uses supported player projections from the prior season.

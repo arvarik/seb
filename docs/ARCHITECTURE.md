@@ -38,7 +38,7 @@ Each tool uses a Zod input schema.
 
 The schemas validate seasons, weeks, teams, limits, IDs, and other inputs.
 
-The agent uses at most 32 model steps for one request. Each step can request several tools.
+The agent uses at most 16 model steps for one request. Each step can request several tools.
 
 The agent runs AI SDK `pruneMessages` before each model request.
 
@@ -319,6 +319,8 @@ The Google model also receives two provider tools.
 
 `NewsClient` uses a built-in registry of official, independent, fantasy-impact, and team sources.
 
+It indexes discovered articles in SQLite FTS5 (`news_articles_fts`) for BM25 ranking and clusters multi-publisher stories via `corroboratedBy`.
+
 It validates publication dates before it returns an article.
 
 It validates parsed discovery arrays and article metadata before it stores them.
@@ -463,7 +465,8 @@ Plain TypeScript functions calculate the following results.
 - Team offense totals.
 - Defense PPR points and targets allowed by position.
 - Weather risk and its reason list.
-- Scoring-aware player projections and eligibility.
+- Scoring-aware player projections, stack correlations, and eligibility.
+- Full-roster combinatorial lineup optimization (`optimizeRosterLineup`) and bench swap recommendations.
 - Stable waiver production, demand, need, and risk scores.
 - Trade production value and roster position changes.
 
@@ -578,7 +581,7 @@ Read the [AI SDK guide](AI_SDK.md) before you enable trace recording.
 ## Analysis and local learning
 
 The forecast engine combines historical scoring, exponential recency, and a bounded position prior.
-The trade optimizer assigns legal offensive starters exactly. The playoff simulator uses known remaining matchups.
+The lineup and trade optimizers assign legal starters exactly (`optimizeRosterLineup`, `analyzeTradeImpact`). Start-sit, matchup, and playoff simulations support intra-game stack correlations.
 Local weekly learning writes separate, versioned football revisions after chronological validation.
 Projections read compatible revisions only before the requested cutoff.
 The [analysis guide](ANALYSIS.md) defines the formulas, storage contracts, research basis, and measured limits.

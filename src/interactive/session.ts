@@ -530,7 +530,9 @@ export function resolveUserRequestedToolContext(
       ? stringValue(values.name)
       : toolName === 'getPlayerWeeklyStats' || toolName === 'projectPlayer'
         ? stringValue(values.playerName)
-        : toolName === 'comparePlayerTrends' && Array.isArray(values.playerNames) && values.playerNames.length === 1
+        : (toolName === 'comparePlayerTrends' || toolName === 'projectPlayers') &&
+            Array.isArray(values.playerNames) &&
+            values.playerNames.length === 1
           ? stringValue(values.playerNames[0])
           : null;
   const team = requestedTeamCode(toolName, values);

@@ -2,7 +2,7 @@
 
 Seb uses [Semantic Versioning](https://semver.org/) with the `MAJOR.MINOR.PATCH` format.
 
-The current version is `1.1.0`.
+The current version is `1.1.1`.
 
 ## Supported public interfaces
 

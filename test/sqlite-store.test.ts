@@ -1116,6 +1116,56 @@ describe('CachedResource', () => {
     expect(result.outcome).toBe('source-updated');
     expect(result.value).toEqual({ ok: true });
   });
+
+  it('removes orphaned FTS5 news article rows when cache entries are deleted or pruned', () => {
+    const database = createDatabase();
+    const expiredNow = new Date('2026-08-29T20:00:00.000Z');
+    database.putCache({
+      cachedAt: '2026-08-20T00:00:00.000Z',
+      key: 'discovery:source-a:https://a.example/rss',
+      namespace: 'news',
+      schemaVersion: 'news-v1',
+      sourceUrl: 'https://a.example/rss',
+      staleIfErrorMs: 1_000,
+      ttlMs: 1_000,
+      value: [],
+    });
+    database.putCache({
+      cachedAt: '2026-08-29T19:59:00.000Z',
+      key: 'discovery:source-b:https://b.example/rss',
+      namespace: 'news',
+      schemaVersion: 'news-v1',
+      sourceUrl: 'https://b.example/rss',
+      staleIfErrorMs: 60_000,
+      ttlMs: 60_000,
+      value: [],
+    });
+    database.indexNewsArticles('source-a', [{
+      categories: [],
+      excerpt: 'Quarterback rehabilitating knee',
+      publishedAt: '2026-08-20T00:00:00.000Z',
+      title: 'Source A injury update',
+      url: 'https://a.example/news/1',
+    }]);
+    database.indexNewsArticles('source-b', [{
+      categories: [],
+      excerpt: 'Quarterback rehabilitating ankle',
+      publishedAt: '2026-08-29T19:59:00.000Z',
+      title: 'Source B injury update',
+      url: 'https://b.example/news/2',
+    }]);
+
+    expect(database.searchNewsArticlesFts(['rehabilitation'], []).size).toBe(0);
+    expect(database.searchNewsArticlesFts(['rehabilitation']).size).toBe(2);
+
+    database.pruneStorage({ now: expiredNow });
+    expect(
+      [...database.searchNewsArticlesFts(['rehabilitation']).keys()],
+    ).toEqual(['https://b.example/news/2']);
+
+    database.deleteCachePrefix('news', 'discovery:source-b:');
+    expect(database.searchNewsArticlesFts(['rehabilitation']).size).toBe(0);
+  });
 });
 
 function createDatabase(): SebDatabase {

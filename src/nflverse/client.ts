@@ -224,6 +224,7 @@ export class NflverseClient {
       this.database.deleteCache('nflverse', `schedule-${CACHE_SCHEMA_VERSION}`);
     } else {
       this.database.deleteCachePrefix('nflverse', 'player-stats-');
+      this.database.deleteCachePrefix('nflverse', 'defense-');
     }
   }
 

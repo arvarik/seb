@@ -452,13 +452,17 @@ export class SebDatabase {
         : this.database
             .prepare('DELETE FROM cache_entries WHERE namespace = ? AND cache_key = ?')
             .run(namespace, key);
-      if (namespace === 'news' && key === undefined) {
-        const hasFts = this.database
-          .prepare(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'news_articles_fts'",
-          )
-          .get();
-        if (hasFts) this.database.prepare('DELETE FROM news_articles_fts').run();
+      if (namespace === 'news') {
+        if (key === undefined) {
+          const hasFts = this.database
+            .prepare(
+              "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'news_articles_fts'",
+            )
+            .get();
+          if (hasFts) this.database.prepare('DELETE FROM news_articles_fts').run();
+        } else {
+          this.syncNewsArticlesFts();
+        }
       }
       return Number(result.changes);
     });
@@ -515,6 +519,7 @@ export class SebDatabase {
     tokens: readonly string[],
     sourceIds?: readonly string[],
   ): Map<string, number> {
+    if (sourceIds !== undefined && sourceIds.length === 0) return new Map();
     const cleanTokens = [
       ...new Set(
         tokens
@@ -566,6 +571,25 @@ export class SebDatabase {
     }
   }
 
+  private syncNewsArticlesFts(): void {
+    const hasFts = this.database
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'news_articles_fts'",
+      )
+      .get();
+    if (!hasFts) return;
+    this.database
+      .prepare(`
+        DELETE FROM news_articles_fts
+        WHERE NOT EXISTS (
+          SELECT 1 FROM cache_entries
+          WHERE namespace = 'news'
+            AND cache_key LIKE ('discovery:' || news_articles_fts.source_id || ':%')
+        )
+      `)
+      .run();
+  }
+
   deleteCachePrefix(namespace: string, keyPrefix: string): number {
     const escaped = keyPrefix.replace(/[\\%_]/g, (value) => `\\${value}`);
     return this.transaction(() => {
@@ -577,6 +601,7 @@ export class SebDatabase {
       const result = this.database
         .prepare(`DELETE FROM cache_entries WHERE namespace = ? AND cache_key LIKE ? ESCAPE '\\'`)
         .run(namespace, `${escaped}%`);
+      if (namespace === 'news') this.syncNewsArticlesFts();
       return Number(result.changes);
     });
   }
@@ -1243,6 +1268,7 @@ export class SebDatabase {
     const cacheEntriesRemoved = Number(this.database
       .prepare('DELETE FROM cache_entries WHERE stale_until < ?')
       .run(now.toISOString()).changes);
+    if (cacheEntriesRemoved > 0) this.syncNewsArticlesFts();
     const cutoff = new Date(now.getTime() - snapshotMaxAgeDays * 24 * 60 * 60 * 1_000)
       .toISOString();
     let snapshotsRemoved = Number(this.database

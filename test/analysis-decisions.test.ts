@@ -116,13 +116,23 @@ describe('playoff probability simulation', () => {
       analysis: data, matchups, playoffTeams: 1, simulations: 4000, seed: 7,
       correlations: [{ rosterA: 1, rosterB: 2, correlation: 0.6 }],
     });
+    const reversed = await simulatePlayoffOdds({
+      analysis: data, matchups: [{ week: 3, rosterA: 2, rosterB: 1 }], playoffTeams: 1, simulations: 4000, seed: 7,
+      correlations: [{ rosterA: 2, rosterB: 1, correlation: 0.6 }],
+    });
     const negative = await simulatePlayoffOdds({
       analysis: data, matchups, playoffTeams: 1, simulations: 4000, seed: 7,
       correlations: [{ rosterA: 1, rosterB: 2, correlation: -0.6 }],
     });
+    expect(positive.teams).toEqual(reversed.teams);
     expect(positive.teams[0]!.probability).toBeGreaterThan(negative.teams[0]!.probability);
+    expect(positive.assumptions[0]).toContain('Correlated');
     await expect(simulatePlayoffOdds({
       analysis: data, matchups, playoffTeams: 1, correlations: [{ rosterA: 1, rosterB: 2, correlation: 0.95 }],
+    })).rejects.toThrow('correlation');
+    await expect(simulatePlayoffOdds({
+      analysis: data, matchups, playoffTeams: 1,
+      correlations: [{ rosterA: 1, rosterB: 2, correlation: 0.3 }, { rosterA: 2, rosterB: 1, correlation: -0.3 }],
     })).rejects.toThrow('correlation');
   });
 });

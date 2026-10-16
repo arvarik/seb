@@ -209,7 +209,7 @@ describe('full-roster optimal lineup solver', () => {
         confidence: { level: 'high', score: 0.9, rationale: 'Verified.' },
         metrics: [], strengths: [], weaknesses: [], risks: [], assumptions: [], limitations: [],
       },
-      question: 'Should I start Bench Player in my lineup in league 123?',
+      question: 'Optimize my starting lineup for Week 1 in league 123',
       sources: [
         { id: 'sleeper', label: 'Sleeper', url: 'https://api.sleeper.app', accessedAt: '2026-09-10T22:00:00Z', cacheOutcome: 'source-updated' },
         { id: 'web:1', label: 'News', url: 'https://example.com', accessedAt: '2026-09-10T22:00:00Z' },
@@ -226,6 +226,44 @@ describe('full-roster optimal lineup solver', () => {
       leagueScoring: 'present',
       projection: 'eligible',
     });
+  });
+
+  it('locks bench players whose games already started and rejects duplicate starters', async () => {
+    const f = fixture();
+    f.sides[0]!.starters = ['a', 'done'];
+    f.sides[0]!.players = ['a', 'done', 'locked_bench'];
+    f.profiles.locked_bench = { player_id: 'locked_bench', full_name: 'Locked Bench', position: 'WR', fantasy_positions: ['WR'], team: 'SEA' };
+    f.sides[0]!.players_points = { done: 7.25, locked_bench: 30 };
+    const rosters: SleeperRoster[] = [{
+      roster_id: 1,
+      league_id: '123',
+      starters: ['a', 'done'],
+      players: ['a', 'done', 'locked_bench'],
+      settings: {},
+    }];
+    const sleeperWithRosters = {
+      ...f.sleeper,
+      getLeague: vi.fn(async () => league({ season: '2026', roster_positions: ['RB', 'WR', 'BN'] })),
+      getLeagueRosters: vi.fn(async () => rosters),
+    };
+    f.service.project.mockResolvedValue({
+      expectedPoints: 10.55,
+      floor: 6,
+      ceiling: 18,
+      scoreScope: 'weekly-estimate',
+      recommendationEligible: true,
+      limitations: [],
+      player: { playerId: 'a', name: 'Player A', position: 'RB', team: 'BUF' },
+      league: { leagueId: '123', name: 'Test League' },
+      scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+    } as unknown as ScoringAwarePlayerProjection);
+
+    const result = await optimizeRosterLineup(sleeperWithRosters, f.nflverse, f.service, request, now);
+    expect(result.recommendedSwaps).toEqual([]);
+    expect(result.optimalProjectedPoints).toBe(17.8);
+
+    f.sides[0]!.starters = ['a', 'a'];
+    await expect(optimizeRosterLineup(sleeperWithRosters, f.nflverse, f.service, request, now)).rejects.toBeInstanceOf(ResearchDataError);
   });
 });
 

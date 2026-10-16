@@ -23,7 +23,8 @@ export async function simulatePlayoffOdds(input: {
   const correlationByPair = new Map<string, number>();
   for (const entry of input.correlations ?? []) {
     if (!ids.has(entry.rosterA) || !ids.has(entry.rosterB) || entry.rosterA === entry.rosterB ||
-      !Number.isFinite(entry.correlation) || Math.abs(entry.correlation) > 0.8) {
+      !Number.isFinite(entry.correlation) || Math.abs(entry.correlation) > 0.8 ||
+      correlationByPair.has(`${entry.rosterA}:${entry.rosterB}`)) {
       throw new Error('Invalid roster correlation.');
     }
     correlationByPair.set(`${entry.rosterA}:${entry.rosterB}`, entry.correlation);
@@ -56,9 +57,10 @@ export async function simulatePlayoffOdds(input: {
         for (const matchup of gamesByWeek.get(week)!) {
           const rho = correlationByPair.get(`${matchup.rosterA}:${matchup.rosterB}`);
           if (rho) {
-            const zA = zScores.get(matchup.rosterA)!;
-            const zB = zScores.get(matchup.rosterB)!;
-            zScores.set(matchup.rosterB, rho * zA + Math.sqrt(1 - rho * rho) * zB);
+            const [first, second] = matchup.rosterA < matchup.rosterB ? [matchup.rosterA, matchup.rosterB] : [matchup.rosterB, matchup.rosterA];
+            const zA = zScores.get(first)!;
+            const zB = zScores.get(second)!;
+            zScores.set(second, rho * zA + Math.sqrt(1 - rho * rho) * zB);
           }
         }
       }
@@ -90,8 +92,12 @@ export async function simulatePlayoffOdds(input: {
       const center = (probability + z2 / (2 * simulations)) / denominator;
       const width = 1.96 * Math.sqrt(probability * (1 - probability) / simulations + z2 / (4 * simulations ** 2)) / denominator;
       return { rosterId: team.rosterId, probability, simulationInterval95: [Math.max(0, center - width), Math.min(1, center + width)] };
-    }), assumptions: ['Independent normal weekly roster scores with a minimum eight-point standard deviation.',
+    }), assumptions: [
+      correlationByPair.size > 0
+        ? 'Correlated normal weekly roster scores for specified matchup pairs with a minimum eight-point standard deviation.'
+        : 'Independent normal weekly roster scores with a minimum eight-point standard deviation.',
       'Standings use wins, then points scored, then higher points against, then a random draw for exact ties.',
       'Intervals measure simulation sampling error only. They exclude forecast model error.',
       'The model excludes future roster changes, divisions, and custom playoff seeding.'] };
 }
+

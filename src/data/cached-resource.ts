@@ -96,6 +96,8 @@ export class CachedResource<T> {
           l1.revision === cacheRevision &&
           l1.entry.schemaVersion === this.policy.schemaVersion &&
           l1.entry.sourceUrl === this.sourceUrl &&
+          Date.parse(l1.entry.cachedAt) + this.policy.ttlMs === Date.parse(l1.entry.expiresAt) &&
+          Date.parse(l1.entry.expiresAt) + this.policy.staleIfErrorMs === Date.parse(l1.entry.staleUntil) &&
           Date.now() < Date.parse(l1.entry.expiresAt)
         ) {
           const entry = { ...(l1.entry as CacheEntry<T>), freshness: 'fresh' as const };

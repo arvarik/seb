@@ -108,7 +108,7 @@ Upgrade Seb before you open a database from a newer release.
 
 ## Database tables
 
-The database contains eight application tables.
+The database contains eight application tables and one FTS5 virtual table.
 
 | Table | Purpose |
 | --- | --- |
@@ -120,6 +120,7 @@ The database contains eight application tables.
 | `usage_runs` | Stores one local agent run and its final state. |
 | `usage_steps` | Stores one logical AI SDK model step. |
 | `usage_tool_calls` | Stores one client or provider tool call. |
+| `news_articles_fts` | SQLite FTS5 virtual table (`porter unicode61`) for BM25 full-text news indexing. |
 
 The identity link table uses a foreign key to its canonical identity.
 

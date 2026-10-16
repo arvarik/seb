@@ -6,6 +6,32 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-15
+
+### Added
+
+- **Constrained Roster Lineup Optimizer (`optimizeRosterLineup`)**: Deterministically assigns owned roster players across Sleeper starter, flex, and superflex slots (`QB`, `RB`, `WR`, `TE`, `FLEX`, `WRRB_FLEX`, `REC_FLEX`, `SUPER_FLEX`, `IDP_FLEX`, `K`, `DEF`) using maximum-weight assignment, locking completed and in-progress games and reporting `recommendedSwaps`, `expectedGain`, and `optimalTotalPoints`.
+- **Same-Game Stack & Bring-Back Covariance (`sameGameCorrelation`)**: Models bivariate Gaussian covariance ($\rho$) for same-team QB/pass-catcher stacks (`+0.32`), opposing QBs (`+0.20`), same-game pass-catcher bring-backs (`+0.14`), and offensive vs. opposing `DEF` (`-0.25`) in `compareProjections`, `projectLeagueMatchup`, and Monte Carlo `simulatePlayoffOdds`.
+- **Cross-Source News Event Clustering (`corroboratedBy`)**: Groups multi-outlet coverage of the same player/team story within a 36-hour window into a single primary article with `corroboratedBy` outlet tags and `+8`/`+12` multi-source ranking boosts.
+- **SQLite FTS5 BM25 News Search (`news_articles_fts`)**: Indexes fetched news articles in a Porter-tokenized SQLite FTS5 virtual table (`rank = bm25(news_articles_fts, 5.0, 2.0, 1.0, 3.0)`) for sub-millisecond relevance-ranked local recall before network RSS/sitemap fetches.
+
+### Fixed
+
+- **Lineup Optimization & Recommendation Gate**:
+  - Lock bench players whose real-world NFL game has already kicked off (`kickoff <= now`) in `optimizeRosterLineup`, reject duplicate starter IDs, stabilize kept starter slot assignments to prevent false swap chains, and check per-player `recommendationEligible` across optimal starters.
+  - Scope `optimizeRosterLineup` recommendation gate checks to recommended swap targets (`startPlayer`) so unverified bench or sit players do not block valid lineup advice, and allow roster-verified healthy players without redundant injury-status warnings.
+- **Correlated Projections & Playoff Simulation**:
+  - Verify mutual schedule alignment (`a.opponent === b.team && b.opponent === a.team`) in `sameGameCorrelation`, canonicalize player pair ordering in `simulatePlayoffOdds` to prevent inverted correlation matrices, and include `WRRBTE_FLEX` and `WRTE_FLEX` in `compareStartSit`.
+  - Guard `WaiverAssistantService` weekly scoring loops against atypical Sleeper roster rows with missing positions.
+- **News Clustering, FTS5 & Cache Consistency**:
+  - Enforce team/topic overlap and a 36-hour window on normalized title clustering, prefer non-stale primary articles in `deduplicateArticles`, and distinguish ESPN/Yahoo/NFL wire origins from team feeds in `publisherIdentity`.
+  - Align `hasQueryTokenMatch` with FTS5 Porter stemming, re-index HTML-enriched and multi-team sitemap articles into `news_articles_fts`, and synchronize FTS5 rows when `CachedResource` deletes or prunes expired `news:` entries.
+  - Enforce `ttlMs` and `staleIfErrorMs` expiration bounds on `CachedResource` L1 memory hits, include `defense-` keys in `NflverseClient.clearCache('stats')`, and preserve `active` flags in player identity seed preparation.
+- **Agent Harness, Interactive TUI & Connectors**:
+  - Preserve active-turn reasoning and provider signatures in `pruneFantasyMessages` for Thinking-enabled Anthropic and Google models, and strip prior-step `cacheControl` markers so multi-step loops never exceed Anthropic's 4-breakpoint limit.
+  - Guard character-budget forced `conclude` with `stepNumber > 0`, preserve `Skill instructions: ` prefixes when omitting unavailable news commands, and refresh `news` caches in interactive `/refresh`.
+  - Refresh connector runtime context before early command returns and validate GroupMe message length and prefix boundaries.
+
 ## [1.1.0] - 2026-10-15
 
 ### Added

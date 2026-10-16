@@ -4,7 +4,6 @@ import {
   sourceEvidenceBadge,
   type DataSourceRecord,
 } from '../sources.js';
-import stringWidth from 'string-width';
 import { paint, symbol, type SebTheme } from './theme.js';
 
 const ANSI_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/gu;
@@ -12,6 +11,9 @@ const INLINE_LINK_PATTERN = /(!?)\[([^\]]+)\]\((?:<([^>\s]+)>|(https?:\/\/(?:[^(
 const TERMINAL_LINK_PATTERN = /\x1b\]8;;([^\x07\x1b]*)(?:\x07|\x1b\\)([\s\S]*?)\x1b\]8;;(?:\x07|\x1b\\)/gu;
 const TERMINAL_CONTROL_PATTERN = /^\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/u;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
+const ZERO_WIDTH_GRAPHEME_PATTERN = /^[\p{Control}\p{Format}\p{Mark}]+$/u;
+const WIDE_GRAPHEME_PATTERN =
+  /^(?:\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F|\p{Extended_Pictographic}\u200D|[\u1100-\u115f\u2329\u232a\u2e80-\u303e\u3040-\u3247\u3250-\u4dbf\u4e00-\ua4c6\ua960-\ua97c\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6b\uff01-\uff60\uffe0-\uffe6\u{1f000}-\u{1faff}\u{20000}-\u{3fffd}])/u;
 const INLINE_CODE_SPACE = '\u{e102}';
 
 type TableAlignment = 'center' | 'left' | 'right';
@@ -608,7 +610,14 @@ export function osc52(text: string): string {
 }
 
 export function visibleLength(value: string): number {
-  return stringWidth(stripAnsi(value));
+  const stripped = stripAnsi(value);
+  if (/^[ -~]*$/u.test(stripped)) return stripped.length;
+  let width = 0;
+  for (const { segment } of GRAPHEME_SEGMENTER.segment(stripped)) {
+    if (ZERO_WIDTH_GRAPHEME_PATTERN.test(segment)) continue;
+    width += WIDE_GRAPHEME_PATTERN.test(segment) ? 2 : 1;
+  }
+  return width;
 }
 
 export function terminalGraphemes(value: string): string[] {

@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 
 import { z } from 'zod';
 
@@ -106,10 +105,82 @@ interface RobotsPolicy {
   isAllowed(url: string, userAgent?: string): boolean | undefined;
 }
 
-const robotsParser = createRequire(import.meta.url)('robots-parser') as (
-  url: string,
-  contents: string,
-) => RobotsPolicy;
+function robotsParser(_url: string, contents: string): RobotsPolicy {
+  interface Rule {
+    allow: boolean;
+    pattern: string;
+  }
+  interface Group {
+    agents: string[];
+    delay?: number;
+    rules: Rule[];
+  }
+  const groups: Group[] = [];
+  let current: Group | null = null;
+  let seenRule = false;
+  for (const rawLine of contents.split(/\r?\n/u)) {
+    const line = rawLine.replace(/#.*$/u, '').trim();
+    const colon = line.indexOf(':');
+    if (colon <= 0) continue;
+    const field = line.slice(0, colon).trim().toLowerCase();
+    const value = line.slice(colon + 1).trim();
+    if (field === 'user-agent') {
+      if (!current || seenRule) {
+        current = { agents: [], rules: [] };
+        groups.push(current);
+        seenRule = false;
+      }
+      const agent = value.toLowerCase().split('/')[0]?.trim();
+      if (agent) current.agents.push(agent);
+    } else if (current && (field === 'allow' || field === 'disallow')) {
+      seenRule = true;
+      if (value) current.rules.push({ allow: field === 'allow', pattern: value });
+    } else if (current && field === 'crawl-delay') {
+      seenRule = true;
+      const delay = Number(value);
+      if (Number.isFinite(delay) && delay >= 0) current.delay = delay;
+    }
+  }
+  const selectGroups = (userAgent = '*') => {
+    const token = userAgent.toLowerCase().split('/')[0]?.trim() || '*';
+    const specific = groups.filter((group) => group.agents.includes(token));
+    return specific.length > 0
+      ? specific
+      : groups.filter((group) => group.agents.includes('*'));
+  };
+  return {
+    getCrawlDelay(userAgent) {
+      return selectGroups(userAgent).find((group) => group.delay !== undefined)?.delay;
+    },
+    isAllowed(url, userAgent) {
+      const target = new URL(url);
+      const path = `${target.pathname}${target.search}`;
+      let matched: Rule | null = null;
+      for (const group of selectGroups(userAgent)) {
+        for (const rule of group.rules) {
+          if (!robotsPatternMatches(rule.pattern, path)) continue;
+          if (
+            !matched ||
+            rule.pattern.length > matched.pattern.length ||
+            (rule.pattern.length === matched.pattern.length && rule.allow)
+          ) {
+            matched = rule;
+          }
+        }
+      }
+      return matched ? matched.allow : true;
+    },
+  };
+}
+
+function robotsPatternMatches(pattern: string, path: string): boolean {
+  const endAnchored = pattern.endsWith('$');
+  const raw = endAnchored ? pattern.slice(0, -1) : pattern;
+  const escaped = raw
+    .replace(/[.+?^${}()|[\]\\]/gu, '\\$&')
+    .replace(/\*/gu, '.*');
+  return new RegExp(`^${escaped}${endAnchored ? '$' : ''}`, 'u').test(path);
+}
 
 const dateStringSchema = z.string().refine(
   (value) => Number.isFinite(Date.parse(value)),

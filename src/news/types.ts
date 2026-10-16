@@ -2,6 +2,8 @@ import type { CacheOutcome } from '../data/cached-resource.js';
 
 export type NewsSourceCategory = 'fantasy' | 'independent' | 'official';
 
+export type NewsSourceTier = 1 | 2 | 3;
+
 export type NewsDiscoveryKind = 'atom' | 'html' | 'news-sitemap' | 'rss';
 
 export type NewsHtmlFlavor =
@@ -24,6 +26,7 @@ export interface NewsSourceDefinition {
   id: string;
   label: string;
   team?: string;
+  tier?: NewsSourceTier;
   urlPathPrefix?: string;
 }
 

@@ -31,9 +31,31 @@ describe('first-class news source registry', () => {
     );
 
     expect(categories).toEqual(new Set(['official', 'independent', 'fantasy']));
+    expect(FIRST_CLASS_NEWS_SOURCES.every((source) => [1, 2, 3].includes(source.tier ?? 0))).toBe(true);
     expect(findNewsSource('nfl')).toMatchObject({
       category: 'official',
       label: 'NFL News',
+      tier: 1,
+    });
+    expect(findNewsSource('profootballrumors')).toMatchObject({
+      category: 'independent',
+      tier: 1,
+    });
+    expect(findNewsSource('nfltraderumors')).toMatchObject({
+      category: 'independent',
+      tier: 2,
+    });
+    expect(findNewsSource('draftsharks')).toMatchObject({
+      category: 'fantasy',
+      tier: 1,
+    });
+    expect(findNewsSource('rotoballer')).toMatchObject({
+      category: 'fantasy',
+      tier: 2,
+    });
+    expect(findNewsSource('yahoo-nfl')).toMatchObject({
+      category: 'independent',
+      tier: 3,
     });
     expect(FIRST_CLASS_NEWS_SOURCES.some(
       (source) => source.category === 'independent' && !source.team,

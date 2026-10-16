@@ -52,20 +52,23 @@ A tool caller can limit a search with `sourceIds`, `categories`, or `teams`.
 
 ### League, independent, and fantasy sources
 
-| Source ID | Category | Source | Discovery method |
-| --- | --- | --- | --- |
-| `nfl` | Official | [NFL News](https://www.nfl.com/news/) | News sitemap and article metadata |
-| `nfl-player-health` | Official | [NFL Player Health and Safety](https://www.nfl.com/playerhealthandsafety/resources/press-releases/) | Publisher page and article metadata |
-| `ap-nfl` | Independent | [Associated Press NFL](https://apnews.com/hub/nfl) | NFL hub and article metadata |
-| `espn-nfl` | Independent | [ESPN NFL](https://www.espn.com/nfl/) | RSS |
-| `cbs-nfl` | Independent | [CBS Sports NFL](https://www.cbssports.com/nfl/) | RSS |
-| `profootballtalk` | Independent | [NBC ProFootballTalk](https://www.nbcsports.com/nfl/profootballtalk) | RSS |
-| `fox-nfl` | Independent | [FOX Sports NFL](https://www.foxsports.com/nfl) | News sitemap |
-| `yahoo-nfl` | Independent | [Yahoo Sports NFL](https://sports.yahoo.com/nfl/) | RSS with syndication publisher labels |
-| `rotoworld-player-news` | Fantasy | [NBC Rotoworld Player News](https://www.nbcsports.com/fantasy/football/player-news) | Publisher page |
-| `fantasypros-player-news` | Fantasy | [FantasyPros Player News](https://www.fantasypros.com/nfl/player-news.php) | Dated publisher page |
-| `fantasypros-team-news` | Fantasy | [FantasyPros Team News](https://www.fantasypros.com/nfl/team-news.php) | Dated team page |
-| `pff` | Fantasy | [PFF Fantasy News](https://www.pff.com/news/fantasy-football) | Fantasy RSS items |
+| Source ID | Category | Tier | Source | Discovery method |
+| --- | --- | --- | --- | --- |
+| `nfl` | Official | 1 | [NFL News](https://www.nfl.com/news/) | News sitemap and article metadata |
+| `nfl-player-health` | Official | 1 | [NFL Player Health and Safety](https://www.nfl.com/playerhealthandsafety/resources/press-releases/) | Publisher page and article metadata |
+| `espn-nfl` | Independent | 1 | [ESPN NFL](https://www.espn.com/nfl/) | RSS |
+| `profootballtalk` | Independent | 1 | [NBC ProFootballTalk](https://www.nbcsports.com/nfl/profootballtalk) | RSS |
+| `profootballrumors` | Independent | 1 | [Pro Football Rumors](https://www.profootballrumors.com/) | RSS |
+| `cbs-nfl` | Independent | 2 | [CBS Sports NFL](https://www.cbssports.com/nfl/) | RSS |
+| `fox-nfl` | Independent | 2 | [FOX Sports NFL](https://www.foxsports.com/nfl) | News sitemap |
+| `nfltraderumors` | Independent | 2 | [NFL Trade Rumors](https://nfltraderumors.co/) | RSS |
+| `yahoo-nfl` | Independent | 3 | [Yahoo Sports NFL](https://sports.yahoo.com/nfl/) | RSS with syndication publisher labels |
+| `rotoworld-player-news` | Fantasy | 1 | [NBC Rotoworld Player News](https://www.nbcsports.com/fantasy/football/player-news) | Publisher page |
+| `fantasypros-player-news` | Fantasy | 1 | [FantasyPros Player News](https://www.fantasypros.com/nfl/player-news.php) | Dated publisher page |
+| `fantasypros-team-news` | Fantasy | 1 | [FantasyPros Team News](https://www.fantasypros.com/nfl/team-news.php) | Dated team page |
+| `draftsharks` | Fantasy | 1 | [Draft Sharks Shark Bites](https://www.draftsharks.com/shark-bites) | RSS |
+| `rotoballer` | Fantasy | 2 | [RotoBaller Fantasy Football](https://www.rotoballer.com/nfl) | RSS |
+| `pff` | Fantasy | 2 | [PFF Fantasy News](https://www.pff.com/news/fantasy-football) | Fantasy RSS items |
 
 The player health source runs only for a related health or safety question.
 
@@ -161,7 +164,7 @@ These methods use current public web standards. They do not bypass access contro
 | Cache value | Fresh period | Stale period after an error |
 | --- | --- | --- |
 | NFL News sitemap | 5 seconds | 1 day |
-| CBS Sports and PFF discovery | Revalidate on each use | CBS: 1 day. PFF: none. |
+| CBS Sports, Pro Football Rumors, and PFF discovery | 1 minute | CBS and Pro Football Rumors: 1 day. PFF: none. |
 | NBC ProFootballTalk and NBC Rotoworld discovery | 1 minute | 1 day |
 | Most source discovery records | 5 minutes | 1 day |
 | FantasyPros discovery records | 10 minutes | 1 day |
@@ -177,13 +180,13 @@ Run `seb cache clear` to clear all cache entries, including direct news entries.
 
 ## Live source validation
 
-The 2026-08-31 release audit tested each retained discovery URL and a dated article.
+The live source audit tested each retained discovery URL and a dated article.
 
 The audit also tested the robots policy, redirect target, content type, and cache policy.
 
-All 44 built-in sources passed the live source audit.
+All 47 built-in sources passed the live source audit.
 
-The result includes 12 general sources and all 32 official team sites.
+The result includes 15 general sources and all 32 official team sites.
 
 Run the complete live probe from the same network as Seb.
 
@@ -204,7 +207,7 @@ Keep deterministic parser tests in CI and run the live probe before each release
 | Candidate | Audit result |
 | --- | --- |
 | NFL Football Operations | The current page, sitemap, robots file, and feed did not supply a stable live crawl path. |
-| AP RSS and API paths | The robots policy blocks these paths. Seb uses the public NFL hub instead. |
+| AP RSS, API, and hub paths | The robots policy blocks RSS/API paths and the public NFL hub blocks automated HTTP requests (`403`). Seb reads syndicated AP NFL stories through the Yahoo Sports NFL feed instead. |
 | Rotoworld Atom feed | The feed returned no items. Seb uses the server-rendered player news page instead. |
 | Footballguys | The page supplied no reliable structured date. It also returned `no-store` and a stale localhost sitemap. |
 | RotoWire | The public response returned `no-store`. The API also requires access and has redistribution limits. |

@@ -27,7 +27,7 @@ import {
   parseRssFeed,
   type ArticleMetadata,
 } from './parsers.js';
-import { FIRST_CLASS_NEWS_SOURCES } from './sources.js';
+import { findNewsSource, FIRST_CLASS_NEWS_SOURCES } from './sources.js';
 import type {
   DiscoveredNewsArticle,
   NewsArticle,
@@ -176,6 +176,10 @@ export class NewsClient {
   private readonly now: () => Date;
   private readonly onSource: SourceObserver | undefined;
   private readonly requestOptions: NewsClientRequestOptions;
+  private readonly robotsByOrigin = new Map<
+    string,
+    { body: string; policy: RobotsPolicy }
+  >();
   private readonly sources: readonly NewsSourceDefinition[];
 
   constructor(options: NewsClientOptions = {}) {
@@ -233,11 +237,14 @@ export class NewsClient {
       });
     }
 
+    const tokens = queryTokens(query);
     const enriched = await Promise.all(loaded.map(async (source) => {
       if (!source.source.enrichArticles) return source;
       const candidates = rankDiscovered(source.articles, query, this.now())
         .filter((article) =>
-          source.source.enrichDatedArticles || !article.publishedAt
+          !article.publishedAt ||
+          (Boolean(source.source.enrichDatedArticles) &&
+            (tokens.length === 0 || hasQueryTokenMatch(article, tokens)))
         )
         .slice(0, ENRICHMENT_LIMIT_PER_SOURCE);
       const candidateUrls = new Set(candidates.map((article) => article.url));
@@ -439,6 +446,7 @@ export class NewsClient {
   }
 
   clearCache(): void {
+    this.robotsByOrigin.clear();
     if (this.database) this.database.deleteCache('news');
   }
 
@@ -778,7 +786,11 @@ export class NewsClient {
         valueValidated: true as const,
       };
     }, { signal });
-    return robotsParser(robotsUrl, result.value);
+    const cached = this.robotsByOrigin.get(target.origin);
+    if (cached && cached.body === result.value) return cached.policy;
+    const policy = robotsParser(robotsUrl, result.value);
+    this.robotsByOrigin.set(target.origin, { body: result.value, policy });
+    return policy;
   }
 
   private async requestRobotsFile(
@@ -956,7 +968,13 @@ function sourceAllowsArticle(
 }
 
 function sourceTtl(source: NewsSourceDefinition): number {
-  if (source.id === 'cbs-nfl' || source.id === 'pff') return 60_000;
+  if (
+    source.id === 'cbs-nfl' ||
+    source.id === 'pff' ||
+    source.id === 'profootballrumors'
+  ) {
+    return 60_000;
+  }
   if (source.id === 'nfl') return 30_000;
   if (source.id === 'fox-nfl') return 20 * MINUTE_MS;
   if (source.id.startsWith('fantasypros-')) return 10 * MINUTE_MS;
@@ -1060,6 +1078,16 @@ function rankDiscovered(
   });
 }
 
+function hasQueryTokenMatch(
+  article: DiscoveredNewsArticle,
+  tokens: readonly string[],
+): boolean {
+  const text = searchTokenSet(
+    `${article.title} ${article.excerpt ?? ''} ${article.categories.join(' ')} ${article.url}`,
+  );
+  return tokens.some((token) => searchTokenMatches(token, text));
+}
+
 function filterRelevantArticles(
   articles: readonly NewsArticle[],
   query: string,
@@ -1069,7 +1097,7 @@ function filterRelevantArticles(
   const minimumMatches = Math.min(2, tokens.length);
   return articles.filter((article) => {
     const text = searchTokenSet(
-      `${article.title} ${article.excerpt ?? ''} ${article.url}`,
+      `${article.title} ${article.excerpt ?? ''} ${article.categories.join(' ')} ${article.url}`,
     );
     return tokens.filter((token) => searchTokenMatches(token, text)).length >=
       minimumMatches;
@@ -1091,7 +1119,8 @@ function scoreArticle(article: NewsArticle, query: string, now: Date): number {
   let score = scoreDiscovered(article, query, now);
   if (article.category === 'official') score += 1;
   if (article.team) score += 2;
-  if (article.sourceId === 'yahoo-nfl') score -= 1;
+  const tier = findNewsSource(article.sourceId)?.tier;
+  if (tier === 3 || article.sourceId === 'yahoo-nfl') score -= 1;
   return score;
 }
 
@@ -1102,11 +1131,13 @@ function scoreDiscovered(
 ): number {
   const title = searchTokenSet(article.title);
   const excerpt = searchTokenSet(article.excerpt ?? '');
+  const categories = searchTokenSet(article.categories.join(' '));
   const url = searchTokenSet(article.url);
   let score = 0;
   for (const token of queryTokens(query)) {
     if (searchTokenMatches(token, title)) score += 6;
     else if (searchTokenMatches(token, excerpt)) score += 3;
+    else if (searchTokenMatches(token, categories)) score += 2;
     else if (searchTokenMatches(token, url)) score += 1;
   }
   if (article.publishedAt) {
@@ -1166,10 +1197,12 @@ function diversifyArticles(
 }
 
 function sourcePreference(article: NewsArticle): number {
-  if (article.sourceId === 'yahoo-nfl') return 0;
-  if (article.category === 'official') return 3;
-  if (article.category === 'independent') return 2;
-  return 1;
+  const tier = findNewsSource(article.sourceId)?.tier ?? 2;
+  if (tier === 3 || article.sourceId === 'yahoo-nfl') return 0;
+  const tierBonus = tier === 1 ? 1 : 0;
+  if (article.category === 'official') return 6 + tierBonus;
+  if (article.category === 'independent') return 4 + tierBonus;
+  return 2 + tierBonus;
 }
 
 function queryTokens(query: string): string[] {
@@ -1220,6 +1253,17 @@ function publisherIdentity(label: string, sourceId: string): string {
   const normalized = normalizeSearchText(label);
   if (normalized.includes('profootballtalk')) return 'profootballtalk';
   if (normalized.includes('profootball talk')) return 'profootballtalk';
+  if (normalized.includes('pro football rumors')) return 'profootballrumors';
+  if (
+    normalized.includes('nfl trade rumors') ||
+    normalized.includes('nfltraderumors')
+  ) {
+    return 'nfltraderumors';
+  }
+  if (normalized.includes('draft sharks') || normalized.includes('draftsharks')) {
+    return 'draftsharks';
+  }
+  if (normalized.includes('rotoballer')) return 'rotoballer';
   if (normalized.includes('fantasypros')) return 'fantasypros';
   if (normalized.includes('rotoworld')) return 'rotoworld';
   if (normalized === 'nfl news' || normalized.includes('nfl player health')) {

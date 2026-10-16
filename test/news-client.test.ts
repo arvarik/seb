@@ -326,6 +326,81 @@ describe('NewsClient article results', () => {
     ]);
   });
 
+  it('skips HTML metadata enrichment for dated sitemap articles that do not match the query and compacts tool output', async () => {
+    const { createFirstClassNewsTools } = await import('../src/news/tools.js');
+    const source = newsSource('nfl', 'official', {
+      discoveryKind: 'news-sitemap',
+      discoveryUrl: 'https://nfl.example/sitemap.xml',
+      enrichArticles: true,
+      enrichDatedArticles: true,
+      homepageUrl: 'https://nfl.example/news/',
+      tier: 1,
+    });
+    const matchedUrl = 'https://nfl.example/news/mahomes-practice';
+    const unrelatedUrl = 'https://nfl.example/news/stadium-renovations';
+    const calls: FetchCall[] = [];
+    const fetch = routeFetch(new Map([
+      [source.discoveryUrl, xmlResponse(`
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:news="http://www.google.com/schemas/sitemap-news/0.9">
+          <url>
+            <loc>${unrelatedUrl}</loc>
+            <news:news>
+              <news:publication_date>2026-08-29T19:30:00Z</news:publication_date>
+              <news:title>Stadium renovations announced for 2027</news:title>
+            </news:news>
+          </url>
+          <url>
+            <loc>${matchedUrl}</loc>
+            <news:news>
+              <news:publication_date>2026-08-29T19:00:00Z</news:publication_date>
+              <news:title>Mahomes knee update from practice</news:title>
+            </news:news>
+          </url>
+        </urlset>
+      `)],
+      [matchedUrl, htmlResponse(`
+        <script type="application/ld+json">
+          {
+            "@type": "NewsArticle",
+            "headline": "Mahomes full participant at Friday practice",
+            "description": "Chiefs quarterback Patrick Mahomes practiced in full.",
+            "datePublished": "2026-08-29T19:05:00Z"
+          }
+        </script>
+      `)],
+    ]), calls);
+    const client = createClient([source], fetch);
+    const tools = createFirstClassNewsTools(client);
+    const result = await client.search({
+      limit: 5,
+      query: 'Mahomes knee practice',
+      sourceIds: [source.id],
+    });
+
+    expect(calls.some((call) => call.url === unrelatedUrl)).toBe(false);
+    expect(calls.some((call) => call.url === matchedUrl)).toBe(true);
+    const modelOutput = await tools.searchFirstClassNews.toModelOutput?.({
+      args: { query: 'Mahomes knee practice' },
+      output: result,
+      toolCallId: 'call-1',
+    } as never);
+    expect(modelOutput).toEqual({
+      type: 'json',
+      value: expect.objectContaining({
+        articles: [
+          {
+            category: 'official',
+            excerpt: 'Chiefs quarterback Patrick Mahomes practiced in full.',
+            publishedAt: '2026-08-29T19:05:00.000Z',
+            publisherLabel: 'nfl news',
+            title: 'Mahomes full participant at Friday practice',
+            url: matchedUrl,
+          },
+        ],
+      }),
+    });
+  });
+
   it('ranks relevant fresh articles and diversifies the selected publishers', async () => {
     const alpha = newsSource('alpha-ranking', 'independent');
     const beta = newsSource('beta-ranking', 'fantasy');

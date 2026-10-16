@@ -105,6 +105,15 @@ export {
 } from './weather/client.js';
 export { GameWeatherService } from './weather/game-weather.js';
 export {
+  compareProjections,
+  sameGameCorrelation,
+} from './projection/comparison.js';
+export {
+  optimizeRosterLineup,
+  projectLeagueMatchup,
+  type StackCorrelationEntry,
+} from './projection/matchup.js';
+export {
   projectPlayer,
   inspectPlayerScoringSettings,
   scorePlayerWeek,

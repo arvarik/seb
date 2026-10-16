@@ -48,7 +48,7 @@ The tool can infer an NFL team from the question or accept a team code.
 
 The registry is built into Seb.
 
-Version `0.2.0` does not read a custom source file.
+The current release does not read a custom source file.
 
 A tool caller can limit a search with `sourceIds`, `categories`, or `teams`.
 
@@ -178,7 +178,7 @@ A cancellation never returns stale news.
 
 Concurrent requests share one refresh for the same cache key.
 
-Run `seb cache clear` to clear all cache entries, including direct news entries.
+Run `seb cache clear` or `/refresh news` to clear direct news cache entries.
 
 ## Live source validation
 
@@ -227,7 +227,7 @@ Google can return an attribution redirect URL for a grounded publisher page.
 
 Seb validates each direct web source URL before it displays the link.
 
-The command line, interactive interface, and chat connectors show these links.
+The command line, interactive interface, and chat connectors show these links, while direct searches use FTS5 BM25 indexing (`news_articles_fts`) and `corroboratedBy` clustering.
 
 Seb includes the current UTC date in each model request.
 
@@ -364,7 +364,7 @@ The NWS requires a user agent that identifies the application.
 Set `NWS_USER_AGENT` to an application name and contact value.
 
 ```dotenv
-NWS_USER_AGENT=seb/0.2.0 (you@example.com)
+NWS_USER_AGENT=seb/1.1.1 (you@example.com)
 ```
 
 Seb performs three request types.
@@ -477,7 +477,7 @@ The public-data smoke test skips every model provider.
 npm run data:smoke
 ```
 
-The news smoke test checks all 44 direct news sources.
+The news smoke test checks all 47 direct news sources.
 
 ```bash
 npm run news:smoke

@@ -1,5 +1,5 @@
 import { throwIfRequestAborted } from '../ai/request-signal.js';
-import { optimizeLineup, type LineupPlayer } from '../analysis/lineup.js';
+import { eligibleForSlot, optimizeLineup, type LineupPlayer } from '../analysis/lineup.js';
 import { ResearchDataError } from '../data/research-error.js';
 import type { NflverseClient } from '../nflverse/client.js';
 import type { SleeperClient } from '../sleeper/client.js';
@@ -192,20 +192,33 @@ export async function optimizeRosterLineup(
   if (!starterSlots.length) throw new ResearchDataError('The league has no configurable starter slots.');
   const matchup = matchups.find((candidate) => candidate.roster_id === request.rosterId);
   const currentStarterIds = (matchup?.starters?.length ? matchup.starters : roster.starters) ?? [];
-  const starterSet = new Set(currentStarterIds.filter((id) => id && id !== '0'));
+  const activeStarterIds = currentStarterIds.filter((id) => id && id !== '0');
+  if (new Set(activeStarterIds).size !== activeStarterIds.length) {
+    throw new ResearchDataError('The starting lineup contains a duplicate player.');
+  }
+  const starterSet = new Set(activeStarterIds);
   const blockedReserve = new Set([...(roster.reserve ?? []), ...(roster.taxi ?? [])].filter((id) => !starterSet.has(id)));
   const candidateIds = [...new Set([
-    ...currentStarterIds.filter((id) => id && id !== '0'),
+    ...activeStarterIds,
     ...(roster.players ?? []).filter((id) => id && id !== '0' && !blockedReserve.has(id)),
   ])];
-  type RosterCandidate = MatchupPlayerEstimate & { positions: string[]; injuryStatus: string | null };
+  type RosterCandidate = MatchupPlayerEstimate & {
+    positions: string[];
+    injuryStatus: string | null;
+    lockedInProgress: boolean;
+    recommendationEligible: boolean;
+  };
   const byId = new Map<string, RosterCandidate>();
   for (const playerId of candidateIds) {
     const player = profiles[playerId];
     const name = player?.full_name ?? ([player?.first_name, player?.last_name].filter(Boolean).join(' ') || playerId);
     const positions = (player?.fantasy_positions?.length ? player.fantasy_positions : player?.position ? [player.position] : []).map((pos) => pos.toUpperCase());
     const injuryStatus = player?.injury_status ?? null;
-    const base: RosterCandidate = { playerId, name, position: player?.position ?? positions[0] ?? null, positions, injuryStatus, points: null, status: 'unavailable', reason: null, ignoredSettings: [] };
+    const base: RosterCandidate = {
+      playerId, name, position: player?.position ?? positions[0] ?? null, positions, injuryStatus,
+      points: null, status: 'unavailable', reason: null, ignoredSettings: [],
+      lockedInProgress: false, recommendationEligible: false,
+    };
     if (!player) {
       byId.set(playerId, { ...base, reason: 'This roster player has no verified profile.' });
       continue;
@@ -222,12 +235,16 @@ export async function optimizeRosterLineup(
       continue;
     }
     if (kickoff <= now.getTime()) {
+      if (!starterSet.has(playerId)) {
+        byId.set(playerId, { ...base, reason: 'This bench player is locked because their game already started.' });
+        continue;
+      }
       const actual = matchup?.players_points?.[playerId];
       if (game.homeScore !== null && game.awayScore !== null && now.getTime() - kickoff >= 8 * 60 * 60 * 1000 &&
         typeof actual === 'number' && Number.isFinite(actual)) {
-        byId.set(playerId, { ...base, status: 'completed', points: actual });
+        byId.set(playerId, { ...base, status: 'completed', points: actual, recommendationEligible: true });
       } else {
-        byId.set(playerId, { ...base, reason: 'The game started, but a completed individual score is not verified.' });
+        byId.set(playerId, { ...base, lockedInProgress: true, reason: 'The game started, but a completed individual score is not verified.' });
       }
       continue;
     }
@@ -253,6 +270,7 @@ export async function optimizeRosterLineup(
     } else {
       player.points = result.projection.expectedPoints;
       player.ignoredSettings = result.projection.scoring.ignoredSettings;
+      player.recommendationEligible = result.projection.recommendationEligible === true;
     }
   }
   const eligiblePlayers: LineupPlayer[] = [...byId.values()]
@@ -261,6 +279,21 @@ export async function optimizeRosterLineup(
       (player.status === 'completed' || !player.injuryStatus || !UNAVAILABLE_INJURY.test(player.injuryStatus)))
     .map((player) => ({ id: player.playerId, name: player.name, positions: player.positions, points: player.points! }));
   const optimal = optimizeLineup(eligiblePlayers, starterSlots);
+  const assignments = optimal.assignments.map((entry) => ({ ...entry }));
+  for (const entryA of assignments) {
+    if (!starterSet.has(entryA.player.id)) continue;
+    const origIndex = currentStarterIds.indexOf(entryA.player.id);
+    if (origIndex < 0 || origIndex >= starterSlots.length || entryA.slotIndex === origIndex) continue;
+    const entryB = assignments.find((candidate) => candidate.slotIndex === origIndex);
+    const origSlot = starterSlots[origIndex]!;
+    if (entryB && eligibleForSlot(entryA.player.positions, origSlot) && eligibleForSlot(entryB.player.positions, entryA.slot)) {
+      entryB.slot = entryA.slot;
+      entryB.slotIndex = entryA.slotIndex;
+      entryA.slot = origSlot;
+      entryA.slotIndex = origIndex;
+    }
+  }
+  assignments.sort((a, b) => a.slotIndex - b.slotIndex);
   const currentLineup = starterSlots.map((slot, index) => {
     const playerId = currentStarterIds[index] ?? '0';
     const resolved = playerId !== '0' ? byId.get(playerId) : undefined;
@@ -271,37 +304,44 @@ export async function optimizeRosterLineup(
       points: resolved.points, status: resolved.status, injuryStatus: resolved.injuryStatus, reason: resolved.reason };
   });
   const currentProjectedPoints = Math.round(currentLineup.reduce((sum, entry) => sum + Math.round((entry.points ?? 0) * 100), 0)) / 100;
-  const optimalLineup = optimal.assignments.map(({ slot, slotIndex, player }) => {
+  const optimalLineup = assignments.map(({ slot, slotIndex, player }) => {
     const resolved = byId.get(player.id)!;
     return { slot, slotIndex, playerId: player.id, name: player.name, position: resolved.position,
       points: player.points, status: resolved.status, injuryStatus: resolved.injuryStatus, wasStarter: starterSet.has(player.id) };
   });
-  const optimalPlayerIds = new Set(optimal.assignments.map((entry) => entry.player.id));
+  const optimalPlayerIds = new Set(assignments.map((entry) => entry.player.id));
   const displacedIndices = new Set(
     currentLineup
       .map((entry, index) => ({ entry, index }))
-      .filter(({ entry }) => entry.playerId === '0' || !optimalPlayerIds.has(entry.playerId))
+      .filter(({ entry }) => entry.playerId === '0' ||
+        (!optimalPlayerIds.has(entry.playerId) && entry.status !== 'completed' && !byId.get(entry.playerId)?.lockedInProgress))
       .map(({ index }) => index),
   );
-  const recommendedSwaps = optimal.assignments
-    .filter((entry) => !starterSet.has(entry.player.id))
-    .map((entry) => {
-      let sitIndex: number | undefined;
-      if (displacedIndices.has(entry.slotIndex)) {
-        sitIndex = entry.slotIndex;
-      } else {
-        sitIndex = [...displacedIndices].sort((a, b) => (currentLineup[a]!.points ?? -Infinity) - (currentLineup[b]!.points ?? -Infinity))[0];
-      }
-      if (sitIndex !== undefined) displacedIndices.delete(sitIndex);
-      const sit = sitIndex !== undefined ? currentLineup[sitIndex]! : null;
-      const startMeta = byId.get(entry.player.id)!;
-      return {
-        slot: entry.slot,
-        startPlayer: { playerId: entry.player.id, name: entry.player.name, position: startMeta.position, points: entry.player.points },
-        sitPlayer: sit ? { playerId: sit.playerId, name: sit.name, position: sit.position, points: sit.points, injuryStatus: sit.injuryStatus } : null,
-        pointsGain: Math.round((entry.player.points - (sit?.points ?? 0)) * 100) / 100,
-      };
-    });
+  const promoted = assignments.filter((entry) => !starterSet.has(entry.player.id));
+  const directSlots = new Set(promoted.filter((entry) => displacedIndices.has(entry.slotIndex)).map((entry) => entry.slotIndex));
+  const recommendedSwaps = promoted.map((entry) => {
+    let sitIndex: number | undefined;
+    if (displacedIndices.has(entry.slotIndex)) {
+      sitIndex = entry.slotIndex;
+    } else {
+      sitIndex = [...displacedIndices]
+        .filter((index) => !directSlots.has(index))
+        .sort((a, b) => (currentLineup[a]!.points ?? -Infinity) - (currentLineup[b]!.points ?? -Infinity))[0]
+        ?? [...displacedIndices].sort((a, b) => (currentLineup[a]!.points ?? -Infinity) - (currentLineup[b]!.points ?? -Infinity))[0];
+    }
+    if (sitIndex !== undefined) {
+      displacedIndices.delete(sitIndex);
+      directSlots.delete(sitIndex);
+    }
+    const sit = sitIndex !== undefined ? currentLineup[sitIndex]! : null;
+    const startMeta = byId.get(entry.player.id)!;
+    return {
+      slot: entry.slot,
+      startPlayer: { playerId: entry.player.id, name: entry.player.name, position: startMeta.position, points: entry.player.points },
+      sitPlayer: sit ? { playerId: sit.playerId, name: sit.name, position: sit.position, points: sit.points, injuryStatus: sit.injuryStatus } : null,
+      pointsGain: Math.round((entry.player.points - (sit?.points ?? 0)) * 100) / 100,
+    };
+  });
   const warnings: string[] = [];
   for (const entry of currentLineup) {
     if (entry.playerId === '0') warnings.push(`Starter slot ${entry.slot} is currently empty.`);
@@ -312,7 +352,9 @@ export async function optimizeRosterLineup(
     warnings.push(`No eligible active player available to fill starter slot ${missingSlot}.`);
   }
   const ignoredSettings = [...new Set([...byId.values()].flatMap((player) => player.ignoredSettings))].sort();
-  const complete = optimal.complete && ignoredSettings.length === 0;
+  const hasLockedInProgressStarter = activeStarterIds.some((id) => byId.get(id)?.lockedInProgress === true);
+  const complete = optimal.complete && ignoredSettings.length === 0 && !hasLockedInProgressStarter;
+  const recommendationEligible = complete && assignments.every((entry) => byId.get(entry.player.id)?.recommendationEligible === true);
   return {
     league: { id: league.league_id, name: league.name },
     rosterId: request.rosterId,
@@ -327,10 +369,11 @@ export async function optimizeRosterLineup(
     recommendedSwaps,
     missingSlots: optimal.missingSlots,
     complete,
-    recommendationEligible: complete,
+    recommendationEligible,
     ignoredSettings,
     warnings,
     projections: batch.results,
   };
 }
+
 

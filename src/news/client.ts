@@ -309,16 +309,19 @@ export class NewsClient {
     }
 
     const tokens = queryTokens(query);
-    const ftsScores =
+    const loadedSourceIds = [...new Set(loaded.map((item) => item.source.id))];
+    const initialFtsScores =
       this.database && typeof this.database.searchNewsArticlesFts === 'function'
-        ? this.database.searchNewsArticlesFts(
-            tokens,
-            loaded.map((item) => item.source.id),
-          )
+        ? this.database.searchNewsArticlesFts(tokens, loadedSourceIds)
         : new Map<string, number>();
     const enriched = await Promise.all(loaded.map(async (source) => {
       if (!source.source.enrichArticles) return source;
-      const candidates = rankDiscovered(source.articles, query, this.now(), ftsScores)
+      const candidates = rankDiscovered(
+        source.articles,
+        query,
+        this.now(),
+        initialFtsScores,
+      )
         .filter((article) =>
           !article.publishedAt ||
           (Boolean(source.source.enrichDatedArticles) &&
@@ -358,6 +361,32 @@ export class NewsClient {
       }
       return { ...source, articles };
     }));
+    if (this.database && typeof this.database.indexNewsArticles === 'function') {
+      const grouped = new Map<
+        string,
+        { articles: DiscoveredNewsArticle[]; count: number; enriched: boolean }
+      >();
+      for (const source of enriched) {
+        const entry = grouped.get(source.source.id) ?? {
+          articles: [],
+          count: 0,
+          enriched: false,
+        };
+        entry.articles.push(...source.articles);
+        entry.count += 1;
+        entry.enriched ||= Boolean(source.source.enrichArticles);
+        grouped.set(source.source.id, entry);
+      }
+      for (const [sourceId, group] of grouped) {
+        if (group.enriched || group.count > 1) {
+          this.database.indexNewsArticles(sourceId, group.articles);
+        }
+      }
+    }
+    const ftsScores =
+      this.database && typeof this.database.searchNewsArticlesFts === 'function'
+        ? this.database.searchNewsArticlesFts(tokens, loadedSourceIds)
+        : initialFtsScores;
 
     const cutoff = this.now().getTime() - maxAgeDays * DAY_MS;
     const articles = enriched.flatMap((source) =>
@@ -1179,7 +1208,9 @@ function hasQueryTokenMatch(
   const text = searchTokenSet(
     `${article.title} ${article.excerpt ?? ''} ${article.categories.join(' ')} ${article.url}`,
   );
-  return tokens.some((token) => searchTokenMatches(token, text));
+  return tokens.some(
+    (token) => searchTokenMatches(token, text) || porterStemMatches(token, text),
+  );
 }
 
 function filterRelevantArticles(
@@ -1271,8 +1302,9 @@ function compareDiscoveredDates(
 
 interface ArticleCluster {
   primary: NewsArticle;
-  publishers: Map<string, string>;
+  publishers: Map<string, { label: string; stale: boolean }>;
   significantTokens: ReadonlySet<string>;
+  team: string | null;
   titleKeys: Set<string>;
   urlKeys: Set<string>;
 }
@@ -1285,14 +1317,25 @@ function deduplicateArticles(articles: readonly NewsArticle[]): NewsArticle[] {
     const sigTokens = new Set(queryTokens(article.title));
     const matched = clusters.find((cluster) =>
       cluster.urlKeys.has(urlKey) ||
-      cluster.titleKeys.has(titleKey) ||
+      (cluster.titleKeys.has(titleKey) && isCompatibleClusterWindow(article, cluster)) ||
       isSameEventCluster(article, sigTokens, cluster)
     );
     if (matched) {
       matched.urlKeys.add(urlKey);
       matched.titleKeys.add(titleKey);
-      matched.publishers.set(article.publisherId, article.publisherLabel);
-      if (sourcePreference(article) > sourcePreference(matched.primary)) {
+      matched.team ??= article.team;
+      const previousPublisher = matched.publishers.get(article.publisherId);
+      matched.publishers.set(article.publisherId, {
+        label: article.publisherLabel,
+        stale: previousPublisher
+          ? previousPublisher.stale && article.stale
+          : article.stale,
+      });
+      const prefersCandidate =
+        (!article.stale && matched.primary.stale) ||
+        (article.stale === matched.primary.stale &&
+          sourcePreference(article) > sourcePreference(matched.primary));
+      if (prefersCandidate) {
         matched.primary = article;
         matched.significantTokens = sigTokens;
       }
@@ -1300,21 +1343,41 @@ function deduplicateArticles(articles: readonly NewsArticle[]): NewsArticle[] {
     }
     clusters.push({
       primary: article,
-      publishers: new Map([[article.publisherId, article.publisherLabel]]),
+      publishers: new Map([
+        [article.publisherId, { label: article.publisherLabel, stale: article.stale }],
+      ]),
       significantTokens: sigTokens,
+      team: article.team,
       titleKeys: new Set([titleKey]),
       urlKeys: new Set([urlKey]),
     });
   }
   return clusters.map((cluster) => {
     const corroboratedBy = [...cluster.publishers.entries()]
-      .filter(([id]) => id !== cluster.primary.publisherId)
-      .map(([, label]) => label)
+      .filter(
+        ([id, info]) =>
+          id !== cluster.primary.publisherId &&
+          (cluster.primary.stale || !info.stale),
+      )
+      .map(([, info]) => info.label)
       .sort();
     return corroboratedBy.length > 0
       ? { ...cluster.primary, corroboratedBy }
       : cluster.primary;
   });
+}
+
+function isCompatibleClusterWindow(
+  article: NewsArticle,
+  cluster: ArticleCluster,
+): boolean {
+  if (article.team && cluster.team && article.team !== cluster.team) {
+    return false;
+  }
+  return (
+    Math.abs(Date.parse(article.publishedAt) - Date.parse(cluster.primary.publishedAt)) <=
+    36 * HOUR_MS
+  );
 }
 
 function isSameEventCluster(
@@ -1324,20 +1387,13 @@ function isSameEventCluster(
 ): boolean {
   if (
     article.publisherId === cluster.primary.publisherId ||
-    cluster.publishers.has(article.publisherId)
+    cluster.publishers.has(article.publisherId) ||
+    !isCompatibleClusterWindow(article, cluster) ||
+    sigTokens.size < 3 ||
+    cluster.significantTokens.size < 3
   ) {
     return false;
   }
-  if (article.team && cluster.primary.team && article.team !== cluster.primary.team) {
-    return false;
-  }
-  if (
-    Math.abs(Date.parse(article.publishedAt) - Date.parse(cluster.primary.publishedAt)) >
-    36 * HOUR_MS
-  ) {
-    return false;
-  }
-  if (sigTokens.size < 3 || cluster.significantTokens.size < 3) return false;
   const rawShared = [...sigTokens].filter((token) =>
     symmetricTokenMatches(token, cluster.significantTokens)
   ).length;
@@ -1477,14 +1533,27 @@ function publisherIdentity(label: string, sourceId: string): string {
   if (normalized.includes('rotoballer')) return 'rotoballer';
   if (normalized.includes('fantasypros')) return 'fantasypros';
   if (normalized.includes('rotoworld')) return 'rotoworld';
-  if (normalized === 'nfl news' || normalized.includes('nfl player health')) {
+  if (
+    normalized === 'nfl' ||
+    normalized === 'nfl com' ||
+    normalized === 'nfl news' ||
+    normalized.includes('nfl player health')
+  ) {
     return 'nfl';
   }
   if (normalized.includes('cbs sports')) return 'cbs-sports';
   if (normalized.includes('fox sports')) return 'fox-sports';
-  if (normalized === 'espn' || normalized === 'espn com') return 'espn';
+  if (
+    normalized === 'espn' ||
+    normalized === 'espn com' ||
+    normalized.startsWith('espn ')
+  ) {
+    return 'espn';
+  }
   if (normalized.startsWith('pff')) return 'pff';
-  if (normalized === 'yahoo sports') return 'yahoo-nfl';
+  if (normalized === 'yahoo sports' || normalized.startsWith('yahoo sports ')) {
+    return 'yahoo-nfl';
+  }
   if (normalized === 'associated press' || normalized === 'ap') return 'ap-nfl';
   return normalized.replace(/\s+/gu, '-') || sourceId;
 }

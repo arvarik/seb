@@ -13,14 +13,5 @@ export function pruneFantasyMessages(
     reasoning: 'all',
     toolCalls: 'before-last-6-messages',
     emptyMessages: 'remove',
-  }).concat(
-    activeTurn.length > 6
-      ? pruneMessages({
-          messages: [...activeTurn],
-          reasoning: 'before-last-message',
-          toolCalls: 'none',
-          emptyMessages: 'keep',
-        })
-      : activeTurn,
-  );
+  }).concat(activeTurn);
 }

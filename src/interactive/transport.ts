@@ -786,8 +786,11 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       }
       case 'refresh': {
         const target = arguments_[0]?.toLowerCase() ?? 'all';
-        if (!['all', 'sleeper', 'nflverse', 'weather'].includes(target)) {
-          throw new Error('Use /refresh all, /refresh sleeper, /refresh nflverse, or /refresh weather.');
+        if (!['all', 'sleeper', 'nflverse', 'weather', 'news'].includes(target)) {
+          throw new Error('Use /refresh all, /refresh sleeper, /refresh nflverse, /refresh weather, or /refresh news.');
+        }
+        if (target === 'all' || target === 'news') {
+          getSharedSebDatabase().deleteCache('news');
         }
         await Promise.all([
           target === 'all' || target === 'sleeper'

@@ -152,7 +152,7 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('snapshots', '/snapshots [KIND]', 'List recent source snapshots.', 'Sources', 'Read recent immutable source snapshots.', undefined, undefined, undefined, 1),
   command('provenance', '/provenance SNAPSHOT_ID', 'Inspect one snapshot source trail.', 'Sources', 'Print the source lineage for one snapshot.', undefined, undefined, undefined, 1),
   command('replay', '/replay [SEASON] [THROUGH_WEEK]', 'Run the nflverse baseline replay.', 'Analyze', 'Measure the baseline against past results.', undefined, undefined, undefined, 2),
-  command('refresh', '/refresh [all|sleeper|nflverse|weather]', 'Refresh source data on the next read.', 'Sources', 'Delete selected cache entries before the next read.', undefined, ['all', 'sleeper', 'nflverse', 'weather'], true, 1),
+  command('refresh', '/refresh [all|sleeper|nflverse|weather|news]', 'Refresh source data on the next read.', 'Sources', 'Delete selected cache entries before the next read.', undefined, ['all', 'sleeper', 'nflverse', 'weather', 'news'], true, 1),
   command('new', '/new', 'Start a new conversation context.', 'Conversation', 'Exclude earlier messages from the next model call.', ['clear'], undefined, true, 0),
   command('history', '/history [clear]', 'Show or clear question history.', 'Conversation', 'Read or delete the private prompt history.', undefined, ['clear'], undefined, 1),
   command('copy', '/copy [all]', 'Copy the latest answer or full conversation.', 'Conversation', 'Send the latest answer or full conversation to the clipboard.', undefined, ['all'], undefined, 1),

@@ -115,14 +115,12 @@ export function createFantasyFootballAgent(
 ) {
   const { activeProvider, languageModel, newsToolMode, tools } =
     createAgentComponents(options);
-  let callInstructions = runtimeInstructions(options, newsToolMode);
 
   return new ToolLoopAgent({
     model: languageModel,
-    instructions: callInstructions,
+    instructions: runtimeInstructions(options, newsToolMode),
     prepareCall: ({ options: _options, messages, prompt, ...call }) => {
       const runtimeContext = runtimeContextMessage(options.getRuntimeContext?.());
-      callInstructions = runtimeInstructions(options, newsToolMode);
       return {
         ...call,
         ...(messages
@@ -135,13 +133,13 @@ export function createFantasyFootballAgent(
                 : combineRuntimeContext(runtimeContext, prompt),
             }
           : {}),
-        instructions: callInstructions,
+        instructions: runtimeInstructions(options, newsToolMode),
       };
     },
     prepareStep: ({ messages, stepNumber }) => {
       const prepared = pruneFantasyMessages(messages);
       const conclude = stepNumber >= MAX_AGENT_STEPS - 1 ||
-        JSON.stringify(prepared).length >= RESEARCH_CONTEXT_CHARACTER_LIMIT;
+        (stepNumber > 0 && JSON.stringify(prepared).length >= RESEARCH_CONTEXT_CHARACTER_LIMIT);
       if (conclude) {
         prepared.push({
           role: 'user',
@@ -150,6 +148,20 @@ export function createFantasyFootballAgent(
         });
       }
       if (activeProvider === 'anthropic' && prepared.length > 0) {
+        for (let index = 0; index < prepared.length - 1; index += 1) {
+          const message = prepared[index];
+          const anthropicOptions = message?.providerOptions?.anthropic;
+          if (anthropicOptions && 'cacheControl' in anthropicOptions) {
+            const { cacheControl: _cacheControl, ...restAnthropic } = anthropicOptions;
+            prepared[index] = {
+              ...message,
+              providerOptions: {
+                ...message.providerOptions,
+                anthropic: restAnthropic,
+              },
+            };
+          }
+        }
         const last = prepared[prepared.length - 1]!;
         prepared[prepared.length - 1] = {
           ...last,
@@ -351,12 +363,18 @@ function omitUnavailableNewsToolCommands(
   if (unavailableTools.length === 0) return value;
   return value
     .split('\n')
-    .map((line) => line
-      .split(/(?<=[.!?])\s+/u)
-      .filter((sentence) => !unavailableTools.some(
-        (toolName) => sentence.includes(toolName),
-      ))
-      .join(' '))
+    .map((line) => {
+      const prefix = /^(\s*Skill instructions:\s+)/u.exec(line)?.[1] ?? '';
+      const body = prefix ? line.slice(prefix.length) : line;
+      const kept = body
+        .split(/(?<=[.!?])\s+/u)
+        .filter((sentence) => !unavailableTools.some(
+          (toolName) => sentence.includes(toolName),
+        ))
+        .join(' ')
+        .trim();
+      return kept ? `${prefix}${kept}` : '';
+    })
     .filter(Boolean)
     .join('\n');
 }

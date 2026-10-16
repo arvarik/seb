@@ -340,10 +340,15 @@ function summarizeProduction(
     .sort((left, right) => left.week - right.week);
   const latest = selected.at(-1);
   if (!latest || new Set(selected.map((row) => row.week)).size !== selected.length) return null;
-  const weeklyPoints = selected.map((row) => ({
-    points: scorePlayerWeek(row, league.scoring_settings),
-    week: row.week,
-  }));
+  let weeklyPoints: Array<{ points: number; week: number }>;
+  try {
+    weeklyPoints = selected.map((row) => ({
+      points: scorePlayerWeek(row, league.scoring_settings),
+      week: row.week,
+    }));
+  } catch {
+    return null;
+  }
   const recent = weeklyPoints.slice(-3);
   const seasonAverage = average(weeklyPoints.map((item) => item.points));
   const recentAverage = average(recent.map((item) => item.points));

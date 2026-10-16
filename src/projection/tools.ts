@@ -67,7 +67,7 @@ export function createProjectionTools(
       inputSchema: z.object({
         leagueId: z.string().trim().regex(/^\d+$/),
         playerNames: z.array(z.string().trim().min(2).max(100)).min(2).max(6),
-        slot: z.enum(['QB', 'RB', 'WR', 'TE', 'FLEX', 'SUPER_FLEX', 'REC_FLEX', 'WRRB_FLEX', 'DEF', 'K']).optional(),
+        slot: z.enum(['QB', 'RB', 'WR', 'TE', 'FLEX', 'WRRBTE_FLEX', 'SUPER_FLEX', 'REC_FLEX', 'WRTE_FLEX', 'WRRB_FLEX', 'DEF', 'K']).optional(),
         season: seasonSchema, week: z.number().int().min(1).max(18),
       }),
       execute: async ({ playerNames, slot, ...request }) => compareProjections(await Promise.all(

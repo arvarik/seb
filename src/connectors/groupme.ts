@@ -42,6 +42,7 @@ export interface GroupMeAdapterConfig {
 }
 
 const MAX_CACHED_MESSAGES = 40;
+const GROUPME_MAX_TEXT_LENGTH = 1_000;
 
 export function createGroupMeAdapter(
   config: GroupMeAdapterConfig,
@@ -86,7 +87,8 @@ export function createGroupMeAdapter(
     },
 
     decodeThreadId(threadId: string): GroupMeThreadId {
-      const [, groupId = ''] = threadId.split(':');
+      const [prefix = '', rawGroupId = ''] = threadId.split(':');
+      const groupId = prefix === 'groupme' ? rawGroupId : '';
       if (!groupId) throw new Error(`Invalid GroupMe thread ID: ${threadId}`);
       return { groupId };
     },
@@ -164,7 +166,10 @@ export function createGroupMeAdapter(
       message: AdapterPostableMessage,
     ): Promise<RawMessage<GroupMeWebhookPayload>> {
       const { groupId } = this.decodeThreadId(threadId);
-      const text = renderMessage(message).trim();
+      const text = renderMessage(message).trim().slice(0, GROUPME_MAX_TEXT_LENGTH);
+      if (!text) {
+        throw new Error('GroupMe bot message text cannot be empty.');
+      }
       const response = await fetchImpl(`${apiBaseUrl}/v3/bots/post`, {
         body: JSON.stringify({ bot_id: botId, text }),
         headers: { 'content-type': 'application/json' },

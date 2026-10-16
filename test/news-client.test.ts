@@ -810,6 +810,56 @@ describe('NewsClient cache', () => {
     client.clearCache();
     expect(database.searchNewsArticlesFts(['mahomes']).size).toBe(0);
   });
+
+  it('keeps identical generic headlines from different teams as separate articles and re-indexes enriched metadata in FTS5', async () => {
+    const kcTeam = newsSource('team-kc', 'official', { team: 'KC' });
+    const bufTeam = newsSource('team-buf', 'official', { team: 'BUF' });
+    const enrichedSource = newsSource('ap-fts-enrichment', 'independent', {
+      discoveryKind: 'html',
+      discoveryUrl: 'https://ap-fts.example/hub/nfl',
+      enrichArticles: true,
+      homepageUrl: 'https://ap-fts.example/hub/nfl',
+      htmlFlavor: 'ap-nfl-hub',
+      urlPathPrefix: '/article/',
+    });
+    const articleUrl = 'https://ap-fts.example/article/camp-report';
+    const database = createDatabase();
+    const fetch = routeFetch(new Map([
+      [kcTeam.discoveryUrl, rssResponse([
+        article('Friday Injury Report', '/news/kc-friday', '2026-08-29T18:00:00Z'),
+      ])],
+      [bufTeam.discoveryUrl, rssResponse([
+        article('Friday Injury Report', '/news/buf-friday', '2026-08-29T18:05:00Z'),
+      ])],
+      [enrichedSource.discoveryUrl, htmlResponse(`
+        <main class="Page-oneColumn">
+          <a href="${articleUrl}">Camp report</a>
+        </main>
+      `)],
+      [articleUrl, htmlResponse(`
+        <script type="application/ld+json">
+          {
+            "@type": "NewsArticle",
+            "headline": "Friday Injury Report: quarterback rehabilitating ankle",
+            "description": "The starter completed rehabilitation drills on Friday.",
+            "datePublished": "2026-08-29T18:30:00Z"
+          }
+        </script>
+      `)],
+    ]));
+    const client = createClient([kcTeam, bufTeam, enrichedSource], fetch, { database });
+
+    const result = await client.search({
+      limit: 5,
+      query: 'Friday injury report',
+      teams: ['KC', 'BUF'],
+    });
+
+    expect(
+      result.articles.filter((item) => item.title === 'Friday Injury Report'),
+    ).toHaveLength(2);
+    expect(database.searchNewsArticlesFts(['rehabilitation']).has(articleUrl)).toBe(true);
+  });
 });
 
 interface FetchCall {

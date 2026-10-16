@@ -20,12 +20,13 @@ export function sameGameCorrelation(
   const oppA = a.opponent?.toUpperCase() ?? null;
   const oppB = b.opponent?.toUpperCase() ?? null;
   if (teamA === teamB) {
+    if (oppA && oppB && oppA !== oppB) return 0;
     if ((posA === 'QB' && SKILL.has(posB)) || (posB === 'QB' && SKILL.has(posA))) return 0.3;
     if (SKILL.has(posA) && SKILL.has(posB)) return -0.1;
     if ((posA === 'K' && OFFENSE.has(posB)) || (posB === 'K' && OFFENSE.has(posA))) return 0.1;
     return 0;
   }
-  if ((oppA && oppA === teamB) || (oppB && oppB === teamA)) {
+  if (((oppA && oppA === teamB) || (oppB && oppB === teamA)) && (!oppA || oppA === teamB) && (!oppB || oppB === teamA)) {
     if ((posA === 'DEF' && SCORING_OFFENSE.has(posB)) || (posB === 'DEF' && SCORING_OFFENSE.has(posA))) return -0.25;
     if (PASS_GAME.has(posA) && PASS_GAME.has(posB)) return 0.12;
   }
@@ -68,7 +69,9 @@ export function compareProjections(projections: readonly ScoringAwarePlayerProje
     assumptions: ['The comparison maximizes expected points.',
       ...(!slot ? ['Select a legal starter slot when comparing different positions.'] : []),
       ...(!eligible ? ['A player or starter slot failed an eligibility check. The comparison cannot select a starter.'] : []),
-      'The probability assumes normal scoring errors with empirical same-game stack/touch correlation adjustments.',
+      rho !== 0
+        ? 'The probability assumes normal scoring errors with empirical same-game stack/touch correlation adjustments.'
+        : 'The probability assumes independent normal scoring errors. Shared-game correlation can change it.',
       'The probability is a model estimate, not a validated win rate.',
       'Current status, scoring, schedule, and news safeguards still apply.'] };
 }

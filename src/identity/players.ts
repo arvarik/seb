@@ -286,6 +286,7 @@ function prepareSeeds(
         message: `The source identity ${key} has conflicting names or positions.`,
       });
     }
+    previous.active = previous.active || next.active;
     previous.aliases = unique([...previous.aliases, ...next.aliases]);
     previous.teamId = next.teamId ?? previous.teamId;
     previous.canonicalId = next.canonicalId ?? previous.canonicalId;

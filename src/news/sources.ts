@@ -51,6 +51,7 @@ const GENERAL_NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     homepageUrl: 'https://www.nfl.com/news/',
     id: 'nfl',
     label: 'NFL News',
+    tier: 1,
     urlPathPrefix: '/news/',
   },
   {
@@ -73,18 +74,8 @@ const GENERAL_NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     htmlFlavor: 'nfl-player-health',
     id: 'nfl-player-health',
     label: 'NFL Player Health and Safety',
+    tier: 1,
     urlPathPrefix: '/playerhealthandsafety/',
-  },
-  {
-    category: 'independent',
-    discoveryKind: 'html',
-    discoveryUrl: 'https://apnews.com/hub/nfl',
-    enrichArticles: true,
-    homepageUrl: 'https://apnews.com/hub/nfl',
-    htmlFlavor: 'ap-nfl-hub',
-    id: 'ap-nfl',
-    label: 'Associated Press NFL',
-    urlPathPrefix: '/article/',
   },
   {
     category: 'independent',
@@ -93,14 +84,7 @@ const GENERAL_NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     homepageUrl: 'https://www.espn.com/nfl/',
     id: 'espn-nfl',
     label: 'ESPN NFL',
-  },
-  {
-    category: 'independent',
-    discoveryKind: 'rss',
-    discoveryUrl: 'https://www.cbssports.com/rss/headlines/nfl/',
-    homepageUrl: 'https://www.cbssports.com/nfl/',
-    id: 'cbs-nfl',
-    label: 'CBS Sports NFL',
+    tier: 1,
   },
   {
     category: 'independent',
@@ -109,6 +93,25 @@ const GENERAL_NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     homepageUrl: 'https://www.nbcsports.com/nfl/profootballtalk',
     id: 'profootballtalk',
     label: 'NBC ProFootballTalk',
+    tier: 1,
+  },
+  {
+    category: 'independent',
+    discoveryKind: 'rss',
+    discoveryUrl: 'https://www.profootballrumors.com/feed',
+    homepageUrl: 'https://www.profootballrumors.com/',
+    id: 'profootballrumors',
+    label: 'Pro Football Rumors',
+    tier: 1,
+  },
+  {
+    category: 'independent',
+    discoveryKind: 'rss',
+    discoveryUrl: 'https://www.cbssports.com/rss/headlines/nfl/',
+    homepageUrl: 'https://www.cbssports.com/nfl/',
+    id: 'cbs-nfl',
+    label: 'CBS Sports NFL',
+    tier: 2,
   },
   {
     category: 'independent',
@@ -117,7 +120,17 @@ const GENERAL_NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     homepageUrl: 'https://www.foxsports.com/nfl',
     id: 'fox-nfl',
     label: 'FOX Sports NFL',
+    tier: 2,
     urlPathPrefix: '/stories/nfl/',
+  },
+  {
+    category: 'independent',
+    discoveryKind: 'rss',
+    discoveryUrl: 'https://nfltraderumors.co/feed/',
+    homepageUrl: 'https://nfltraderumors.co/',
+    id: 'nfltraderumors',
+    label: 'NFL Trade Rumors',
+    tier: 2,
   },
   {
     category: 'independent',
@@ -126,6 +139,7 @@ const GENERAL_NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     homepageUrl: 'https://sports.yahoo.com/nfl/',
     id: 'yahoo-nfl',
     label: 'Yahoo Sports NFL',
+    tier: 3,
   },
   {
     category: 'fantasy',
@@ -135,6 +149,7 @@ const GENERAL_NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     htmlFlavor: 'rotoworld-player',
     id: 'rotoworld-player-news',
     label: 'NBC Rotoworld Player News',
+    tier: 1,
     urlPathPrefix: '/fantasy/football/player-news/',
   },
   {
@@ -145,7 +160,28 @@ const GENERAL_NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     htmlFlavor: 'fantasypros-player',
     id: 'fantasypros-player-news',
     label: 'FantasyPros Player News',
+    tier: 1,
     urlPathPrefix: '/nfl/news/',
+  },
+  {
+    category: 'fantasy',
+    discoveryKind: 'rss',
+    discoveryUrl: 'https://www.draftsharks.com/rss/shark-bites',
+    homepageUrl: 'https://www.draftsharks.com/shark-bites',
+    id: 'draftsharks',
+    label: 'Draft Sharks Shark Bites',
+    tier: 1,
+    urlPathPrefix: '/fantasy-football-news/',
+  },
+  {
+    category: 'fantasy',
+    discoveryKind: 'rss',
+    discoveryUrl:
+      'https://www.rotoballer.com/category/nfl/fantasy-football-advice-analysis/feed',
+    homepageUrl: 'https://www.rotoballer.com/nfl',
+    id: 'rotoballer',
+    label: 'RotoBaller Fantasy Football',
+    tier: 2,
   },
   {
     category: 'fantasy',
@@ -154,6 +190,7 @@ const GENERAL_NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     homepageUrl: 'https://www.pff.com/news/fantasy-football',
     id: 'pff',
     label: 'PFF Fantasy News',
+    tier: 2,
   },
 ];
 
@@ -174,6 +211,7 @@ const TEAM_NEWS_SOURCES: readonly NewsSourceDefinition[] = TEAM_NEWS_SITES.map(
     id: `team-${code.toLowerCase()}`,
     label: `${label} News`,
     team: code,
+    tier: 1,
     urlPathPrefix: '/news/',
   }),
 );
@@ -186,6 +224,7 @@ const FANTASYPROS_TEAM_SOURCE: NewsSourceDefinition = {
   htmlFlavor: 'fantasypros-team',
   id: 'fantasypros-team-news',
   label: 'FantasyPros Team News',
+  tier: 1,
   urlPathPrefix: '/nfl/news/',
 };
 

@@ -7,14 +7,18 @@ import { Chat } from 'chat';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  resolveConnectorModelProvider,
-  registerConnectorHandlers,
+  compactConnectorHistory,
   ModelResponseError,
+  postConnectorResponse,
+  registerConnectorHandlers,
+  resolveConnectorModelProvider,
+  splitConnectorMessage,
   waitForSignal,
   withWebSources,
   type ConnectorRuntime,
 } from '../src/connectors/bot.js';
 import { readConnectorConfig } from '../src/connectors/config.js';
+import { createGroupMeAdapter } from '../src/connectors/groupme.js';
 import { SourceTracker } from '../src/sources.js';
 import {
   createConnectorApp,
@@ -696,3 +700,101 @@ describe('connector background tasks', () => {
     await expect(background.drain(5)).resolves.toBe(false);
   });
 });
+
+describe('GroupMe adapter, history compaction, and link-safe splitting', () => {
+  it('validates GroupMe credentials and numeric Telegram user IDs', () => {
+    const config = readConnectorConfig({
+      GROUPME_BOT_ID: 'bot-123',
+      GROUPME_WEBHOOK_SECRET: 'secret-xyz',
+      TELEGRAM_ALLOWED_USER_IDS: '1001, 2002',
+      TELEGRAM_BOT_TOKEN: 'tg-token',
+    });
+    expect(config.enabled).toEqual(['telegram', 'groupme']);
+    expect(config.webhookConnectors).toEqual(['groupme']);
+    expect(() => readConnectorConfig({
+      SEB_CONNECTORS: 'telegram',
+      TELEGRAM_ALLOWED_USER_IDS: '1001,not-a-number',
+      TELEGRAM_BOT_TOKEN: 'tg-token',
+    })).toThrow('TELEGRAM_ALLOWED_USER_IDS');
+  });
+
+  it('verifies GroupMe webhooks, ignores self messages, and posts 1,000-char chunks', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 202 }));
+    const groupme = createGroupMeAdapter({
+      botId: 'gm-bot-1',
+      botName: 'seb',
+      fetch: fetchMock as unknown as typeof globalThis.fetch,
+      secretToken: 'gm-secret',
+    });
+    const bot = new Chat({
+      adapters: { groupme },
+      state: createMockState(),
+      userName: 'seb',
+    });
+    registerConnectorHandlers(bot, async (thread, _msg, _ctx, signal) => {
+      const longReply = `${'a'.repeat(980)} [NFL News](<https://www.nfl.com/news/example>) tail`;
+      await postConnectorResponse(thread, (async function* () { yield longReply; })(), signal);
+    });
+    await bot.initialize();
+    const tasks = new BackgroundTasks();
+    const app = createConnectorApp({
+      abortReplies: vi.fn(),
+      bot,
+      config: {
+        botName: 'seb',
+        discordGateway: false,
+        enabled: ['groupme'],
+        host: '127.0.0.1',
+        port: 3000,
+        slackMode: 'webhook',
+        telegramMode: 'auto',
+        webhookConnectors: ['groupme'],
+      },
+      stateKind: 'memory',
+    }, tasks);
+
+    const unauthorized = await app.request('/webhooks/groupme', {
+      body: JSON.stringify({ group_id: 'g1', id: 'm0', sender_type: 'user', text: '@seb hi' }),
+      method: 'POST',
+    });
+    expect(unauthorized.status).toBe(401);
+
+    const botEcho = await app.request('/webhooks/groupme?secret=gm-secret', {
+      body: JSON.stringify({ group_id: 'g1', id: 'm1', sender_type: 'bot', text: '@seb loop' }),
+      method: 'POST',
+    });
+    expect(botEcho.status).toBe(200);
+    await tasks.drain(500);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const accepted = await app.request('/webhooks/groupme', {
+      body: JSON.stringify({ group_id: 'g1', id: 'm2', name: 'Commish', sender_id: 'u1', sender_type: 'user', text: '@seb start or sit?' }),
+      headers: { 'x-groupme-bot-secret': 'gm-secret' },
+      method: 'POST',
+    });
+    expect(accepted.status).toBe(202);
+    await tasks.drain(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const postedTexts = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).text as string);
+    expect(postedTexts.every((chunk) => chunk.length <= 1_000)).toBe(true);
+    expect(postedTexts[1]).toContain('[NFL News](<https://www.nfl.com/news/example>)');
+    await bot.shutdown();
+  });
+
+  it('strips prior Evidence sections from assistant history and preserves markdown links when splitting', () => {
+    const compacted = compactConnectorHistory([
+      { role: 'user', content: 'First question' },
+      { role: 'assistant', content: 'Answer body.\n\n## Evidence\n1. [Sleeper API](<https://api.sleeper.app>) · **LIVE**' },
+      { role: 'user', content: 'Follow-up question' },
+    ]);
+    expect(compacted[1]?.content).toBe('Answer body.');
+    expect(compacted[2]?.content).toBe('Follow-up question');
+
+    const link = '[NFL News](<https://www.nfl.com/news/example>)';
+    const text = `${'x'.repeat(85)}${link} tail`;
+    const chunks = splitConnectorMessage(text, 100);
+    expect(chunks.join('')).toBe(text);
+    expect(chunks.some((chunk) => chunk.includes(link))).toBe(true);
+  });
+});
+

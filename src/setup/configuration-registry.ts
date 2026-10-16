@@ -1,4 +1,5 @@
 import { isAbsolute } from 'node:path';
+import { CONNECTOR_NAMES, type ConnectorName } from '../connectors/config.js';
 
 export type SettingGroup = 'Models' | 'Judgment' | 'Terminal' | 'Data' | 'Connectors';
 export type HostedProvider = 'google' | 'anthropic' | 'openai';
@@ -55,6 +56,8 @@ export const CONFIGURATION_SETTINGS: readonly SettingDefinition[] = [
   { name: 'TELEGRAM_WEBHOOK_SECRET_TOKEN', label: 'Telegram webhook secret', group: 'Connectors', secret: true },
   { name: 'SEB_TELEGRAM_MODE', label: 'Telegram connection mode', group: 'Connectors', choices: ['auto', 'polling', 'webhook'], defaultValue: 'auto' },
   { name: 'TELEGRAM_ALLOWED_USER_IDS', label: 'Allowed Telegram user IDs (comma-separated)', group: 'Connectors', kind: 'ids' },
+  { name: 'GROUPME_BOT_ID', label: 'GroupMe bot ID', group: 'Connectors', secret: true },
+  { name: 'GROUPME_WEBHOOK_SECRET', label: 'GroupMe webhook secret', group: 'Connectors', secret: true },
   { name: 'REDIS_URL', label: 'Redis URL (can contain a password)', group: 'Connectors', kind: 'redis', secret: true },
 ];
 
@@ -89,7 +92,7 @@ export function validateSetting(setting: SettingDefinition, input: unknown): str
     case 'path': if (!isAbsolute(value)) return fail(); break;
     case 'ids': if (!/^\d+(?:\s*,\s*\d+)*$/u.test(value)) return fail(); break;
     case 'connectors':
-      if (value.split(',').some((name) => !['slack', 'discord', 'telegram'].includes(name.trim()))) return fail();
+      if (value.split(',').some((name) => !CONNECTOR_NAMES.includes(name.trim() as ConnectorName))) return fail();
       break;
     case 'redis':
       try { if (!['redis:', 'rediss:'].includes(new URL(value).protocol)) return fail(); }

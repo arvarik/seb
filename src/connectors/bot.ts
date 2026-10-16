@@ -42,6 +42,13 @@ import { NewsClient } from '../news/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import { WeatherClient } from '../weather/client.js';
 import {
+  createSessionState,
+  formatSessionContext,
+  formatSessionData,
+} from '../interactive/session.js';
+import { FileSetupProfileStore } from '../setup/profile.js';
+import { applySetupProfile, refreshAutomaticSession } from '../setup/wizard.js';
+import {
   formatEvidenceMarkdown,
   normalizeWebUrl,
   SourceTracker,
@@ -49,14 +56,19 @@ import {
 } from '../sources.js';
 import { SebUsageTelemetry } from '../usage/telemetry.js';
 import {
+  connectorChunkLimit,
   CONNECTOR_NAMES,
   readConnectorConfig,
+  readTelegramAllowedUserIds,
   type ConnectorConfig,
   type ConnectorName,
   type Environment,
 } from './config.js';
+import { createGroupMeAdapter } from './groupme.js';
 
 const HISTORY_LIMIT = 20;
+const MAX_HISTORY_CHARS = 12_000;
+const CONNECTOR_CONTEXT_TTL_MS = 5 * 60_000;
 const CONNECTOR_FAILURE_TIMEOUT_MS = 5_000;
 const CONNECTOR_REPLY_TIMEOUT_MS = 120_000;
 const FAILURE_MESSAGE =
@@ -145,9 +157,13 @@ export function createConnectorRuntime(
       adapters.discord = discord as unknown as Adapter;
     }
     if (name === 'telegram') {
+      const allowedUserIds = readTelegramAllowedUserIds(environment);
       adapters.telegram = createTelegramAdapter({
         botToken: requireEnvironment(environment, 'TELEGRAM_BOT_TOKEN'),
+        mentionOnReply:
+          environment.TELEGRAM_MENTION_ON_REPLY?.trim().toLowerCase() !== 'false',
         mode: config.telegramMode,
+        ...(allowedUserIds ? { allowedUserIds } : {}),
         ...(environment.TELEGRAM_BOT_USERNAME?.trim()
           ? { userName: environment.TELEGRAM_BOT_USERNAME.trim() }
           : {}),
@@ -157,6 +173,13 @@ export function createConnectorRuntime(
                 environment.TELEGRAM_WEBHOOK_SECRET_TOKEN.trim(),
             }
           : {}),
+      }) as unknown as Adapter;
+    }
+    if (name === 'groupme') {
+      adapters.groupme = createGroupMeAdapter({
+        botId: requireEnvironment(environment, 'GROUPME_BOT_ID'),
+        botName: config.botName,
+        secretToken: requireEnvironment(environment, 'GROUPME_WEBHOOK_SECRET'),
       }) as unknown as Adapter;
     }
   }
@@ -256,6 +279,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
   const sourceContext = new AsyncLocalStorage<SourceTracker>();
   const onSource: SourceObserver = (source) => sourceContext.getStore()?.record(source);
   const sleeperClient = new SleeperClient({ onSource });
+  const contextSleeperClient = new SleeperClient();
   const nflverseClient = new NflverseClient({ onSource });
   const newsClient = new NewsClient({ onSource });
   const weatherClient = new WeatherClient({
@@ -266,10 +290,49 @@ function createAgentReply(environment: Environment): ConnectorReply {
   });
   const clients = { sleeperClient, nflverseClient, newsClient, weatherClient };
   const database = getSharedSebDatabase();
+  let cachedSelection: ResolvedModelProvider | undefined;
+  let cachedContext: { data: string; expiresAt: number; instructions: string } | undefined;
+
+  const getRuntimeContextSnapshot = async () => {
+    if (cachedContext && Date.now() < cachedContext.expiresAt) return cachedContext;
+    const session = createSessionState();
+    const preferredUser = environment.SEB_SLEEPER_USER?.trim();
+    try {
+      const profile = await new FileSetupProfileStore({ environment }).load();
+      if (profile) applySetupProfile(profile, session);
+    } catch {
+      // Ignore optional profile errors in connector mode.
+    }
+    if (preferredUser || session.user) {
+      try {
+        await refreshAutomaticSession(
+          contextSleeperClient,
+          session,
+          preferredUser || session.user || undefined,
+        );
+      } catch {
+        // Degrade gracefully when Sleeper is unreachable.
+      }
+    }
+    cachedContext = {
+      data: formatSessionData(session),
+      expiresAt: Date.now() + CONNECTOR_CONTEXT_TTL_MS,
+      instructions: formatSessionContext(session),
+    };
+    return cachedContext;
+  };
 
   return async (thread, message, context, requestSignal) => {
     requestSignal.throwIfAborted();
-    const selection = await resolveModelFamilies(configured, { signal: requestSignal });
+    const [selection, runtimeContext] = await Promise.all([
+      cachedSelection
+        ? Promise.resolve(cachedSelection)
+        : resolveModelFamilies(configured, { signal: requestSignal }).then((resolved) => {
+            cachedSelection = resolved;
+            return resolved;
+          }),
+      getRuntimeContextSnapshot(),
+    ]);
     const primaryModel = selection.model;
     const fallbackModel = selection.fallbackModel;
     const usageSessionId = randomUUID();
@@ -282,6 +345,8 @@ function createAgentReply(environment: Environment): ConnectorReply {
     const primaryAgent = createFantasyFootballAgent({
       ...connectorAgentModel(selection, primaryModel),
       ...clients,
+      getRuntimeContext: () => runtimeContext.data,
+      getRuntimeInstructions: () => runtimeContext.instructions,
       telemetryFunctionId: 'seb.connector.research',
       telemetryIntegrations: [primaryUsageTelemetry],
     });
@@ -298,6 +363,8 @@ function createAgentReply(environment: Environment): ConnectorReply {
       : createFantasyFootballAgent({
           ...connectorAgentModel(selection, fallbackModel),
           ...clients,
+          getRuntimeContext: () => runtimeContext.data,
+          getRuntimeInstructions: () => runtimeContext.instructions,
           telemetryFunctionId: 'seb.connector.research',
           telemetryIntegrations: [fallbackUsageTelemetry],
         });
@@ -634,14 +701,55 @@ async function buildPrompt(
       ...result.messages,
       ...incoming.filter((item) => !knownIds.has(item.id)),
     ];
-    return await toAiMessages(combined, { includeNames: !thread.isDM });
+    return compactConnectorHistory(
+      await toAiMessages(combined, { includeNames: !thread.isDM }),
+    );
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     process.stderr.write(
       `Seb could not read connector history. It will use the current turn. ${reason}\n`,
     );
-    return await toAiMessages(incoming, { includeNames: !thread.isDM });
+    return compactConnectorHistory(
+      await toAiMessages(incoming, { includeNames: !thread.isDM }),
+    );
   }
+}
+
+export function compactConnectorHistory<
+  T extends { content: unknown; role: string },
+>(messages: readonly T[], maxChars = MAX_HISTORY_CHARS): T[] {
+  if (messages.length === 0) return [];
+  const cleaned = messages.map((msg) => {
+    if (msg.role !== 'assistant') return msg;
+    if (typeof msg.content === 'string') {
+      return { ...msg, content: stripEvidenceAppendix(msg.content) };
+    }
+    if (!Array.isArray(msg.content)) return msg;
+    return {
+      ...msg,
+      content: msg.content.map((part) =>
+        part && typeof part === 'object' && (part as { type?: unknown }).type === 'text' && typeof (part as { text?: unknown }).text === 'string'
+          ? { ...part, text: stripEvidenceAppendix((part as { text: string }).text) }
+          : part,
+      ),
+    };
+  });
+  const kept: T[] = [cleaned[cleaned.length - 1] as T];
+  let budget = maxChars;
+  for (let i = cleaned.length - 2; i >= 0; i -= 1) {
+    const item = cleaned[i] as T;
+    const size = typeof item.content === 'string'
+      ? item.content.length
+      : JSON.stringify(item.content).length;
+    if (size > budget) break;
+    budget -= size;
+    kept.unshift(item);
+  }
+  return kept;
+}
+
+function stripEvidenceAppendix(text: string): string {
+  return text.replace(/\n\n## Evidence\n[\s\S]*$/u, '');
 }
 
 async function runReply(
@@ -768,16 +876,27 @@ export function isConnectorName(value: string): value is ConnectorName {
   return CONNECTOR_NAMES.includes(value as ConnectorName);
 }
 
-/** Split by UTF-16 length without separating a surrogate pair. Preserve all text. */
+/** Split by UTF-16 length without separating a surrogate pair or markdown link. Preserve all text. */
 export function splitConnectorMessage(text: string, limit: number): string[] {
   if (!Number.isSafeInteger(limit) || limit < 2) throw new RangeError('The message limit must be at least 2.');
   const chunks: string[] = [];
+  const half = Math.floor(limit / 2);
   while (text.length > limit) {
     let end = limit;
-    const newline = text.lastIndexOf('\n', end - 1);
-    const space = text.lastIndexOf(' ', end - 1);
-    const boundary = Math.max(newline, space);
-    if (boundary >= Math.floor(limit / 2)) end = boundary + 1;
+    const window = text.slice(0, Math.min(text.length, limit + 512));
+    for (const match of window.matchAll(/\[[^\]]*\]\([^)\n]*\)/gu)) {
+      const start = match.index ?? 0;
+      if (start >= half && start < end && start + match[0].length > end) {
+        end = start;
+        break;
+      }
+    }
+    if (end === limit) {
+      const newline = text.lastIndexOf('\n', end - 1);
+      const space = text.lastIndexOf(' ', end - 1);
+      const boundary = Math.max(newline, space);
+      if (boundary >= half) end = boundary + 1;
+    }
     const code = text.charCodeAt(end - 1);
     if (code >= 0xD800 && code <= 0xDBFF) end -= 1;
     chunks.push(text.slice(0, end));
@@ -794,10 +913,13 @@ export async function postConnectorResponse(
   signal: AbortSignal,
 ): Promise<void> {
   if (judgmentTelemetry().length > 0) response = recordJudgmentResponse(response);
-  const limit = thread.adapter.name === 'discord' ? 2_000 : thread.adapter.name === 'telegram' ? 4_096 : undefined;
+  const limit = connectorChunkLimit(thread.adapter.name);
   if (!limit) {
     await waitForSignal(thread.post(response), signal);
     return;
+  }
+  if (typeof thread.startTyping === 'function') {
+    void Promise.resolve(thread.startTyping()).catch(() => undefined);
   }
   let text = '';
   for await (const part of response) {

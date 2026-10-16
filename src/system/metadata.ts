@@ -253,9 +253,9 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     topic: 'connectors',
     title: 'Chat Bot Connectors',
     summary:
-      'Bot connectors for Discord, Slack, and Telegram built on Hono and Chat SDK (@chat-adapter/*), enabling multi-platform team league intelligence.',
+      'Bot connectors for Discord, Slack, Telegram, and GroupMe built on Hono and Chat SDK, enabling multi-platform team league intelligence.',
     keyPrinciples: [
-      'Discord, Slack (Socket Mode & Webhook), and Telegram adapters',
+      'Discord, Slack (Socket Mode & Webhook), Telegram, and GroupMe adapters',
       'Multi-channel isolation and state persistence via memory or Redis',
       'Bounded 2-minute deadline per reply with graceful cancellation',
     ],
@@ -263,12 +263,13 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
       'src/connectors/server.ts',
       'src/connectors/bot.ts',
       'src/connectors/config.ts',
+      'src/connectors/groupme.ts',
     ],
     documentation: 'docs/CONNECTORS.md',
     content: [
       '# Bot Connectors',
       '',
-      'Seb can be deployed as a multi-tenant chat bot across Discord, Slack, and Telegram.',
+      'Seb can be deployed as a multi-tenant chat bot across Discord, Slack, Telegram, and GroupMe.',
       'Powered by Hono HTTP server and Chat SDK, it provides direct league and matchup analysis inside team chats.',
     ].join('\n'),
   },

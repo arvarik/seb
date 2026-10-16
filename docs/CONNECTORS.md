@@ -2,7 +2,7 @@
 
 Seb uses Chat SDK to share one agent across several chat platforms.
 
-The current project includes Slack, Discord, and Telegram adapters.
+The current project includes Slack, Discord, Telegram, and GroupMe adapters.
 
 ## Quick choice
 
@@ -11,12 +11,15 @@ The current project includes Slack, Discord, and Telegram adapters.
 | Slack | Socket Mode | HTTPS webhook | No for Socket Mode |
 | Discord | Gateway | Gateway plus optional interactions endpoint | No for mentions and direct messages |
 | Telegram | Polling | HTTPS webhook | No for polling |
+| GroupMe | HTTPS tunnel | HTTPS webhook | Yes |
 
 Use Slack when the team already works in Slack.
 
 Use Discord when a resident service can keep a Gateway connection open.
 
 Use Telegram for the smallest local setup.
+
+Use GroupMe for classic fantasy league group chats via GroupMe Bot webhooks.
 
 ## Shared behavior
 
@@ -28,10 +31,10 @@ Seb subscribes to that thread after the first mention.
 
 Seb then responds to later messages in the same thread.
 
-The connector reads up to 20 recent messages for conversation context.
+The connector reads up to 20 recent messages for conversation context, strips previous `## Evidence` footers from historical bot turns, and bounds history size to keep prompts token-efficient.
 
 Slack streams ordinary answers through its platform adapter.
-Discord and Telegram wait for completion, then split plain-text replies at 2,000 and 4,096 characters respectively.
+Discord, Telegram, and GroupMe wait for completion, then split plain-text replies at 2,000, 4,096, and 1,000 characters respectively without breaking markdown links.
 The split replies retain source URLs.
 
 It buffers a direct fantasy action until the deterministic evidence gate finishes.
@@ -98,7 +101,7 @@ The connector reports provider-safe error categories. It does not include raw pr
 Set one or more connectors.
 
 ```dotenv
-SEB_CONNECTORS=slack,discord,telegram
+SEB_CONNECTORS=slack,discord,telegram,groupme
 ```
 
 You only need credentials for the listed connectors.
@@ -118,6 +121,7 @@ The service exposes these routes.
 | `POST /webhooks/slack` | Receives verified Slack events. |
 | `POST /webhooks/discord` | Receives verified Discord interactions. |
 | `POST /webhooks/telegram` | Receives verified Telegram updates. |
+| `POST /webhooks/groupme` | Receives verified GroupMe bot callbacks. |
 
 Each platform adapter verifies its own webhook credentials.
 

@@ -108,6 +108,23 @@ describe('playoff probability simulation', () => {
     controller.abort();
     await expect(run).rejects.toThrow();
   });
+  it('supports correlated matchup shocks and rejects invalid correlation bounds', async () => {
+    const data = analysis();
+    data.teams[0]!.seasonAverage = 115;
+    data.teams[0]!.recentAverage = 115;
+    const positive = await simulatePlayoffOdds({
+      analysis: data, matchups, playoffTeams: 1, simulations: 4000, seed: 7,
+      correlations: [{ rosterA: 1, rosterB: 2, correlation: 0.6 }],
+    });
+    const negative = await simulatePlayoffOdds({
+      analysis: data, matchups, playoffTeams: 1, simulations: 4000, seed: 7,
+      correlations: [{ rosterA: 1, rosterB: 2, correlation: -0.6 }],
+    });
+    expect(positive.teams[0]!.probability).toBeGreaterThan(negative.teams[0]!.probability);
+    await expect(simulatePlayoffOdds({
+      analysis: data, matchups, playoffTeams: 1, correlations: [{ rosterA: 1, rosterB: 2, correlation: 0.95 }],
+    })).rejects.toThrow('correlation');
+  });
 });
 
 it('recognizes a completed season when Sleeper moves league creation into the next year', () => {

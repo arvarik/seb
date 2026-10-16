@@ -7,7 +7,7 @@ import { SleeperClient } from '../sleeper/client.js';
 import { WeatherClient } from '../weather/client.js';
 import { PlayerProjectionService } from './service.js';
 import { projectPlayers } from './batch.js';
-import { projectLeagueMatchup } from './matchup.js';
+import { optimizeRosterLineup, projectLeagueMatchup } from './matchup.js';
 
 const seasonSchema = z.number().int().min(1999).max(2100);
 
@@ -18,6 +18,20 @@ export function createProjectionTools(
 ) {
   const service = new PlayerProjectionService(sleeper, nflverse, weather);
   return {
+    optimizeRosterLineup: tool({
+      description: 'Solve the optimal legal starting lineup for a Sleeper roster in a selected week. Projects starters and bench players, assigns overlapping FLEX/SUPER_FLEX slots via exact combinatorial optimization, and returns concrete bench-to-starter swaps and point gains.',
+      inputSchema: z.object({
+        leagueId: z.string().trim().regex(/^\d+$/),
+        rosterId: z.number().int().positive(),
+        season: seasonSchema,
+        week: z.number().int().min(1).max(18),
+      }),
+      execute: (request) => optimizeRosterLineup(sleeper, nflverse, service, request),
+      toModelOutput: ({ output: { projections: _projections, ...rest } }) => ({
+        type: 'json',
+        value: rest as unknown as JSONValue,
+      }),
+    }),
     projectLeagueMatchup: tool({
       description: 'Calculate both roster subtotals for a selected league matchup. Reads the selected week starters, completed player scores, and remaining projections. Use the returned totals directly instead of adding player scores yourself. Includes team D/ST and individual special teams. Missing scores and unsupported scoring rules remain explicit.',
       inputSchema: z.object({

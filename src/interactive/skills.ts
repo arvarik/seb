@@ -103,8 +103,8 @@ export const SEB_SKILLS: readonly SebSkill[] = [
     title: 'Start and sit',
     category: 'Fantasy',
     description: 'Compare lineup choices with usage, matchup, venue, and weather evidence.',
-    instructions: 'Use compareStartSit with the selected league and week. Explain expected points, uncertainty, and close decisions. Check current news for every player. Withhold recommendations for ineligible players.',
-    suggestions: ['Compare two starters.', 'Check the weather risk.', 'Explain the safer floor.'],
+    instructions: 'Use compareStartSit for two to six specific players, or optimizeRosterLineup to solve the best full starting lineup and bench swaps for a roster. Explain expected points, uncertainty, and close decisions. Check current news for every player. Withhold recommendations for ineligible players.',
+    suggestions: ['Compare two starters.', 'Optimize my starting lineup.', 'Check the weather risk.', 'Explain the safer floor.'],
   },
   {
     id: 'waiver-scout',

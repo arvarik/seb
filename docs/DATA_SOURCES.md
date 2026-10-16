@@ -20,7 +20,9 @@ Seb validates each article URL and publication date before it returns the articl
 
 Seb validates each parsed discovery record and article metadata value before it stores the value.
 
-Seb ranks relevant articles by query match, source class, and publication time.
+Seb indexes discovered articles in a local SQLite FTS5 full-text table (`news_articles_fts`) and ranks relevant articles by BM25 full-text score, query match, source class, and publication time.
+
+Seb clusters corroborated multi-publisher stories on the same event and attaches `corroboratedBy` metadata to the primary article.
 
 Seb limits one publisher to three results in one answer.
 

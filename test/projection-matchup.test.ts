@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { projectLeagueMatchup } from '../src/projection/matchup.js';
+import { optimizeRosterLineup, projectLeagueMatchup } from '../src/projection/matchup.js';
+import { compareProjections, sameGameCorrelation } from '../src/projection/comparison.js';
+import { buildRecommendationEvidence } from '../src/analysis/recommendation-eligibility.js';
 import type { ScoringAwarePlayerProjection } from '../src/projection/player-projection.js';
-import type { SleeperMatchup, SleeperPlayerMap } from '../src/sleeper/types.js';
+import type { SleeperMatchup, SleeperPlayerMap, SleeperRoster } from '../src/sleeper/types.js';
 import { ResearchDataError } from '../src/data/research-error.js';
 import { runWithRequestSignal } from '../src/ai/request-signal.js';
 import { game, league } from './analysis-fixtures.js';
@@ -105,4 +107,125 @@ describe('deterministic matchup totals', () => {
     await expect(runWithRequestSignal(controller.signal, f.run)).rejects.toThrow();
     expect(f.service.project).not.toHaveBeenCalled();
   });
+
+  it('computes correlated matchup win probability and stack correlations when uncertainty bounds exist', async () => {
+    expect(sameGameCorrelation({ position: 'QB', team: 'BUF' }, { position: 'WR', team: 'BUF' })).toBe(0.3);
+    expect(sameGameCorrelation({ position: 'RB', team: 'BUF' }, { position: 'WR', team: 'BUF' })).toBe(-0.1);
+    expect(sameGameCorrelation({ position: 'QB', team: 'BUF', opponent: 'MIA' }, { position: 'DEF', team: 'MIA', opponent: 'BUF' })).toBe(-0.25);
+    expect(sameGameCorrelation({ position: 'QB', team: 'BUF', opponent: 'MIA' }, { position: 'WR', team: 'MIA', opponent: 'BUF' })).toBe(0.12);
+
+    const f = fixture();
+    f.sides[0]!.starters = ['qb', 'wr'];
+    f.sides[1]!.starters = ['b', 'D'];
+    f.profiles.qb = { player_id: 'qb', full_name: 'Josh Allen', position: 'QB', team: 'BUF' };
+    f.profiles.wr = { player_id: 'wr', full_name: 'Khalil Shakir', position: 'WR', team: 'BUF' };
+    f.service.project.mockImplementation(async ({ playerName }: { playerName: string }) => ({
+      expectedPoints: playerName === 'Josh Allen' ? 18 : playerName === 'Khalil Shakir' ? 12 : 16,
+      floor: 6,
+      ceiling: 26,
+      scoreScope: 'weekly-estimate',
+      scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+    } as unknown as ScoringAwarePlayerProjection));
+
+    const stacked = await f.run();
+    expect(stacked.winProbability).not.toBeNull();
+    expect(stacked.stackCorrelations).toContainEqual({
+      players: ['Josh Allen', 'Khalil Shakir'],
+      relationship: 'same-roster',
+      correlation: 0.3,
+    });
+    expect(stacked.stackCorrelations).toContainEqual({
+      players: ['Josh Allen', 'Miami Dolphins'],
+      relationship: 'opposing-roster',
+      correlation: -0.25,
+    });
+
+    const p1 = {
+      expectedPoints: 18, floor: 10, ceiling: 26, season: 2026, week: 1,
+      league: { leagueId: '123', name: 'Test' }, opponent: 'MIA', recommendationEligible: true,
+      player: { playerId: 'qb', name: 'Josh Allen', position: 'QB', team: 'BUF' },
+    } as unknown as ScoringAwarePlayerProjection;
+    const p2 = {
+      ...p1, expectedPoints: 15,
+      player: { playerId: 'wr', name: 'Khalil Shakir', position: 'WR', team: 'BUF' },
+    } as unknown as ScoringAwarePlayerProjection;
+    const comp = compareProjections([p1, p2], 'SUPER_FLEX');
+    expect(comp.correlation).toBe(0.3);
+  });
 });
+
+describe('full-roster optimal lineup solver', () => {
+  it('promotes a higher-projected bench player across FLEX and flags injured starters', async () => {
+    const f = fixture();
+    const rosters: SleeperRoster[] = [{
+      roster_id: 1,
+      league_id: '123',
+      starters: ['a', 'out_wr'],
+      players: ['a', 'out_wr', 'bench', 'ir_guy'],
+      reserve: ['ir_guy'],
+      settings: {},
+    }];
+    f.sides[0]!.starters = ['a', 'out_wr'];
+    f.sides[0]!.players = ['a', 'out_wr', 'bench', 'ir_guy'];
+    f.profiles.out_wr = { player_id: 'out_wr', full_name: 'Injured Receiver', position: 'WR', fantasy_positions: ['WR'], team: 'BUF', injury_status: 'Out' };
+    f.profiles.a = { player_id: 'a', full_name: 'Player A', position: 'RB', fantasy_positions: ['RB'], team: 'BUF' };
+    f.profiles.bench = { player_id: 'bench', full_name: 'Bench Player', position: 'RB', fantasy_positions: ['RB'], team: 'BUF' };
+    f.profiles.ir_guy = { player_id: 'ir_guy', full_name: 'IR Player', position: 'WR', fantasy_positions: ['WR'], team: 'BUF' };
+    const sleeperWithRosters = {
+      ...f.sleeper,
+      getLeague: vi.fn(async () => league({ season: '2026', roster_positions: ['RB', 'FLEX', 'BN', 'IR'] })),
+      getLeagueRosters: vi.fn(async () => rosters),
+    };
+    f.service.project.mockImplementation(async ({ playerName }: { playerName: string }) => ({
+      expectedPoints: playerName === 'Bench Player' ? 16.4 : 11.2,
+      floor: 6,
+      ceiling: 22,
+      scoreScope: 'weekly-estimate',
+      recommendationEligible: true,
+      limitations: [],
+      player: { playerId: playerName === 'Bench Player' ? 'bench' : 'a', name: playerName, position: 'RB', team: 'BUF' },
+      league: { leagueId: '123', name: 'Test League' },
+      scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+    } as unknown as ScoringAwarePlayerProjection));
+
+    const optimized = await optimizeRosterLineup(sleeperWithRosters, f.nflverse, f.service, request, now);
+    expect(optimized.currentProjectedPoints).toBe(11.2);
+    expect(optimized.optimalProjectedPoints).toBe(27.6);
+    expect(optimized.pointsDelta).toBe(16.4);
+    expect(optimized.complete).toBe(true);
+    expect(optimized.recommendationEligible).toBe(true);
+    expect(optimized.recommendedSwaps).toEqual([{
+      slot: 'FLEX',
+      startPlayer: { playerId: 'bench', name: 'Bench Player', position: 'RB', points: 16.4 },
+      sitPlayer: { playerId: 'out_wr', name: 'Injured Receiver', position: 'WR', points: null, injuryStatus: 'Out' },
+      pointsGain: 16.4,
+    }]);
+    expect(optimized.warnings.some((warning) => warning.includes('Injured Receiver'))).toBe(true);
+
+    const evidence = buildRecommendationEvidence({
+      analysis: {
+        schemaVersion: 1, kind: 'player', subject: 'Bench Player', summary: 'Swap Bench Player in.',
+        recommendation: { action: 'Start Bench Player.', rationale: 'Higher projection.' },
+        confidence: { level: 'high', score: 0.9, rationale: 'Verified.' },
+        metrics: [], strengths: [], weaknesses: [], risks: [], assumptions: [], limitations: [],
+      },
+      question: 'Should I start Bench Player in my lineup in league 123?',
+      sources: [
+        { id: 'sleeper', label: 'Sleeper', url: 'https://api.sleeper.app', accessedAt: '2026-09-10T22:00:00Z', cacheOutcome: 'source-updated' },
+        { id: 'web:1', label: 'News', url: 'https://example.com', accessedAt: '2026-09-10T22:00:00Z' },
+      ],
+      toolResults: [
+        { toolName: 'optimizeRosterLineup', input: request, output: optimized },
+        { toolName: 'searchCurrentNews', output: { result: 'Bench Player is healthy and active.' } },
+      ],
+    });
+    expect(evidence).toEqual({
+      currentEvidence: 'fresh',
+      identity: 'resolved',
+      injury: 'present',
+      leagueScoring: 'present',
+      projection: 'eligible',
+    });
+  });
+});
+

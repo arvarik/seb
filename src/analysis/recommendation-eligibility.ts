@@ -76,6 +76,7 @@ const PLAYER_IDENTITY_TOOLS = new Set([
   'findPlayers',
   'getRosterPlayers',
   'getTrendingPlayers',
+  'optimizeRosterLineup',
   'projectPlayer',
   'rankWaiverTargets',
   'analyzeTradeImpact',
@@ -86,6 +87,7 @@ const PLAYER_STATUS_TOOLS = new Set([
   'getRosterPlayers',
   'getTeamPlayers',
   'getTrendingPlayers',
+  'optimizeRosterLineup',
   'projectPlayer',
   'rankWaiverTargets',
   'analyzeTradeImpact',
@@ -93,6 +95,7 @@ const PLAYER_STATUS_TOOLS = new Set([
 const SCORING_TOOLS = new Set([
   'analyzeLeague',
   'getLeagueOverview',
+  'optimizeRosterLineup',
   'predictMatchup',
   'projectLeagueMatchup',
   'projectPlayer',
@@ -199,6 +202,38 @@ export function buildRecommendationEvidence(
           input: { ...asRecord(result.input), playerName: record?.playerName },
           output: record?.status === 'projected' ? record.projection : { recommendationEligible: false } };
       });
+    }
+    if (result.toolName === 'optimizeRosterLineup') {
+      const out = asRecord(result.output);
+      const projections = out?.projections;
+      if (!Array.isArray(projections) || !projections.length || out?.recommendationEligible !== true) {
+        return [{ toolName: 'projectPlayer', output: { recommendationEligible: false }, input: result.input }];
+      }
+      const mapped = projections.map((item) => {
+        const record = asRecord(item);
+        const proj = record?.status === 'projected' ? asRecord(record.projection) : record?.player ? record : null;
+        const playerName = (typeof record?.playerName === 'string' ? record.playerName : asRecord(proj?.player)?.name) as string | undefined;
+        return {
+          toolName: 'projectPlayer',
+          input: { ...asRecord(result.input), playerName },
+          output: proj ? { ...proj, recommendationEligible: proj.recommendationEligible !== false } : { recommendationEligible: false },
+        };
+      });
+      const matching = mapped.filter((item) => individualPlayerResultMatchesQuestion(item, input.question));
+      if (matching.length > 0) return matching;
+      const swaps = Array.isArray(out?.recommendedSwaps) ? out.recommendedSwaps : [];
+      const swapNames = new Set(swaps.flatMap((swap) => [
+        asRecord(asRecord(swap)?.startPlayer)?.name,
+        asRecord(asRecord(swap)?.sitPlayer)?.name,
+      ]).filter((name): name is string => typeof name === 'string'));
+      const selected = swapNames.size > 0
+        ? mapped.filter((item) => typeof item.input.playerName === 'string' && swapNames.has(item.input.playerName))
+        : mapped;
+      const generalLineup = /\blineup\b/iu.test(input.question);
+      return (selected.length > 0 ? selected : mapped).map((item) => ({
+        ...item,
+        input: { ...item.input, ...(generalLineup ? { fromLineupOptimization: true } : {}) },
+      }));
     }
     if (result.toolName !== 'compareStartSit') return [result];
     const projections = asRecord(result.output)?.projections;
@@ -607,6 +642,7 @@ function individualPlayerResultMatchesQuestion(
   result: RecommendationToolResult,
   question: string,
 ): boolean {
+  if (asRecord(result.input)?.fromLineupOptimization === true) return true;
   const subjects = [
     ...toolInputPlayerSubjects(result),
     ...playerSubjects([result.output]),
@@ -629,7 +665,8 @@ function relevantPlayerSubjects(
       ...toolInputPlayerSubjects(result),
       ...playerSubjects([result.output]),
     ];
-    return isIndividualPlayerTool(result.toolName, hasQuestionMatch)
+    return isIndividualPlayerTool(result.toolName, hasQuestionMatch) &&
+        asRecord(result.input)?.fromLineupOptimization !== true
       ? candidates.filter((subject) => textMentionsSubject(question, subject))
       : candidates;
   });

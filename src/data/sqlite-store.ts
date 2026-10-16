@@ -452,8 +452,118 @@ export class SebDatabase {
         : this.database
             .prepare('DELETE FROM cache_entries WHERE namespace = ? AND cache_key = ?')
             .run(namespace, key);
+      if (namespace === 'news' && key === undefined) {
+        const hasFts = this.database
+          .prepare(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'news_articles_fts'",
+          )
+          .get();
+        if (hasFts) this.database.prepare('DELETE FROM news_articles_fts').run();
+      }
       return Number(result.changes);
     });
+  }
+
+  indexNewsArticles(
+    sourceId: string,
+    articles: ReadonlyArray<{
+      categories: readonly string[];
+      excerpt: string | null;
+      publishedAt: string | null;
+      title: string;
+      url: string;
+    }>,
+  ): void {
+    try {
+      this.database.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS news_articles_fts USING fts5(
+          source_id UNINDEXED,
+          url UNINDEXED,
+          published_at UNINDEXED,
+          title,
+          excerpt,
+          categories,
+          tokenize = 'porter unicode61'
+        );
+      `);
+      this.transaction(() => {
+        this.database
+          .prepare('DELETE FROM news_articles_fts WHERE source_id = ?')
+          .run(sourceId);
+        const insert = this.database.prepare(`
+          INSERT INTO news_articles_fts (
+            source_id, url, published_at, title, excerpt, categories
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        for (const article of articles) {
+          insert.run(
+            sourceId,
+            article.url,
+            article.publishedAt ?? '',
+            article.title,
+            article.excerpt ?? '',
+            article.categories.join(' '),
+          );
+        }
+      });
+    } catch {
+      // Ignore FTS indexing failures on read-only or restricted databases.
+    }
+  }
+
+  searchNewsArticlesFts(
+    tokens: readonly string[],
+    sourceIds?: readonly string[],
+  ): Map<string, number> {
+    const cleanTokens = [
+      ...new Set(
+        tokens
+          .map((token) => token.toLowerCase().replace(/[^a-z0-9]/gu, ''))
+          .filter((token) => token.length >= 3),
+      ),
+    ];
+    if (cleanTokens.length === 0) return new Map();
+    try {
+      const hasFts = this.database
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'news_articles_fts'",
+        )
+        .get();
+      if (!hasFts) return new Map();
+      const matchQuery = cleanTokens
+        .map((token) => `"${token}" OR "${token}"*`)
+        .join(' OR ');
+      const sourceFilter = sourceIds?.length
+        ? `AND source_id IN (${sourceIds.map(() => '?').join(', ')})`
+        : '';
+      const rows = this.database
+        .prepare(`
+          SELECT url, -bm25(news_articles_fts, 0.0, 0.0, 0.0, 6.0, 3.0, 2.0) AS score
+          FROM news_articles_fts
+          WHERE news_articles_fts MATCH ? ${sourceFilter}
+          ORDER BY score DESC
+          LIMIT 200
+        `)
+        .all(matchQuery, ...(sourceIds ?? [])) as Array<{ score: number; url: string }>;
+      const validRows = rows.filter(
+        (row) => Number.isFinite(row.score) && row.score > 0,
+      );
+      if (validRows.length === 0) return new Map();
+      const maxScore = Math.max(...validRows.map((row) => row.score));
+      const scale = Math.min(6, Math.max(2, validRows.length * 2));
+      const scores = new Map<string, number>();
+      for (const row of validRows) {
+        const normalized = maxScore >= 1
+          ? row.score
+          : (row.score / maxScore) * scale;
+        const boost = Math.min(6, Math.max(1, Math.round(normalized)));
+        const existing = scores.get(row.url) ?? 0;
+        if (boost > existing) scores.set(row.url, boost);
+      }
+      return scores;
+    } catch {
+      return new Map();
+    }
   }
 
   deleteCachePrefix(namespace: string, keyPrefix: string): number {
@@ -2043,7 +2153,7 @@ function assertNoInboundUsageForeignKeys(database: Database.Database): void {
   ].map(sqliteIdentifierKey));
   const tables = database.prepare(`
     SELECT name FROM sqlite_master
-    WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+    WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'news_articles_fts%'
   `).all() as DatabaseRow[];
   for (const row of tables) {
     const table = requiredText(row.name);

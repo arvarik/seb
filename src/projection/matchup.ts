@@ -86,10 +86,16 @@ export async function projectLeagueMatchup(
     const total = (status: MatchupPlayerEstimate['status']) => Math.round(players
       .filter((player) => player.status === status).reduce((sum, player) => sum + Math.round((player.points ?? 0) * 100), 0)) / 100;
     const completedPoints = total('completed');
+    const inProgressPoints = Math.round(players
+      .filter((player) => player.reason === 'The game started, but a completed individual score is not verified.')
+      .reduce((sum, player) => {
+        const actual = side.players_points?.[player.playerId];
+        return sum + (typeof actual === 'number' && Number.isFinite(actual) ? Math.round(actual * 100) : 0);
+      }, 0)) / 100;
     const remainingProjectedPoints = total('projected');
     const missingStarters = players.filter((player) => player.points === null).map((player) => ({ name: player.name, reason: player.reason }));
     const ignoredSettings = [...new Set(players.flatMap((player) => player.ignoredSettings))].sort();
-    return { rosterId: side.roster_id, completedPoints, remainingProjectedPoints,
+    return { rosterId: side.roster_id, completedPoints, inProgressPoints, remainingProjectedPoints,
       projectedSubtotal: Math.round((completedPoints + remainingProjectedPoints) * 100) / 100,
       complete: missingStarters.length === 0 && ignoredSettings.length === 0 && side.custom_points == null,
       customPoints: side.custom_points ?? null, missingStarters, ignoredSettings, players };

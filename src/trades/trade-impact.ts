@@ -87,16 +87,19 @@ export function analyzeTradeImpact(
   }
   if ([...input.givePlayers, ...input.receivePlayers].some((player) => !OFFENSIVE_POSITIONS.has(player.position?.toUpperCase() ?? ''))) throw new Error('Trade forecasts support QB, RB, WR, and TE players.');
   const rowsByName = groupRowsByName(input.rows.filter((row) => row.season === input.analysisSeason && row.seasonType === 'REG'), input.throughWeek);
-  const give = tradeSide(input.givePlayers, rowsByName, input.league, input.parameters);
-  const receive = tradeSide(input.receivePlayers, rowsByName, input.league, input.parameters);
+  const allRows = [...rowsByName.values()].flat();
+  const give = tradeSide(input.givePlayers, rowsByName, allRows, input.league, input.parameters);
+  const receive = tradeSide(input.receivePlayers, rowsByName, allRows, input.league, input.parameters);
   const giveIds = new Set(input.givePlayers.map((player) => player.player_id));
   const afterPlayers = [...input.rosterPlayers.filter((player) => !giveIds.has(player.player_id)), ...input.receivePlayers];
   let lineupImpact: TradeImpactAnalysis['lineupImpact'] = null;
   try {
     const knownSlots = new Set([...OFFENSIVE_SLOTS, 'K', 'DEF', 'DL', 'DE', 'DT', 'LB', 'DB', 'CB', 'S', 'IDP_FLEX', 'IDP', 'BN', 'BENCH', 'IR', 'RESERVE', 'TAXI']);
     if (input.league.roster_positions.some((slot) => !knownSlots.has(slot.toUpperCase()))) throw new Error('Unsupported starter slot.');
+    const hasStats = (player: SleeperPlayer) =>
+      (rowsByName.get(normalizeName(playerName(player))) ?? []).some((row) => row.position === player.position?.toUpperCase());
     const lineup = (players: SleeperPlayer[]) => optimizeLineup(
-      tradeSide(players.filter((player) => OFFENSIVE_POSITIONS.has(player.position?.toUpperCase() ?? '')), rowsByName, input.league, input.parameters).players.map((player) => ({
+      tradeSide(players.filter((player) => OFFENSIVE_POSITIONS.has(player.position?.toUpperCase() ?? '') && hasStats(player)), rowsByName, allRows, input.league, input.parameters).players.map((player) => ({
         id: player.playerId, name: player.name, positions: [player.position], points: player.estimatedWeeklyValue,
       })), input.league.roster_positions.filter((slot) => OFFENSIVE_SLOTS.has(slot.toUpperCase())));
     if ((input.roster.players ?? []).some((id) => !input.rosterPlayers.some((player) => player.player_id === id))) throw new Error('Missing roster identity.');
@@ -154,6 +157,7 @@ export function analyzeTradeImpact(
 function tradeSide(
   players: readonly SleeperPlayer[],
   rowsByName: ReadonlyMap<string, NflversePlayerWeek[]>,
+  allRows: readonly NflversePlayerWeek[],
   league: SleeperLeague,
   parameters?: ProjectionParameters,
 ): TradeSideImpact {
@@ -177,7 +181,7 @@ function tradeSide(
     return {
       availabilityFactor,
       estimatedWeeklyValue: round(
-        forecastMean(values, positionPrior([...rowsByName.values()].flat(), player.position ?? '', rows[0]!.playerId, league.scoring_settings), parameters) * availabilityFactor,
+        forecastMean(values, positionPrior(allRows, player.position ?? '', rows[0]!.playerId, league.scoring_settings), parameters) * availabilityFactor,
       ),
       games: rows.length,
       injuryStatus: [player.injury_status, player.status].filter(Boolean).join(' ') || null,

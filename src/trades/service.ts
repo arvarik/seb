@@ -2,6 +2,7 @@ import { normalizePlayerName } from '../identity/normalize.js';
 import { LearningStore } from '../learning/store.js';
 import { resolveCompletedAnalysisWindow } from '../analysis/window.js';
 import { NflverseClient } from '../nflverse/client.js';
+import { enrichSpecialTeams, PLAYER_SPECIAL_TEAMS_SETTINGS } from '../nflverse/defense.js';
 import { SleeperClient } from '../sleeper/client.js';
 import type {
   SleeperPlayer,
@@ -44,6 +45,9 @@ export class TradeImpactService {
     ) {
       window = { analysisSeason: window.analysisSeason - 1, throughWeek: 18 };
       rows = await this.readStats(window.analysisSeason, window.throughWeek);
+    }
+    if (PLAYER_SPECIAL_TEAMS_SETTINGS.some((k) => Number(league.scoring_settings[k] ?? 0) !== 0) && typeof this.nflverse.getDefenseData === 'function') {
+      rows = enrichSpecialTeams(rows, await this.nflverse.getDefenseData(window.analysisSeason));
     }
     const roster = rosters.find((candidate) => candidate.roster_id === request.rosterId);
     if (!roster) throw new Error(`Roster ${request.rosterId} does not exist in this league.`);

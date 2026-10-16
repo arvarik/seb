@@ -55,6 +55,8 @@ interface ResourceFlight {
 
 const DATABASE_RESOURCE_FLIGHTS = new Map<string, Map<string, ResourceFlight>>();
 const SCOPED_RESOURCE_FLIGHTS = new WeakMap<object, Map<string, ResourceFlight>>();
+const DATABASE_L1_CACHE = new Map<string, Map<string, { revision: number; entry: CacheEntry<unknown> }>>();
+const HOOKED_DATABASES = new WeakSet<object>();
 const NEVER_ABORT_SIGNAL = new AbortController().signal;
 
 export class CachedResource<T> {
@@ -65,7 +67,17 @@ export class CachedResource<T> {
     private readonly sourceUrl: string,
     private readonly policy: ResourcePolicy<T>,
     private readonly flightScope?: object,
-  ) {}
+  ) {
+    if (this.database && typeof this.database.putCache === 'function' && !HOOKED_DATABASES.has(this.database)) {
+      HOOKED_DATABASES.add(this.database);
+      const db = this.database;
+      const originalPut = db.putCache.bind(db);
+      db.putCache = ((write: Parameters<SebDatabase['putCache']>[0], expectedRevision?: number) => {
+        DATABASE_L1_CACHE.get(db.file)?.delete(`${write.namespace}:${write.key}`);
+        return expectedRevision === undefined ? originalPut(write) : originalPut(write, expectedRevision);
+      }) as SebDatabase['putCache'];
+    }
+  }
 
   async read(
     load: (context: ResourceLoadContext) => Promise<ResourceLoadResult>,
@@ -78,9 +90,21 @@ export class CachedResource<T> {
     if (this.database) {
       try {
         cacheRevision = this.database.cacheRevision(this.namespace);
+        const l1 = DATABASE_L1_CACHE.get(this.database.file)?.get(this.l1Key());
+        if (
+          l1 &&
+          l1.revision === cacheRevision &&
+          l1.entry.schemaVersion === this.policy.schemaVersion &&
+          l1.entry.sourceUrl === this.sourceUrl &&
+          Date.now() < Date.parse(l1.entry.expiresAt)
+        ) {
+          const entry = { ...(l1.entry as CacheEntry<T>), freshness: 'fresh' as const };
+          return { cache: entry, outcome: 'cache-fresh', value: entry.value };
+        }
         cached = this.validateCachedEntry(
           this.database.getCache<unknown>(this.namespace, this.key),
           warnings,
+          cacheRevision,
         );
       } catch (error) {
         warnings.push(`Seb could not read the local cache: ${errorMessage(error)}`);
@@ -204,6 +228,7 @@ export class CachedResource<T> {
           cacheRevision,
         ) as CacheEntry<T> | null;
         if (touched) {
+          if (touched.freshness === 'fresh') this.setL1(cacheRevision, touched);
           return {
             cache: touched,
             outcome: 'source-not-modified',
@@ -238,6 +263,7 @@ export class CachedResource<T> {
         if (storedCache) {
           cache = storedCache;
           stored = true;
+          if (storedCache.freshness === 'fresh') this.setL1(cacheRevision, storedCache);
         } else {
           cache = memoryEntry(
             this.namespace,
@@ -365,7 +391,27 @@ export class CachedResource<T> {
   }
 
   clear(): number {
+    this.evictL1();
     return this.database ? this.database.deleteCache(this.namespace, this.key) : 0;
+  }
+
+  private l1Key(): string {
+    return `${this.namespace}:${this.key}`;
+  }
+
+  private setL1(revision: number | null, entry: CacheEntry<T>): void {
+    if (!this.database || revision === null) return;
+    let map = DATABASE_L1_CACHE.get(this.database.file);
+    if (!map) {
+      map = new Map();
+      DATABASE_L1_CACHE.set(this.database.file, map);
+    }
+    map.set(this.l1Key(), { revision, entry });
+  }
+
+  private evictL1(): void {
+    if (!this.database) return;
+    DATABASE_L1_CACHE.get(this.database.file)?.delete(this.l1Key());
   }
 
   private validate(value: unknown): T {
@@ -375,12 +421,14 @@ export class CachedResource<T> {
   private validateCachedEntry(
     entry: CacheEntry<unknown> | null,
     warnings: string[],
+    cacheRevision: number | null = null,
   ): CacheEntry<T> | null {
     if (
       !entry ||
       entry.schemaVersion !== this.policy.schemaVersion ||
       entry.sourceUrl !== this.sourceUrl
     ) {
+      this.evictL1();
       return null;
     }
     try {
@@ -410,7 +458,7 @@ export class CachedResource<T> {
           warnings.push(`Seb could not update the local cache policy: ${errorMessage(error)}`);
         }
       }
-      return {
+      const validated: CacheEntry<T> = {
         ...entry,
         expiresAt,
         freshness:
@@ -422,7 +470,11 @@ export class CachedResource<T> {
         staleUntil,
         value: this.validate(entry.value),
       };
+      if (validated.freshness === 'fresh') this.setL1(cacheRevision, validated);
+      else this.evictL1();
+      return validated;
     } catch {
+      this.evictL1();
       if (this.database) this.database.deleteCache(this.namespace, this.key);
       return null;
     }

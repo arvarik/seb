@@ -450,11 +450,21 @@ function htmlToText(value: string): string | null {
   return cleanText(load(`<body>${value}</body>`)('body').text(), MAX_EXCERPT_CHARACTERS) || null;
 }
 
+const HTML_ENTITIES: Record<string, string> = {
+  '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&apos;': "'", '&nbsp;': ' ',
+};
+
 function cleanText(value: string | null | undefined, limit: number): string {
   if (!value) return '';
-  const decoded = value.includes('&')
-    ? load(`<body>${value}</body>`)('body').text()
-    : value;
+  const decoded = !value.includes('&')
+    ? value
+    : /&(?!(?:amp|lt|gt|quot|apos|nbsp|#39|#\d{1,6}|#x[0-9a-fA-F]{1,6});)[#a-zA-Z0-9]+;/u.test(value)
+      ? load(`<body>${value}</body>`)('body').text()
+      : value.replace(/&(?:amp|lt|gt|quot|apos|nbsp|#39|#(\d{1,6})|#x([0-9a-fA-F]{1,6}));/gu, (m, dec, hex) => {
+          if (m in HTML_ENTITIES) return HTML_ENTITIES[m]!;
+          const code = dec ? Number(dec) : Number.parseInt(hex, 16);
+          return code <= 0x10ffff ? String.fromCodePoint(code) : m;
+        });
   return decoded.replace(/\s+/gu, ' ').trim().slice(0, limit);
 }
 

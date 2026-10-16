@@ -570,3 +570,23 @@ it('matches player initials across punctuation differences in current news', () 
     } }, { toolName: 'searchCurrentNews', output: { result: 'AJ Brown is healthy.' } }] });
   expect(result.injury).toBe('present');
 });
+
+it('filters roster and waiver tool subjects to players named in the question and accepts projectLeagueMatchup scoring', () => {
+  const result = buildRecommendationEvidence({ analysis: exampleAnalysis(),
+    question: 'Should I add Waiver Target and drop Aaron Smith in league 123456?',
+    sources: [directSource(), webSource()],
+    toolResults: [
+      { toolName: 'getRosterPlayers', output: { missingPlayerIds: [], players: [
+        { playerId: 'p1', name: 'Aaron Smith', injuryStatus: null },
+        { playerId: 'p2', name: 'Unmentioned Bench Player', injuryStatus: null },
+      ] } },
+      { toolName: 'rankWaiverTargets', output: { methodology: { scoringKeysUsed: ['rec'], scoringKeysIgnored: [] }, targets: [
+        { player: { playerId: 'w1', name: 'Waiver Target', injuryStatus: null } },
+        { player: { playerId: 'w2', name: 'Unmentioned Waiver Player', injuryStatus: null } },
+      ] } },
+      { toolName: 'projectLeagueMatchup', output: { league: { id: '123456', name: 'Test' }, rosters: [{ rosterId: 1, ignoredSettings: [] }] } },
+      { toolName: 'searchCurrentNews', output: { result: 'Waiver Target and Aaron Smith are active.' } },
+    ] });
+  expect(result).toMatchObject({ identity: 'resolved', injury: 'present', leagueScoring: 'present' });
+});
+

@@ -368,7 +368,7 @@ function playerName(player: SleeperPlayer): string {
 }
 
 function playerMatches(player: SleeperPlayer, query: string): boolean {
-  if (player.player_id && normalizeName(player.player_id).includes(query)) return true;
+  if (player.player_id && normalizeName(player.player_id) === query) return true;
   if (player.search_full_name && normalizeName(player.search_full_name).includes(query)) return true;
   const name = playerName(player);
   if (name && normalizeName(name).includes(query)) return true;

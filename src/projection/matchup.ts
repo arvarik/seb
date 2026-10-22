@@ -69,7 +69,7 @@ export async function projectLeagueMatchup(
       if (kickoff <= now.getTime()) {
         const actual = side.players_points?.[playerId];
         // Schedule scores can lag or describe an in-progress game. Allow time for completion.
-        if (game.homeScore !== null && game.awayScore !== null && now.getTime() - kickoff >= 4 * 60 * 60 * 1000 &&
+        if (game.homeScore !== null && game.awayScore !== null && now.getTime() - kickoff >= 8 * 60 * 60 * 1000 &&
           typeof actual === 'number' && Number.isFinite(actual)) {
           return { ...base, status: 'completed', points: actual, reason: null };
         }
@@ -240,7 +240,7 @@ export async function optimizeRosterLineup(
         continue;
       }
       const actual = matchup?.players_points?.[playerId];
-      if (game.homeScore !== null && game.awayScore !== null && now.getTime() - kickoff >= 4 * 60 * 60 * 1000 &&
+      if (game.homeScore !== null && game.awayScore !== null && now.getTime() - kickoff >= 8 * 60 * 60 * 1000 &&
         typeof actual === 'number' && Number.isFinite(actual)) {
         byId.set(playerId, { ...base, status: 'completed', points: actual, recommendationEligible: true });
       } else {
@@ -271,6 +271,9 @@ export async function optimizeRosterLineup(
       player.points = result.projection.expectedPoints;
       player.ignoredSettings = result.projection.scoring.ignoredSettings;
       player.recommendationEligible = result.projection.recommendationEligible === true;
+      if (result.projection.player?.fantasy_positions?.length) {
+        player.positions = [...new Set([...player.positions, ...result.projection.player.fantasy_positions.map((pos) => pos.toUpperCase())])];
+      }
     }
   }
   const eligiblePlayers: LineupPlayer[] = [...byId.values()]

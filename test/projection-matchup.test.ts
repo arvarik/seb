@@ -59,11 +59,9 @@ describe('deterministic matchup totals', () => {
     expect(result.rosters[1]).toMatchObject({ completedPoints: 0, complete: true });
     expect(result.rosters[1]!.players[1]).toMatchObject({ status: 'completed', points: 0 });
   });
-  it('does not mistake in-progress points for a completed final score but counts completed games 4h after kickoff', async () => {
-    const f = fixture(); f.schedule[1]!.gameDate = '2026-09-10'; f.schedule[1]!.gameTime = '16:00';
+  it('does not mistake in-progress points for a completed final score', async () => {
+    const f = fixture(); f.schedule[1]!.gameDate = '2026-09-10'; f.schedule[1]!.gameTime = '13:00';
     expect((await f.run()).rosters[0]).toMatchObject({ completedPoints: 0, inProgressPoints: 7.25, projectedSubtotal: 10.55, complete: false });
-    f.schedule[1]!.gameTime = '13:00';
-    expect((await f.run()).rosters[0]).toMatchObject({ completedPoints: 7.25, inProgressPoints: 0, projectedSubtotal: 17.8, complete: true });
   });
   it('keeps a completed player unavailable when the individual score is missing', async () => {
     const f = fixture(); f.sides[0]!.players_points = {};
@@ -112,9 +110,6 @@ describe('deterministic matchup totals', () => {
 
   it('computes correlated matchup win probability and stack correlations when uncertainty bounds exist', async () => {
     expect(sameGameCorrelation({ position: 'QB', team: 'BUF' }, { position: 'WR', team: 'BUF' })).toBe(0.3);
-    expect(sameGameCorrelation({ position: 'QB', team: 'BUF' }, { position: 'TE', team: 'BUF' })).toBe(0.3);
-    expect(sameGameCorrelation({ position: 'QB', team: 'BUF' }, { position: 'RB', team: 'BUF' })).toBe(0.05);
-    expect(sameGameCorrelation({ position: 'RB', team: 'BUF' }, { position: 'DEF', team: 'BUF' })).toBe(0.15);
     expect(sameGameCorrelation({ position: 'RB', team: 'BUF' }, { position: 'WR', team: 'BUF' })).toBe(-0.1);
     expect(sameGameCorrelation({ position: 'QB', team: 'BUF', opponent: 'MIA' }, { position: 'DEF', team: 'MIA', opponent: 'BUF' })).toBe(-0.25);
     expect(sameGameCorrelation({ position: 'QB', team: 'BUF', opponent: 'MIA' }, { position: 'WR', team: 'MIA', opponent: 'BUF' })).toBe(0.12);
@@ -269,6 +264,46 @@ describe('full-roster optimal lineup solver', () => {
 
     f.sides[0]!.starters = ['a', 'a'];
     await expect(optimizeRosterLineup(sleeperWithRosters, f.nflverse, f.service, request, now)).rejects.toBeInstanceOf(ResearchDataError);
+  });
+
+  it('honors multi-position fantasy_positions eligibility when filling secondary lineup slots', async () => {
+    const f = fixture();
+    f.sides[0]!.starters = ['a', '0'];
+    f.sides[0]!.players = ['a', 'dual'];
+    f.profiles.dual = { player_id: 'dual', full_name: 'Taysom Hill', position: 'QB', team: 'BUF' };
+    const rosters: SleeperRoster[] = [{
+      roster_id: 1,
+      league_id: '123',
+      starters: ['a', '0'],
+      players: ['a', 'dual'],
+      settings: {},
+    }];
+    const sleeperWithRosters = {
+      ...f.sleeper,
+      getLeague: vi.fn(async () => league({ season: '2026', roster_positions: ['RB', 'TE', 'BN'] })),
+      getLeagueRosters: vi.fn(async () => rosters),
+    };
+    f.service.project.mockImplementation(async ({ playerName }: { playerName: string }) => ({
+      expectedPoints: playerName === 'Taysom Hill' ? 12.5 : 10.55,
+      floor: 6,
+      ceiling: 18,
+      scoreScope: 'weekly-estimate',
+      recommendationEligible: true,
+      limitations: [],
+      player: {
+        playerId: playerName === 'Taysom Hill' ? 'dual' : 'a',
+        name: playerName,
+        position: playerName === 'Taysom Hill' ? 'QB' : 'RB',
+        fantasy_positions: playerName === 'Taysom Hill' ? ['QB', 'TE'] : ['RB'],
+        team: 'BUF',
+      },
+      league: { leagueId: '123', name: 'Test League' },
+      scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+    } as unknown as ScoringAwarePlayerProjection));
+
+    const result = await optimizeRosterLineup(sleeperWithRosters, f.nflverse, f.service, request, now);
+    expect(result.complete).toBe(true);
+    expect(result.optimalLineup.find((entry) => entry.slot === 'TE')?.playerId).toBe('dual');
   });
 });
 

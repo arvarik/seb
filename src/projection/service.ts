@@ -191,7 +191,7 @@ export class PlayerProjectionService {
       league.scoring_settings,
     );
     const pooledResiduals = !learnedResiduals || learnedResiduals.length < 20
-      ? this.cachedPooledResiduals(eligiblePositionRows, analysisSeason, throughWeek, latest.position, league.scoring_settings, parameters, priorMean)
+      ? this.cachedPooledResiduals(eligiblePositionRows, analysisSeason, throughWeek, latest.position, league.scoring_settings, parameters)
       : undefined;
     const calibrationResiduals = learnedResiduals && learnedResiduals.length >= 20
       ? learnedResiduals
@@ -238,14 +238,15 @@ export class PlayerProjectionService {
     scoring: import('../sleeper/types.js').SleeperSettings,
   ): number | null {
     if (rows.length < 20) return null;
-    const key = `${analysisSeason}:${throughWeek}:${position.toUpperCase()}:${scoringKey(scoring)}:${rows.length}`;
+    const normalizedPos = position.toUpperCase();
+    const key = `${analysisSeason}:${throughWeek}:${normalizedPos}:${scoringKey(scoring)}:${rows.length}`;
     let entry = this.priorCache.get(key);
     if (!entry) {
       let sum = 0;
       let count = 0;
       const byPlayer = new Map<string, { sum: number; count: number }>();
       for (const row of rows) {
-        if (row.position !== position) continue;
+        if (row.position.toUpperCase() !== normalizedPos) continue;
         const score = scorePlayerWeek(row, scoring);
         sum += score;
         count += 1;
@@ -269,12 +270,12 @@ export class PlayerProjectionService {
     position: string,
     scoring: import('../sleeper/types.js').SleeperSettings,
     parameters: ProjectionParameters = DEFAULT_PROJECTION_PARAMETERS,
-    priorMean: number | null = null,
   ): number[] {
     const key = `${analysisSeason}:${throughWeek}:${position.toUpperCase()}:${scoringKey(scoring)}:${rows.length}:${JSON.stringify(parameters)}`;
     let residuals = this.residualCache.get(key);
     if (!residuals) {
-      residuals = pooledPositionResiduals(rows, scoring, parameters, priorMean);
+      const positionPriorMean = this.cachedPositionPrior(rows, analysisSeason, throughWeek, position, '', scoring);
+      residuals = pooledPositionResiduals(rows, scoring, parameters, positionPriorMean);
       this.residualCache.set(key, residuals);
     }
     return residuals;

@@ -21,9 +21,7 @@ export function sameGameCorrelation(
   const oppB = b.opponent?.toUpperCase() ?? null;
   if (teamA === teamB) {
     if (oppA && oppB && oppA !== oppB) return 0;
-    if ((posA === 'QB' && (posB === 'WR' || posB === 'TE')) || (posB === 'QB' && (posA === 'WR' || posA === 'TE'))) return 0.3;
-    if ((posA === 'QB' && posB === 'RB') || (posB === 'QB' && posA === 'RB')) return 0.05;
-    if ((posA === 'RB' && posB === 'DEF') || (posB === 'RB' && posA === 'DEF')) return 0.15;
+    if ((posA === 'QB' && SKILL.has(posB)) || (posB === 'QB' && SKILL.has(posA))) return 0.3;
     if (SKILL.has(posA) && SKILL.has(posB)) return -0.1;
     if ((posA === 'K' && OFFENSE.has(posB)) || (posB === 'K' && OFFENSE.has(posA))) return 0.1;
     return 0;

@@ -16,7 +16,7 @@ describe('PlayerProjectionService positional caching and residual shrinkage', ()
           position: 'RB',
           team: 'BUF',
           week,
-          rushingYards: 50 + pIdx * 5 + week * 2,
+          rushingYards: pIdx === 0 ? 300 + week * 10 : 50 + pIdx * 5 + week * 2,
         }),
       ),
     ).flat();
@@ -74,5 +74,22 @@ describe('PlayerProjectionService positional caching and residual shrinkage', ()
     // Second projection only scores Runner 1's 5 weekly rows + opponent adjustment rows, without rescoring 60 position rows for prior/residuals
     expect(callsAfterSecond - callsAfterFirst).toBeLessThan(callsAfterFirst);
     scoreSpy.mockRestore();
+
+    // Verify projections and pooled residual intervals are 100% order-independent across batch orderings
+    const reverseService = new PlayerProjectionService(sleeper, nflverse, {} as WeatherClient, false);
+    const reverseSecond = await reverseService.project({
+      leagueId: '123456',
+      playerName: 'Runner 1',
+      season: 2025,
+      week: 6,
+    });
+    const reverseFirst = await reverseService.project({
+      leagueId: '123456',
+      playerName: 'Runner 0',
+      season: 2025,
+      week: 6,
+    });
+    expect(first).toEqual(reverseFirst);
+    expect(second).toEqual(reverseSecond);
   });
 });

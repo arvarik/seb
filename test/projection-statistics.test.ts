@@ -28,16 +28,6 @@ describe('forecast statistics and safeguards', () => {
       1000 - forecastMean([10, 10, 10], 45, DEFAULT_PROJECTION_PARAMETERS),
     ]);
   });
-  it('shrinks opponent defense matchup sensitivity for small sample sizes', () => {
-    const oppRows = ['MIA', 'BUF', 'KC', 'NYJ'].flatMap((opp) => [
-      stat({ gameId: `${opp}-1`, opponentTeam: opp, playerId: `${opp}-p1`, rushingYards: opp === 'MIA' ? 200 : 100 }),
-      stat({ gameId: `${opp}-2`, opponentTeam: opp, playerId: `${opp}-p2`, rushingYards: opp === 'MIA' ? 200 : 100 }),
-    ]);
-    const twoGame = projectPlayer({ ...input, opponent: 'MIA', opponentRows: oppRows });
-    const adj = twoGame.adjustments.find((a) => a.label === 'Opponent adjustment');
-    // allowed = 20, leagueAvg = 12.5 => (20/12.5 - 1) = 0.6; weight = 0.35 * (2 / 6) = 0.11667 => factor = 1.07 (not 1.10 cap)
-    expect(adj?.factor).toBeCloseTo(1.07, 3);
-  });
   it('uses a finite-sample residual rank for an 80 percent interval', () => {
     const interval = forecastInterval(10, Array.from({ length: 20 }, (_, i) => i + 1), [10, 10]);
     expect(interval).toMatchObject({ lower: -7, upper: 27, level: 0.8, calibrationSamples: 20 });

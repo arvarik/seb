@@ -214,7 +214,7 @@ function projectBaseline(
       : segmentPrior.length >= 2
         ? segmentPrior
         : training;
-  const deviation = populationStandardDeviation(
+  const deviation = sampleStandardDeviation(
     varianceReference.map((observation) => observation.actual),
   );
   const z = inverseNormal(0.5 + configuration.intervalLevel / 2);
@@ -454,7 +454,7 @@ function toProbabilityOutcome(forecast: ProbabilityForecast): ProbabilityOutcome
   };
 }
 
-function populationStandardDeviation(values: readonly number[]): number {
+function sampleStandardDeviation(values: readonly number[]): number {
   if (values.length < 2) {
     return 0;
   }

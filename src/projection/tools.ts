@@ -99,7 +99,6 @@ export function createProjectionTools(
           },
         },
       ],
-      strict: true,
       execute: async ({
         leagueId,
         playerName,

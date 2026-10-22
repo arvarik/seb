@@ -38,7 +38,6 @@ export function createWaiverTools(
           resultLimit: 10,
         },
       }],
-      strict: true,
       execute: async ({
         leagueId,
         rosterId,

@@ -1317,6 +1317,7 @@ export async function launchCli(
   } catch (error) {
     const message = error instanceof CliUsageError ||
       error instanceof ModelConfigurationWizardError ||
+      error instanceof CliModelResponseError ||
       !classifyModelError(error)
       ? errorMessage(error)
       : formatModelErrorForUser(error, 'cli');

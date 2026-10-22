@@ -44,7 +44,6 @@ export function createTradeTools(
           throughWeek: 7,
         },
       }],
-      strict: true,
       execute: async ({
         leagueId,
         rosterId,

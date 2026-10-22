@@ -225,7 +225,7 @@ function assessWeather(
     impacts.push('The forecast shows no major weather penalty for fantasy analysis.');
   }
 
-  const high = severeAlert || wind >= 20 || precipitation >= 75 || (temperature !== null && temperature <= 15);
+  const high = severeAlert || wind >= 25 || precipitation >= 75 || (temperature !== null && temperature <= 15);
   const medium = wind >= 15 || precipitation >= 35 || (temperature !== null && (temperature <= 30 || temperature >= 95));
   return { impacts, risk: high ? 'high' : medium ? 'medium' : 'low' };
 }
@@ -234,7 +234,7 @@ function historicalRisk(game: NflverseGame): WeatherRisk | null {
   if (game.wind === null && game.temperature === null) {
     return null;
   }
-  if ((game.wind ?? 0) >= 20 || (game.temperature ?? 100) <= 15) {
+  if ((game.wind ?? 0) >= 25 || (game.temperature ?? 100) <= 15) {
     return 'high';
   }
   if ((game.wind ?? 0) >= 15 || (game.temperature ?? 100) <= 30) {
@@ -245,9 +245,7 @@ function historicalRisk(game: NflverseGame): WeatherRisk | null {
 
 function historicalImpact(game: NflverseGame): string[] {
   const impacts: string[] = [];
-  if ((game.wind ?? 0) >= 20) {
-    impacts.push('The recorded high wind significantly impacted deep passing and kicking efficiency.');
-  } else if ((game.wind ?? 0) >= 15) {
+  if ((game.wind ?? 0) >= 15) {
     impacts.push('The recorded wind added risk to deep passes and kicks.');
   }
   if ((game.temperature ?? 100) <= 30) {

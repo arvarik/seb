@@ -113,17 +113,13 @@ function summarizePlayer(rows: readonly NflversePlayerWeek[]): PlayerTrendSummar
   const targetShare = averageNullable(ordered.map((row) => row.targetShare));
   const airYardsShare = averageNullable(ordered.map((row) => row.airYardsShare));
   const wopr = targetShare !== null && airYardsShare !== null
-    ? round(1.5 * targetShare + 0.7 * airYardsShare, 3)
-    : targetShare !== null
-      ? round(1.5 * targetShare, 3)
-      : null;
+    ? round(1.5 * targetShare + 0.7 * airYardsShare)
+    : null;
   const recentTargetShare = averageNullable(recent.map((row) => row.targetShare));
   const recentAirYardsShare = averageNullable(recent.map((row) => row.airYardsShare));
   const recentWopr = recentTargetShare !== null && recentAirYardsShare !== null
-    ? round(1.5 * recentTargetShare + 0.7 * recentAirYardsShare, 3)
-    : recentTargetShare !== null
-      ? round(1.5 * recentTargetShare, 3)
-      : null;
+    ? round(1.5 * recentTargetShare + 0.7 * recentAirYardsShare)
+    : null;
   return {
     playerId: latest.playerId,
     playerDisplayName: latest.playerDisplayName,

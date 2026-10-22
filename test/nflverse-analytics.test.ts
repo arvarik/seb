@@ -27,6 +27,14 @@ describe('nflverse analytics', () => {
     expect(trends[0]?.volatility).toBeGreaterThan(11);
   });
 
+  it('returns null for wopr when air yards share is missing', () => {
+    const trends = summarizePlayerTrends([
+      stat({ week: 1, targetShare: 0.25, airYardsShare: null }),
+    ]);
+    expect(trends[0]?.wopr).toBeNull();
+    expect(trends[0]?.recentWopr).toBeNull();
+  });
+
   it('summarizes team results and defense results by position', () => {
     const games: NflverseGame[] = [
       game({ homeTeam: 'BUF', awayTeam: 'MIA', homeScore: 28, awayScore: 20 }),

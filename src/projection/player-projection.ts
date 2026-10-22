@@ -195,17 +195,14 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
   if (input.gameStarted) limitations.push('The scheduled game has started. Do not change this player into the starting lineup.');
   if (input.scheduled === false) limitations.push('The source has no verified game for this team in the requested week. This is a historical baseline, not a weekly score. Do not include it in a matchup total.');
 
-  const allPositive = scoredGames.length > 0 && scoredGames.every((score) => score >= 0);
-  const calibratedFloor = inactive ? 0 : (allPositive && median >= 0 ? Math.max(0, interval.lower) : interval.lower);
-  const calibratedCeiling = inactive ? 0 : Math.max(calibratedFloor, interval.upper);
 
   return {
     adjustments,
     analysisSeason: input.analysisSeason,
     season: projectionSeason,
-    ceiling: round(calibratedCeiling),
+    ceiling: round(inactive ? 0 : interval.upper),
     confidence,
-    floor: round(calibratedFloor),
+    floor: round(inactive ? 0 : interval.lower),
     games: ordered.length,
     league: { leagueId: input.leagueId, name: input.leagueName },
     limitations,
@@ -348,9 +345,8 @@ function weatherAdjustment(
         : 'The kickoff forecast has a low weather risk.',
     };
   }
-  const pos = position.toUpperCase();
   if (risk === 'medium') {
-    const factor = pos === 'K' ? 0.92 : ['QB', 'WR'].includes(pos) ? 0.95 : pos === 'TE' ? 0.98 : 0.99;
+    const factor = ['QB', 'WR', 'TE', 'K'].includes(position) ? 0.97 : 0.99;
     return {
       factor,
       label: 'Weather adjustment',
@@ -358,7 +354,7 @@ function weatherAdjustment(
     };
   }
   if (risk === 'high') {
-    const factor = pos === 'K' ? 0.80 : ['QB', 'WR'].includes(pos) ? 0.89 : pos === 'TE' ? 0.93 : 0.97;
+    const factor = ['QB', 'WR', 'TE', 'K'].includes(position) ? 0.92 : 0.97;
     return {
       factor,
       label: 'Weather adjustment',

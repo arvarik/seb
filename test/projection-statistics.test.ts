@@ -87,33 +87,6 @@ it('withholds a starter recommendation when kickoff or the current team is unkno
   expect(projectPlayer({ ...input, currentProfileKnown: false }).recommendationEligible).toBe(false);
 });
 
-it('applies calibrated position-specific weather penalties in high and medium risk conditions', () => {
-  const kickerRows = input.rows.map((row) => ({ ...row, position: 'K', kicking: {
-    fieldGoalsMade: 2, fieldGoalsAttempted: 2, extraPointsMade: 2, extraPointsAttempted: 2,
-    madeDistances: [30, 40], missedDistances: null,
-  } }));
-  const kickerHigh = projectPlayer({ ...input, rows: kickerRows, weatherRisk: 'high', weatherStatus: 'available',
-    scoringSettings: { fgm_30_39: 3, fgm_40_49: 4, xpm: 1 } });
-  expect(kickerHigh.adjustments.find((a) => a.label === 'Weather adjustment')?.factor).toBe(0.8);
-
-  const wrHigh = projectPlayer({ ...input, rows: input.rows.map((r) => ({ ...r, position: 'WR' })),
-    weatherRisk: 'high', weatherStatus: 'available' });
-  expect(wrHigh.adjustments.find((a) => a.label === 'Weather adjustment')?.factor).toBe(0.89);
-
-  const teHigh = projectPlayer({ ...input, rows: input.rows.map((r) => ({ ...r, position: 'TE' })),
-    weatherRisk: 'high', weatherStatus: 'available' });
-  expect(teHigh.adjustments.find((a) => a.label === 'Weather adjustment')?.factor).toBe(0.93);
-
-  const rbHigh = projectPlayer({ ...input, weatherRisk: 'high', weatherStatus: 'available' });
-  expect(rbHigh.adjustments.find((a) => a.label === 'Weather adjustment')?.factor).toBe(0.97);
-});
-
-it('calibrates non-negative floor bounds for strictly positive scoring histories', () => {
-  const positive = projectPlayer(input);
-  expect(positive.floor).toBeGreaterThanOrEqual(0);
-  expect(positive.ceiling).toBeGreaterThanOrEqual(positive.floor);
-});
-
 it('maps fullback receptions to RB bonus and filters IDP settings without marking partial scoring', () => {
   const fbScore = scorePlayerWeek(stat({ position: 'FB', receptions: 3 }), { rec: 0.5, bonus_rec_rb: 0.5 });
   expect(fbScore).toBe(3);

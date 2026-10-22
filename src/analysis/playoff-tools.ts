@@ -11,13 +11,16 @@ export function createPlayoffTools(client: SleeperClient) {
       throughWeek: z.number().int().min(2).max(17), simulations: z.number().int().min(100).max(50_000).default(10_000) }),
     execute: async ({ leagueId, throughWeek, simulations }) => {
       const league = await client.getLeague(leagueId);
-      if (Number(league.settings.divisions ?? 0) > 0) throw new Error('Division playoff seeding is not supported by this simulation.');
+      if (Number(league.settings.divisions ?? 0) > 1) throw new Error('Division playoff seeding is not supported by this simulation.');
       const start = Number(league.settings.playoff_week_start);
       const spots = Number(league.settings.playoff_teams);
       if (!Number.isInteger(start) || start <= throughWeek || start > 18 || !Number.isInteger(spots) || spots < 1) {
         throw new Error('The league needs a valid future playoff start and playoff team count.');
       }
       const analysis = await new SleeperAnalysisService(client).analyzeLeague(leagueId, throughWeek);
+      if (spots > analysis.teams.length) {
+        throw new Error('Playoff spots cannot exceed the total number of league teams.');
+      }
       const weeks = await Promise.all(Array.from({ length: start - throughWeek - 1 }, async (_, index) => {
         const week = throughWeek + index + 1;
         return { week, games: await client.getLeagueMatchups(leagueId, week) };

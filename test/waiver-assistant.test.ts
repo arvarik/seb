@@ -368,7 +368,7 @@ function stat(
 }
 
 describe('waiver budget boundaries', () => {
-  const input = () => ({ analysisSeason: 2026, league: league(), lookbackHours: 24, nflverseRows: [], players: players(),
+  const input = () => ({ analysisSeason: 2026, league: league(), lookbackHours: 24, nflverseRows: [] as NflversePlayerWeek[], players: players(),
     resultLimit: 10, rosters: rosters(), selectedRoster: rosters()[0]!, throughWeek: 3, trendingAdds: trends() });
   it('does not infer FAAB from a leftover budget in a priority waiver league', () => {
     const base = input(); base.league.settings.waiver_type = 1;
@@ -380,6 +380,46 @@ describe('waiver budget boundaries', () => {
     const base = input(); base.league.settings.waiver_bid_min = 70;
     const result = rankWaiverTargets(base);
     expect(result.targets.every((target) => target.faab === null)).toBe(true);
+  });
+  it('returns null FAAB when league waiver_budget is 0', () => {
+    const base = input(); base.league.settings.waiver_budget = 0;
+    const result = rankWaiverTargets(base);
+    expect(result.faab.budget).toBeNull();
+    expect(result.targets.every((target) => target.faab === null)).toBe(true);
+  });
+  it('allows 0-dollar bid when remaining FAAB is 0 and minimum bid is 0', () => {
+    const base = input();
+    base.league.settings.waiver_budget = 100;
+    base.league.settings.waiver_bid_min = 0;
+    base.selectedRoster.settings = { waiver_budget_used: 100 };
+    const result = rankWaiverTargets(base);
+    expect(result.faab.remaining).toBe(0);
+    expect(result.targets.every((target) => target.faab?.lower === 0 && target.faab?.upper === 0)).toBe(true);
+  });
+  it('caps upper bid at remaining FAAB budget', () => {
+    const base = input();
+    base.league.settings.waiver_budget = 100;
+    base.league.settings.waiver_bid_min = 0;
+    base.selectedRoster.settings = { waiver_budget_used: 95 };
+    const result = rankWaiverTargets(base);
+    expect(result.faab.remaining).toBe(5);
+    expect(result.targets.every((target) => target.faab && target.faab.upper <= 5)).toBe(true);
+  });
+  it('matches nflverse rows using Sleeper gsis_id directly', () => {
+    const base = input();
+    const trendPlayer = base.players['free-rb'];
+    if (trendPlayer) {
+      trendPlayer.gsis_id = '00-0099999';
+      trendPlayer.full_name = 'Custom Sleeper Name';
+    }
+    base.nflverseRows = [
+      stat('00-0099999', 'Different NFLverse Name', 'RB', 1),
+      stat('00-0099999', 'Different NFLverse Name', 'RB', 2),
+    ];
+    const result = rankWaiverTargets(base);
+    const target = result.targets.find((t) => t.player.playerId === 'free-rb');
+    expect(target?.production).not.toBeNull();
+    expect(target?.production?.games).toBe(2);
   });
   it('does not repeat a player when the trending source repeats a row', () => {
     const base = input(); base.trendingAdds.push(...base.trendingAdds);

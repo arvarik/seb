@@ -285,14 +285,26 @@ function resolveNflverseRows(
 ): Map<string, NflversePlayerWeek[]> {
   const groups = new Map<string, NflversePlayerWeek[]>();
   const byName = new Map<string, NflversePlayerWeek[]>();
+  const byGsisId = new Map<string, NflversePlayerWeek[]>();
   for (const row of rows) {
     const key = normalizePlayerName(row.playerDisplayName);
     const group = byName.get(key) ?? [];
     group.push(row); byName.set(key, group);
+    if (row.playerId) {
+      const gsis = row.playerId.trim();
+      const gsisGroup = byGsisId.get(gsis) ?? [];
+      gsisGroup.push(row); byGsisId.set(gsis, gsisGroup);
+    }
   }
   for (const trend of trendingAdds) {
     const player = players[trend.player_id];
     if (!player) continue;
+    const gsisId = player.gsis_id?.trim();
+    if (gsisId && byGsisId.has(gsisId)) {
+      const gsisMatches = byGsisId.get(gsisId)!;
+      groups.set(player.player_id, [...gsisMatches].sort((a, b) => a.week - b.week));
+      continue;
+    }
     const name = normalizePlayerName(playerName(player));
     const position = playerPosition(player);
     const matches = (byName.get(name) ?? []).filter((row) =>
@@ -510,7 +522,7 @@ function faabRange(
   risk: WaiverRiskLevel,
   faab: Omit<FaabRange, 'lower' | 'lowerPercent' | 'rationale' | 'upper' | 'upperPercent'> | null,
 ): FaabRange | null {
-  if (!faab || faab.remaining < faab.minimumBid) return null;
+  if (!faab || faab.budget <= 0 || faab.remaining < faab.minimumBid) return null;
   let [lowerPercent, upperPercent] = rankScore >= 80
     ? [18, 30]
     : rankScore >= 65
@@ -527,7 +539,7 @@ function faabRange(
   const minimumApplied = lower < faab.minimumBid;
   if (faab.remaining >= faab.minimumBid) {
     lower = Math.max(lower, faab.minimumBid);
-    upper = Math.max(upper, lower);
+    upper = Math.min(faab.remaining, Math.max(upper, lower));
   }
   return {
     ...faab,
@@ -543,14 +555,14 @@ function leagueFaab(
   league: SleeperLeague,
   roster: SleeperRoster,
 ): Omit<FaabRange, 'lower' | 'lowerPercent' | 'rationale' | 'upper' | 'upperPercent'> | null {
-  const type = numericSetting(league.settings.waiver_type);
+  const type = numericSetting(league.settings?.waiver_type);
   if (type !== null && type !== 2) return null;
-  const budget = numericSetting(league.settings.waiver_budget);
-  if (budget === null || budget < 0) return null;
-  const used = Math.max(0, roster.settings.waiver_budget_used ?? 0);
+  const budget = numericSetting(league.settings?.waiver_budget);
+  if (budget === null || budget <= 0) return null;
+  const used = Math.max(0, numericSetting(roster.settings?.waiver_budget_used) ?? 0);
   return {
     budget,
-    minimumBid: Math.max(0, numericSetting(league.settings.waiver_bid_min) ?? 0),
+    minimumBid: Math.max(0, numericSetting(league.settings?.waiver_bid_min) ?? 0),
     remaining: Math.max(0, budget - used),
     used,
   };

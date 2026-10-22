@@ -29,16 +29,16 @@ export class IdentityRepository {
   getPlayerBySource(provider: string, sourceId: string): CanonicalPlayerIdentity | null {
     return this.database.getIdentityBySource<CanonicalPlayerIdentity>(
       'player',
-      provider,
-      sourceId,
+      provider.trim().toLowerCase(),
+      sourceId.trim(),
     )?.value ?? null;
   }
 
   getTeamBySource(provider: string, sourceId: string): CanonicalTeamIdentity | null {
     return this.database.getIdentityBySource<CanonicalTeamIdentity>(
       'team',
-      provider,
-      sourceId,
+      provider.trim().toLowerCase(),
+      sourceId.trim(),
     )?.value ?? null;
   }
 

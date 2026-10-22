@@ -23,6 +23,6 @@ export function completedNflWeek(state: SleeperNflState): number {
   const phase = state.season_type.toLowerCase();
   if (phase === 'regular') return Math.max(0, Math.min(18, state.week - 1));
   if (['post', 'postseason'].includes(phase)) return 18;
-  if (phase === 'off' && Number(state.league_season) > Number(state.season)) return 18;
+  if (phase === 'off' && (Number(state.league_season) > Number(state.season) || state.week >= 18)) return 18;
   return 0;
 }

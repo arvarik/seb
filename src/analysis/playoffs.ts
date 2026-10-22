@@ -73,10 +73,13 @@ export async function simulatePlayoffOdds(input: {
         standings.get(matchup.rosterA)!.wins += a > b ? 1 : a === b ? 0.5 : 0;
         standings.get(matchup.rosterB)!.wins += b > a ? 1 : a === b ? 0.5 : 0;
       }
-      const orderedScores = [...scores.values()].sort((a, b) => a - b);
-      const middle = orderedScores.length / 2;
-      const median = orderedScores.length % 2 ? orderedScores[Math.floor(middle)]!
-        : (orderedScores[middle - 1]! + orderedScores[middle]!) / 2;
+      let median = 0;
+      if (input.medianMatch) {
+        const orderedScores = [...scores.values()].sort((a, b) => a - b);
+        const middle = orderedScores.length / 2;
+        median = orderedScores.length % 2 ? orderedScores[Math.floor(middle)]!
+          : (orderedScores[middle - 1]! + orderedScores[middle]!) / 2;
+      }
       for (const [id, score] of scores) {
         const record = standings.get(id)!; record.points += score;
         if (input.medianMatch) record.wins += score > median ? 1 : score === median ? 0.5 : 0;

@@ -1,7 +1,10 @@
 export interface LineupPlayer { id: string; name: string; positions: readonly string[]; points: number }
+const IDP_POSITIONS = ['DL', 'DE', 'DT', 'LB', 'ILB', 'OLB', 'DB', 'CB', 'S', 'FS', 'SS'] as const;
 const FLEX: Readonly<Record<string, readonly string[]>> = {
-  FLEX: ['RB', 'WR', 'TE'], WRRBTE_FLEX: ['RB', 'WR', 'TE'], SUPER_FLEX: ['QB', 'RB', 'WR', 'TE'],
-  REC_FLEX: ['WR', 'TE'], WRTE_FLEX: ['WR', 'TE'], WRRB_FLEX: ['WR', 'RB'], IDP_FLEX: ['DL', 'LB', 'DB'], IDP: ['DL', 'LB', 'DB'],
+  FLEX: ['RB', 'WR', 'TE'], WRRBTE_FLEX: ['RB', 'WR', 'TE'], SUPER_FLEX: ['QB', 'RB', 'WR', 'TE'], OP: ['QB', 'RB', 'WR', 'TE'],
+  REC_FLEX: ['WR', 'TE'], WRTE_FLEX: ['WR', 'TE'], WRRB_FLEX: ['WR', 'RB'],
+  DL: ['DL', 'DE', 'DT'], LB: ['LB', 'ILB', 'OLB'], DB: ['DB', 'CB', 'S', 'FS', 'SS'],
+  IDP_FLEX: IDP_POSITIONS, IDP: IDP_POSITIONS,
 };
 const BENCH = new Set(['BN', 'BENCH', 'IR', 'RESERVE', 'TAXI']);
 
@@ -26,6 +29,8 @@ export function optimizeLineup(players: readonly LineupPlayer[], rosterSlots: re
       for (let slotIndex = 0; slotIndex < slots.length; slotIndex += 1) {
         if (mask & (1 << slotIndex)) continue;
         const slot = slots[slotIndex]!;
+        const prevSameSlot = slots.findIndex((s, i) => i < slotIndex && s === slot && !(mask & (1 << i)));
+        if (prevSameSlot !== -1) continue;
         if (!eligibleForSlot(player.positions, slot)) continue;
         const next = mask | (1 << slotIndex);
         const points = state.points + player.points;

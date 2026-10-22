@@ -98,7 +98,7 @@ export function formatFantasyAnalysis(analysis: FantasyAnalysis): string {
 
 function appendList(target: string[], title: string, values: readonly string[]): void {
   if (values.length === 0) return;
-  target.push('', `## ${title}`, '', ...values.map((value) => `- ${value}`));
+  target.push('', `## ${title}`, '', ...values.map((value) => `- ${value.replace(/\s+/g, ' ').trim()}`));
 }
 
 function escapeTable(value: string): string {
@@ -106,7 +106,10 @@ function escapeTable(value: string): string {
 }
 
 function formatMetric(value: string | number, unit: string | null): string {
-  return `${value}${unit ? ` ${unit}` : ''}`;
+  const formatted = typeof value === 'number'
+    ? (Number.isInteger(value) ? String(value) : String(Math.round(value * 100) / 100))
+    : value;
+  return `${formatted}${unit ? ` ${unit}` : ''}`;
 }
 
 function formatPercent(value: number): string {

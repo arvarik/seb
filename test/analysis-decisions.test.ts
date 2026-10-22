@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { optimizeLineup, type LineupPlayer } from '../src/analysis/lineup.js';
+import { eligibleForSlot, optimizeLineup, type LineupPlayer } from '../src/analysis/lineup.js';
 import { simulatePlayoffOdds } from '../src/analysis/playoffs.js';
 import { resolveCompletedAnalysisWindow } from '../src/analysis/window.js';
 import { analyzeLeague } from '../src/sleeper/analytics.js';
@@ -50,6 +50,19 @@ describe('legal lineup optimization', () => {
     expect(() => optimizeLineup([player('a', NaN)], ['RB'])).toThrow('finite');
     expect(() => optimizeLineup([], Array(13).fill('RB'))).toThrow('12');
   });
+  it('supports granular IDP/OP flex positions and duplicate-slot symmetry breaking up to 12 starter slots', () => {
+    expect(eligibleForSlot(['QB'], 'OP')).toBe(true);
+    expect(eligibleForSlot(['DE'], 'DL')).toBe(true);
+    expect(eligibleForSlot(['ILB'], 'LB')).toBe(true);
+    expect(eligibleForSlot(['CB'], 'DB')).toBe(true);
+    expect(eligibleForSlot(['FS'], 'IDP_FLEX')).toBe(true);
+    expect(eligibleForSlot(['DT'], 'IDP')).toBe(true);
+    const slots = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'FLEX', 'OP', 'DL', 'LB', 'DB', 'IDP_FLEX'];
+    const pool = slots.map((slot, i) => player(`p${i}`, 10 + i, [slot === 'OP' ? 'QB' : slot === 'FLEX' ? 'RB' : slot === 'IDP_FLEX' ? 'CB' : slot]));
+    const result = optimizeLineup(pool, slots);
+    expect(result.complete).toBe(true);
+    expect(result.assignments).toHaveLength(12);
+  });
 });
 
 describe('completed league history', () => {
@@ -77,6 +90,7 @@ describe('completed league history', () => {
   it('uses prior-season results in preseason and limits current-season cutoffs', () => {
     expect(resolveCompletedAnalysisWindow('2026', state('pre', 1), {})).toEqual({ analysisSeason: 2025, throughWeek: 18 });
     expect(resolveCompletedAnalysisWindow('2026', state('off', 0), {})).toEqual({ analysisSeason: 2025, throughWeek: 18 });
+    expect(resolveCompletedAnalysisWindow('2026', state('off', 18), {})).toEqual({ analysisSeason: 2026, throughWeek: 18 });
     expect(resolveCompletedAnalysisWindow('2026', state('post', 2), {})).toEqual({ analysisSeason: 2026, throughWeek: 18 });
     expect(() => resolveCompletedAnalysisWindow('2026', state('regular', 5), { throughWeek: 5 })).toThrow('completed');
   });

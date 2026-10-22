@@ -138,7 +138,7 @@ function lineupActions(
   league: SleeperLeague,
   lineups: FantasyLineupSummary[],
 ): FantasyLeagueAction[] {
-  if (league.status !== 'in_season') return [];
+  if (league.status !== 'in_season' || Number(league.settings.best_ball ?? 0) === 1) return [];
   return lineups.flatMap((lineup) => {
     if (lineup.openSlots === 0) return [];
     const noun = lineup.openSlots === 1 ? 'slot is' : 'slots are';
@@ -160,13 +160,14 @@ function playerStatusActions(
   rosters: SleeperRoster[],
   signals: FantasyPlayerStatusSignal[],
 ): FantasyLeagueAction[] {
+  if (Number(league.settings.best_ball ?? 0) === 1) return [];
   const reserveByRoster = new Map(
     rosters.map((roster) => [roster.roster_id, new Set(roster.reserve ?? [])]),
   );
-  const hasReserveSlot = league.roster_positions.some((slot) => {
-    const value = slot.toUpperCase();
-    return value === 'IR' || value === 'RESERVE';
-  });
+  const reserveCapacity = Math.max(
+    league.roster_positions.filter((s) => ['IR', 'RESERVE'].includes(s.toUpperCase())).length,
+    Number(league.settings.reserve_slots ?? 0),
+  );
   return signals.flatMap((signal) => {
     if (signal.starter) {
       return [{
@@ -184,7 +185,7 @@ function playerStatusActions(
     }
     if (
       signal.urgency === 'high' &&
-      hasReserveSlot &&
+      (reserveByRoster.get(signal.rosterId)?.size ?? 0) < reserveCapacity &&
       !reserveByRoster.get(signal.rosterId)?.has(signal.playerId)
     ) {
       return [{
@@ -249,7 +250,7 @@ function concerningStatus(player: SleeperPlayer): {
   const status = cleanValue(player.status);
   const practice = cleanValue(player.practice_participation);
   const combined = [injury, status, practice].filter(Boolean).join(' ').toLowerCase();
-  if (/\b(out|doubtful|inactive|injured reserve|ir|suspended|pup|physically unable|non-football injury|nfi)\b/u.test(combined)) {
+  if (/\b(out|doubtful|inactive|injured reserve|ir|suspended|pup|physically unable|non-football injury|nfi|cov)\b/u.test(combined)) {
     return { label: injury ?? nonActiveStatus(status) ?? practice ?? 'unavailable', urgency: 'high' };
   }
   if (/\b(questionable|game[- ]time decision|limited|did not participate|dnp)\b/u.test(combined)) {

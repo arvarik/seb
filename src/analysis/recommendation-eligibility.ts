@@ -635,6 +635,8 @@ function hasMatchupScoring(value: unknown): boolean {
     rosters.every((roster) => isEmptyArray(asRecord(roster)?.ignoredSettings ?? []));
 }
 
+const evidenceTextCache = new WeakMap<object, string>();
+
 function isIndividualPlayerTool(toolName: string, hasQuestionMatch = false): boolean {
   return toolName === 'findPlayers' ||
     toolName === 'projectPlayer' ||
@@ -755,8 +757,19 @@ function evidenceMatchesSubjects(
   subjects: readonly string[],
 ): boolean {
   if (subjects.length === 0) return false;
-  const evidence = normalizeEvidenceText(values.map(stringifyEvidence).join(' '));
+  const evidence = values.map(normalizedEvidenceForValue).join(' ');
   return subjects.some((subject) => ` ${evidence} `.includes(` ${normalizeEvidenceText(subject)} `));
+}
+
+function normalizedEvidenceForValue(value: unknown): string {
+  if (value && typeof value === 'object') {
+    const cached = evidenceTextCache.get(value);
+    if (cached !== undefined) return cached;
+    const computed = normalizeEvidenceText(stringifyEvidence(value));
+    evidenceTextCache.set(value, computed);
+    return computed;
+  }
+  return normalizeEvidenceText(stringifyEvidence(value));
 }
 
 function stringifyEvidence(value: unknown): string {

@@ -203,7 +203,7 @@ describe('news HTML discovery parsers', () => {
       'https://www.fantasypros.com/nfl/player-news.php',
       'fantasypros-player',
       new Date('2026-01-01T12:00:00.000Z'),
-    )[0]?.publishedAt).toBe('2025-12-31T24:00:00.000Z'.replace('24:00:00', '00:00:00').replace('2025-12-31', '2026-01-01'));
+    )[0]?.publishedAt).toBe('2026-01-01T00:00:00.000Z');
   });
 
   it('parses NFL player health cards with their displayed dates', () => {

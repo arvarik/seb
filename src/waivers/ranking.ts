@@ -469,11 +469,8 @@ function assignProductionScores(candidates: PreparedCandidate[]): void {
   for (const candidate of candidates) {
     const position = playerPosition(candidate.player);
     const reference = position ? PRODUCTION_REFERENCE_POINTS.get(position) ?? 16 : 16;
-    const effectivePoints = candidate.production
-      ? Math.max(candidate.production.expectedPoints, candidate.production.recentAverage)
-      : 0;
     candidate.productionScore = candidate.production
-      ? round(clamp(effectivePoints / reference * 100, 0, 100))
+      ? round(clamp(candidate.production.recentAverage / reference * 100, 0, 100))
       : 0;
   }
 }
@@ -502,7 +499,7 @@ function finalizeCandidate(
   const position = playerPosition(candidate.player) ?? 'UNKNOWN';
   return {
     demand: candidate.demand,
-    faab: faabRange(rankScore, candidate.risk.level, faab, position, candidate.demand.score),
+    faab: faabRange(rankScore, candidate.risk.level, faab, position),
     player: {
       active: candidate.player.active ?? null,
       injuryStatus: clean(candidate.player.injury_status),
@@ -526,7 +523,6 @@ function faabRange(
   risk: WaiverRiskLevel,
   faab: Omit<FaabRange, 'lower' | 'lowerPercent' | 'rationale' | 'upper' | 'upperPercent'> | null,
   position?: string,
-  demand = 0,
 ): FaabRange | null {
   if (!faab || faab.remaining < faab.minimumBid) return null;
   let [lowerPercent, upperPercent] = rankScore >= 80
@@ -536,12 +532,11 @@ function faabRange(
       : rankScore >= 50
         ? [5, 10]
         : rankScore >= 35 ? [2, 5] : [0, 2];
-  const normalizedPosition = position?.toUpperCase() ?? '';
-  const breakoutSkill = demand >= 75 && ['RB', 'WR', 'TE'].includes(normalizedPosition);
-  if (risk === 'high' && !breakoutSkill) {
+  if (risk === 'high') {
     lowerPercent = 0;
     upperPercent = Math.min(upperPercent, 5);
   }
+  const normalizedPosition = position?.toUpperCase() ?? '';
   if (normalizedPosition === 'K' || normalizedPosition === 'DEF') {
     upperPercent = Math.min(upperPercent, 3);
     lowerPercent = Math.min(lowerPercent, upperPercent);

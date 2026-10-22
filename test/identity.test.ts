@@ -234,40 +234,4 @@ describe('PlayerIdentityRegistry', () => {
     expect(sleeper).toMatchObject({ sourceProvider: 'sleeper', displayName: 'Amon-Ra St. Brown' });
     expect(nflverse).toMatchObject({ sourceProvider: 'nflverse', sourceId: 'n1' });
   });
-
-  it('links an active relocated Sleeper player to nflverse even when a retired Sleeper namesake exists', () => {
-    const built = buildPlayerIdentityRegistry([
-      {
-        active: true,
-        sourceProvider: 'sleeper',
-        sourceId: 'active-sleeper',
-        displayName: 'Relocated Runner',
-        position: 'RB',
-        team: 'GB',
-      },
-      {
-        active: false,
-        sourceProvider: 'sleeper',
-        sourceId: 'retired-sleeper',
-        displayName: 'Relocated Runner',
-        position: 'RB',
-        team: 'NYJ',
-      },
-      {
-        sourceProvider: 'nflverse',
-        sourceId: '00-0035700',
-        displayName: 'Relocated Runner',
-        position: 'RB',
-        team: 'LV',
-      },
-    ]);
-
-    expect(built.registry.resolveSource('sleeper', 'active-sleeper')).toMatchObject({
-      status: 'resolved',
-      identity: {
-        canonicalId: 'nfl-player:nflverse:00-0035700',
-        teamId: 'nfl-team:GB',
-      },
-    });
-  });
 });

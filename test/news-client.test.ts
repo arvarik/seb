@@ -859,9 +859,18 @@ describe('NewsClient cache', () => {
       result.articles.filter((item) => item.title === 'Friday Injury Report'),
     ).toHaveLength(2);
     expect(database.searchNewsArticlesFts(['rehabilitation']).has(articleUrl)).toBe(true);
+
+    // A second search using cached discovery + cached article metadata must retain enriched FTS details
+    const cachedResult = await client.search({
+      limit: 5,
+      query: 'quarterback rehabilitation',
+      teams: ['KC', 'BUF'],
+    });
+    expect(cachedResult.articles.some((item) => item.url === articleUrl)).toBe(true);
+    expect(database.searchNewsArticlesFts(['rehabilitation']).has(articleUrl)).toBe(true);
   });
 
-  it('stems limited/limiting to limit, ignores common fantasy query words, allows distinctive title matches, and skips redundant FTS re-indexing on cache-fresh reads', async () => {
+  it('stems limited/limiting to limit, rejects single-token unrelated matches, and skips redundant FTS re-indexing on cache-fresh reads', async () => {
     const source = newsSource('limit-stem-source', 'official');
     const database = createDatabase();
     let indexCalls = 0;
@@ -880,8 +889,8 @@ describe('NewsClient cache', () => {
           'Patrick Mahomes was limited in Wednesday drills.',
         ),
         article(
-          'Patrick Mahomes ready for Sunday kickoff',
-          '/news/mahomes-week-8',
+          'Week 8 Sunday injury report',
+          '/news/sunday-injury-report',
           '2026-08-29T18:45:00Z',
         ),
       ])],
@@ -898,10 +907,10 @@ describe('NewsClient cache', () => {
 
     const second = await client.search({
       limit: 5,
-      query: 'Mahomes week 8',
+      query: 'Josh Allen injury update',
       sourceIds: [source.id],
     });
-    expect(second.articles.some((a) => a.url.endsWith('/news/mahomes-week-8'))).toBe(true);
+    expect(second.articles).toHaveLength(0);
     // Cache-fresh read should not re-run indexNewsArticles or re-fetch robots.txt
     expect(indexCalls).toBe(1);
     expect(calls.filter((call) => new URL(call.url).pathname === '/robots.txt')).toHaveLength(1);

@@ -67,11 +67,8 @@ const GENERAL_QUERY_WORDS = new Set([
   'fantasy',
   'find',
   'football',
-  'game',
-  'games',
   'impact',
   'latest',
-  'lineup',
   'news',
   'nfl',
   'our',
@@ -80,23 +77,16 @@ const GENERAL_QUERY_WORDS = new Set([
   'report',
   'reports',
   'reporting',
+  'status',
   'should',
   'show',
-  'sit',
-  'start',
-  'status',
   'tell',
   'that',
   'today',
   'the',
   'this',
-  'trade',
   'update',
   'updates',
-  'waiver',
-  'waivers',
-  'week',
-  'weeks',
   'what',
   'when',
   'where',
@@ -254,7 +244,7 @@ export class NewsClient {
   private readonly database: SebDatabase | false;
   private readonly hostScheduler: HostScheduler;
   private readonly httpByOrigin = new Map<string, ResilientFetch>();
-  private readonly indexedSources = new Set<string>();
+  private readonly indexedSources = new Map<string, string>();
   private readonly now: () => Date;
   private readonly onSource: SourceObserver | undefined;
   private readonly requestOptions: NewsClientRequestOptions;
@@ -301,9 +291,14 @@ export class NewsClient {
       ? AbortSignal.any([callerSignal, budgetSignal])
       : budgetSignal;
     const failures: NewsSourceFailure[] = [];
+    const feedCounts = new Map<string, number>();
+    for (const source of selected) {
+      feedCounts.set(source.id, (feedCounts.get(source.id) ?? 0) + 1);
+    }
     const loaded = (await Promise.all(selected.map(async (source) => {
       try {
-        return await this.loadSource(source, signal);
+        const skipRawIndex = Boolean(source.enrichArticles) || (feedCounts.get(source.id) ?? 0) > 1;
+        return await this.loadSource(source, signal, skipRawIndex);
       } catch (error) {
         callerSignal?.throwIfAborted();
         failures.push(sourceFailure(source, error));
@@ -325,9 +320,8 @@ export class NewsClient {
       this.database && typeof this.database.searchNewsArticlesFts === 'function'
         ? this.database.searchNewsArticlesFts(tokens, loadedSourceIds)
         : new Map<string, number>();
-    let anyEnrichedUpdated = false;
     const enriched = await Promise.all(loaded.map(async (source) => {
-      if (!source.source.enrichArticles) return { ...source, metadataUpdated: false };
+      if (!source.source.enrichArticles) return source;
       const candidates = rankDiscovered(
         source.articles,
         query,
@@ -341,7 +335,6 @@ export class NewsClient {
         )
         .slice(0, ENRICHMENT_LIMIT_PER_SOURCE);
       const candidateUrls = new Set(candidates.map((article) => article.url));
-      let metadataUpdated = false;
       const enrichedCandidates = (await mapWithConcurrency(
         candidates,
         3,
@@ -352,10 +345,6 @@ export class NewsClient {
               article,
               signal,
             );
-            if (metadata.outcome === 'source-updated') {
-              metadataUpdated = true;
-              anyEnrichedUpdated = true;
-            }
             return applyArticleMetadata(article, metadata);
           } catch {
             callerSignal?.throwIfAborted();
@@ -376,32 +365,35 @@ export class NewsClient {
           label: source.source.label,
         });
       }
-      return { ...source, articles, metadataUpdated };
+      return { ...source, articles };
     }));
+    let reindexedAfterDetails = false;
     if (this.database && typeof this.database.indexNewsArticles === 'function') {
       const grouped = new Map<
         string,
-        { articles: DiscoveredNewsArticle[]; count: number; updated: boolean }
+        { articles: DiscoveredNewsArticle[]; count: number; enriched: boolean }
       >();
       for (const source of enriched) {
         const entry = grouped.get(source.source.id) ?? {
           articles: [],
           count: 0,
-          updated: false,
+          enriched: false,
         };
         entry.articles.push(...source.articles);
         entry.count += 1;
-        entry.updated ||= source.metadataUpdated || (entry.count > 1 && source.outcome === 'source-updated');
+        entry.enriched ||= Boolean(source.source.enrichArticles);
         grouped.set(source.source.id, entry);
       }
       for (const [sourceId, group] of grouped) {
-        if (group.updated) {
+        if (group.enriched || group.count > 1) {
           this.database.indexNewsArticles(sourceId, group.articles);
+          this.indexedSources.delete(sourceId);
+          reindexedAfterDetails = true;
         }
       }
     }
     const ftsScores =
-      anyEnrichedUpdated &&
+      reindexedAfterDetails &&
       this.database &&
       typeof this.database.searchNewsArticlesFts === 'function'
         ? this.database.searchNewsArticlesFts(tokens, loadedSourceIds)
@@ -638,6 +630,7 @@ export class NewsClient {
   private async loadSource(
     source: NewsSourceDefinition,
     signal?: AbortSignal,
+    skipRawIndex = false,
   ): Promise<LoadedNewsSource> {
     const resource = new CachedResource<DiscoveredNewsArticle[]>(
       this.database,
@@ -682,12 +675,13 @@ export class NewsClient {
       };
     }, signal ? { signal } : {});
     if (
+      !skipRawIndex &&
       this.database &&
       typeof this.database.indexNewsArticles === 'function' &&
-      (result.outcome === 'source-updated' || !this.indexedSources.has(source.id))
+      (result.outcome === 'source-updated' || this.indexedSources.get(source.id) !== source.discoveryUrl)
     ) {
       this.database.indexNewsArticles(source.id, result.value);
-      this.indexedSources.add(source.id);
+      this.indexedSources.set(source.id, source.discoveryUrl);
     }
     this.recordSource(source, result);
     return {
@@ -1249,10 +1243,6 @@ function filterRelevantArticles(
   if (tokens.length === 0) return [...articles];
   const minimumMatches = Math.min(2, tokens.length);
   return articles.filter((article) => {
-    const titleTokens = searchTokenSet(article.title);
-    if (tokens.some((token) => token.length >= 5 && searchTokenMatches(token, titleTokens))) {
-      return true;
-    }
     const text = searchTokenSet(
       `${article.title} ${article.excerpt ?? ''} ${article.categories.join(' ')} ${article.url}`,
     );

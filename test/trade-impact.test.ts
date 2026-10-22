@@ -266,8 +266,9 @@ describe('trade impact analysis', () => {
     expect(result.give.players).toHaveLength(2);
   });
 
-  it('isolates ambiguous bench players, uses fantasy_positions in lineup optimization, counts SUPER_FLEX for QB minimumStarters, and uses Bessel correction', () => {
+  it('isolates ambiguous bench players with a limitation note, refuses lineup verdicts when a starter lacks stats, uses order-independent priors, and uses Bessel correction', () => {
     const giveQb = player('give-qb', 'Starter Quarterback', 'QB');
+    const secondQb = player('second-qb', 'Second Quarterback', 'QB');
     const receiveQb = player('receive-qb', 'Upgrade Quarterback', 'QB');
     const flexWr = player('flex-wr', 'Flex Receiver', 'WR');
     const dualPlayer: SleeperPlayer = {
@@ -284,7 +285,80 @@ describe('trade impact analysis', () => {
       }),
     );
 
+    const baseRows = [
+      ...peerRows,
+      stat('Starter Quarterback', 'give-qb', 1, { passingYards: 200, position: 'QB' }),
+      stat('Starter Quarterback', 'give-qb', 2, { passingYards: 300, position: 'QB' }),
+      stat('Second Quarterback', 'second-qb', 1, { passingYards: 400, position: 'QB' }),
+      stat('Second Quarterback', 'second-qb', 2, { passingYards: 450, position: 'QB' }),
+      stat('Upgrade Quarterback', 'receive-qb', 1, { passingYards: 300, position: 'QB' }),
+      stat('Upgrade Quarterback', 'receive-qb', 2, { passingYards: 350, position: 'QB' }),
+      stat('Flex Receiver', 'flex-wr', 1, { receivingYards: 80, position: 'WR' }),
+      stat('Flex Receiver', 'flex-wr', 2, { receivingYards: 90, position: 'WR' }),
+      stat('Dual Weapon', 'dual-wr', 1, { receivingYards: 90, position: 'WR' }),
+      stat('Dual Weapon', 'dual-wr', 2, { receivingYards: 110, position: 'WR' }),
+      stat('Ambiguous Bench', 'ambig-1', 1, { receivingYards: 30, position: 'WR', team: 'KC' }),
+      stat('Ambiguous Bench', 'ambig-2', 1, { receivingYards: 40, position: 'WR', team: 'BUF' }),
+    ];
+
     const result = analyzeTradeImpact({
+      analysisSeason: 2026,
+      givePlayers: [giveQb, secondQb],
+      league: {
+        ...league(),
+        roster_positions: ['QB', 'SUPER_FLEX', 'RB', 'BN'],
+        scoring_settings: { pass_yd: 0.04, rec_yd: 0.1, rush_yd: 0.1 },
+      },
+      receivePlayers: [receiveQb],
+      roster: {
+        ...roster(),
+        players: ['give-qb', 'second-qb', 'flex-wr', 'dual-wr', 'ambig-bench'],
+        starters: ['give-qb', 'flex-wr', 'dual-wr'],
+      },
+      rosterPlayers: [giveQb, secondQb, flexWr, dualPlayer, ambiguousBench],
+      rows: baseRows,
+      throughWeek: 3,
+    });
+
+    const reversedOrder = analyzeTradeImpact({
+      analysisSeason: 2026,
+      givePlayers: [secondQb, giveQb],
+      league: {
+        ...league(),
+        roster_positions: ['QB', 'SUPER_FLEX', 'RB', 'BN'],
+        scoring_settings: { pass_yd: 0.04, rec_yd: 0.1, rush_yd: 0.1 },
+      },
+      receivePlayers: [receiveQb],
+      roster: {
+        ...roster(),
+        players: ['give-qb', 'second-qb', 'flex-wr', 'dual-wr', 'ambig-bench'],
+        starters: ['give-qb', 'flex-wr', 'dual-wr'],
+      },
+      rosterPlayers: [giveQb, secondQb, flexWr, dualPlayer, ambiguousBench],
+      rows: baseRows,
+      throughWeek: 3,
+    });
+
+    expect(result.give.totalWeeklyValue).toBe(reversedOrder.give.totalWeeklyValue);
+    expect(result.lineupImpact).toMatchObject({
+      scope: 'offensive-starters',
+      before: { complete: true },
+      after: { complete: true },
+    });
+    expect(result.limitations).toContain(
+      'Lineup comparison excluded bench players without resolved historical production: Ambiguous Bench.',
+    );
+    expect(result.rosterFit).toContainEqual(
+      expect.objectContaining({
+        minimumStarters: 1,
+        position: 'QB',
+      }),
+    );
+    // Scores [8, 12] -> sample std dev with Bessel's correction (n - 1 = 1) is sqrt(8) ≈ 2.83
+    expect(result.give.players[0]?.volatility).toBe(2.83);
+
+    // If the ambiguous player is an active starter, refuse to give a lineup verdict
+    const withAmbiguousStarter = analyzeTradeImpact({
       analysisSeason: 2026,
       givePlayers: [giveQb],
       league: {
@@ -296,37 +370,14 @@ describe('trade impact analysis', () => {
       roster: {
         ...roster(),
         players: ['give-qb', 'flex-wr', 'dual-wr', 'ambig-bench'],
+        starters: ['give-qb', 'ambig-bench', 'dual-wr'],
       },
       rosterPlayers: [giveQb, flexWr, dualPlayer, ambiguousBench],
-      rows: [
-        ...peerRows,
-        stat('Starter Quarterback', 'give-qb', 1, { passingYards: 200, position: 'QB' }),
-        stat('Starter Quarterback', 'give-qb', 2, { passingYards: 300, position: 'QB' }),
-        stat('Upgrade Quarterback', 'receive-qb', 1, { passingYards: 300, position: 'QB' }),
-        stat('Upgrade Quarterback', 'receive-qb', 2, { passingYards: 350, position: 'QB' }),
-        stat('Flex Receiver', 'flex-wr', 1, { receivingYards: 80, position: 'WR' }),
-        stat('Flex Receiver', 'flex-wr', 2, { receivingYards: 90, position: 'WR' }),
-        stat('Dual Weapon', 'dual-wr', 1, { receivingYards: 90, position: 'WR' }),
-        stat('Dual Weapon', 'dual-wr', 2, { receivingYards: 110, position: 'WR' }),
-        stat('Ambiguous Bench', 'ambig-1', 1, { receivingYards: 30, position: 'WR', team: 'KC' }),
-        stat('Ambiguous Bench', 'ambig-2', 1, { receivingYards: 40, position: 'WR', team: 'BUF' }),
-      ],
+      rows: baseRows,
       throughWeek: 3,
     });
-
-    expect(result.lineupImpact).toMatchObject({
-      scope: 'offensive-starters',
-      before: { complete: true },
-      after: { complete: true },
-    });
-    expect(result.rosterFit).toContainEqual(
-      expect.objectContaining({
-        minimumStarters: 2,
-        position: 'QB',
-      }),
-    );
-    // Scores [8, 12] -> sample std dev with Bessel's correction (n - 1 = 1) is sqrt(8) ≈ 2.83
-    expect(result.give.players[0]?.volatility).toBe(2.83);
+    expect(withAmbiguousStarter.lineupImpact).toBeNull();
+    expect(withAmbiguousStarter.verdict).toBe('insufficient-lineup-data');
   });
 
   it('narrows duplicate Sleeper player names to the single active player before throwing ambiguity', async () => {

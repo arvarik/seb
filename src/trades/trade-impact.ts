@@ -1,4 +1,3 @@
-import { positionPrior } from '../learning/engine.js';
 import { normalizePlayerName } from '../identity/normalize.js';
 import { optimizeLineup } from '../analysis/lineup.js';
 import { forecastMean, type ProjectionParameters } from '../projection/statistics.js';
@@ -77,7 +76,7 @@ export interface AnalyzeTradeImpactInput {
 
 const OFFENSIVE_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
 const OFFENSIVE_SLOTS = new Set(['QB', 'RB', 'WR', 'TE', 'FLEX', 'SUPER_FLEX', 'REC_FLEX', 'WRTE_FLEX', 'WRRB_FLEX', 'WRRBTE_FLEX']);
-const NON_STARTER_SLOTS = new Set(['BN', 'BENCH', 'FLEX', 'REC_FLEX', 'IDP_FLEX', 'IR', 'RESERVE', 'TAXI']);
+const NON_STARTER_SLOTS = new Set(['BN', 'BENCH', 'FLEX', 'SUPER_FLEX', 'REC_FLEX', 'IDP_FLEX', 'IR', 'RESERVE', 'TAXI']);
 
 export function analyzeTradeImpact(
   input: AnalyzeTradeImpactInput,
@@ -88,11 +87,13 @@ export function analyzeTradeImpact(
   if ([...input.givePlayers, ...input.receivePlayers].some((player) => !OFFENSIVE_POSITIONS.has(player.position?.toUpperCase() ?? ''))) throw new Error('Trade forecasts support QB, RB, WR, and TE players.');
   const rowsByName = groupRowsByName(input.rows.filter((row) => row.season === input.analysisSeason && row.seasonType === 'REG'), input.throughWeek);
   const allRows = [...rowsByName.values()].flat();
-  const priors = new Map<string, number | null>();
-  const give = tradeSide(input.givePlayers, rowsByName, allRows, input.league, input.parameters, priors);
-  const receive = tradeSide(input.receivePlayers, rowsByName, allRows, input.league, input.parameters, priors);
+  const priorFor = buildPriorLookup(allRows, input.league.scoring_settings);
+  const give = tradeSide(input.givePlayers, rowsByName, allRows, input.league, input.parameters, priorFor);
+  const receive = tradeSide(input.receivePlayers, rowsByName, allRows, input.league, input.parameters, priorFor);
   const giveIds = new Set(input.givePlayers.map((player) => player.player_id));
   const afterPlayers = [...input.rosterPlayers.filter((player) => !giveIds.has(player.player_id)), ...input.receivePlayers];
+  const starterIds = new Set(input.roster.starters ?? []);
+  const skippedBenchPlayers = new Set<string>();
   let lineupImpact: TradeImpactAnalysis['lineupImpact'] = null;
   try {
     const knownSlots = new Set([...OFFENSIVE_SLOTS, 'K', 'DEF', 'DL', 'DE', 'DT', 'LB', 'DB', 'CB', 'S', 'IDP_FLEX', 'IDP', 'BN', 'BENCH', 'IR', 'RESERVE', 'TAXI']);
@@ -100,14 +101,18 @@ export function analyzeTradeImpact(
     const lineup = (players: SleeperPlayer[]) => optimizeLineup(
       players.filter((player) => OFFENSIVE_POSITIONS.has(player.position?.toUpperCase() ?? '')).flatMap((player) => {
         try {
-          const [impact] = tradeSide([player], rowsByName, allRows, input.league, input.parameters, priors).players;
+          const [impact] = tradeSide([player], rowsByName, allRows, input.league, input.parameters, priorFor).players;
           return impact ? [{
             id: impact.playerId,
             name: impact.name,
             positions: player.fantasy_positions?.length ? player.fantasy_positions : [impact.position],
             points: impact.estimatedWeeklyValue,
           }] : [];
-        } catch {
+        } catch (error) {
+          if (starterIds.has(player.player_id) || !isSkippableBenchPlayerError(error)) {
+            throw error;
+          }
+          skippedBenchPlayers.add(playerName(player));
           return [];
         }
       }), input.league.roster_positions.filter((slot) => OFFENSIVE_SLOTS.has(slot.toUpperCase())));
@@ -115,7 +120,7 @@ export function analyzeTradeImpact(
     const before = lineup(input.rosterPlayers);
     const after = lineup(afterPlayers);
     if (before.complete && after.complete && before.assignments.length > 0) lineupImpact = { scope: 'offensive-starters', before, after, delta: round(after.expectedPoints - before.expectedPoints) };
-  } catch { /* Missing or ambiguous bench evidence prevents a lineup verdict. */ }
+  } catch { /* Missing or ambiguous starter evidence prevents a lineup verdict. */ }
   const valueDelta = round(receive.totalWeeklyValue - give.totalWeeklyValue);
   const decisionDelta = lineupImpact?.delta ?? 0;
   const scoring = inspectPlayerScoringSettings(input.league.scoring_settings);
@@ -140,6 +145,9 @@ export function analyzeTradeImpact(
     limitations: [
       'The verdict measures the change in the best legal offensive starting lineup. Unchanged kicker and defense slots cancel from the comparison.',
       ...(!lineupImpact ? ['The full lineup lacks resolved production or supported starter slots. Seb cannot give a lineup value verdict.'] : []),
+      ...(lineupImpact && skippedBenchPlayers.size > 0
+        ? [`Lineup comparison excluded bench players without resolved historical production: ${[...skippedBenchPlayers].join(', ')}.`]
+        : []),
       ...(input.givePlayers.length !== input.receivePlayers.length
         ? [`Uneven trade (${input.givePlayers.length} for ${input.receivePlayers.length}): total value delta does not account for the replacement waiver player or dropped roster spot.`]
         : []),
@@ -172,8 +180,9 @@ function tradeSide(
   allRows: readonly NflversePlayerWeek[],
   league: SleeperLeague,
   parameters?: ProjectionParameters,
-  priors = new Map<string, number | null>(),
+  priorFor?: (position: string, playerId: string) => number | null,
 ): TradeSideImpact {
+  const resolvePrior = priorFor ?? buildPriorLookup(allRows, league.scoring_settings);
   const impacts = players.map((player) => {
     const name = playerName(player);
     const gsisId = player.gsis_id?.trim();
@@ -208,13 +217,10 @@ function tradeSide(
     const availabilityFactor = playerAvailabilityFactor(
       [player.injury_status, player.status].filter(Boolean).join(' ') || null,
     );
-    if (!priors.has(normalizedPos)) {
-      priors.set(normalizedPos, positionPrior(allRows, normalizedPos, rows[0]!.playerId, league.scoring_settings));
-    }
     return {
       availabilityFactor,
       estimatedWeeklyValue: round(
-        forecastMean(values, priors.get(normalizedPos) ?? null, parameters) * availabilityFactor,
+        forecastMean(values, resolvePrior(normalizedPos, rows[0]!.playerId), parameters) * availabilityFactor,
       ),
       games: rows.length,
       injuryStatus: [player.injury_status, player.status].filter(Boolean).join(' ') || null,
@@ -233,6 +239,44 @@ function tradeSide(
       impacts.reduce((total, player) => total + player.estimatedWeeklyValue, 0),
     ),
   };
+}
+
+function buildPriorLookup(
+  allRows: readonly NflversePlayerWeek[],
+  scoring: SleeperLeague['scoring_settings'],
+): (position: string, playerId: string) => number | null {
+  const byPosition = new Map<
+    string,
+    { byPlayer: Map<string, { count: number; sum: number }>; totalCount: number; totalSum: number }
+  >();
+  return (position: string, playerId: string) => {
+    let summary = byPosition.get(position);
+    if (!summary) {
+      summary = { byPlayer: new Map(), totalCount: 0, totalSum: 0 };
+      for (const row of allRows) {
+        if (row.position !== position) continue;
+        const score = scorePlayerWeek(row, scoring);
+        summary.totalCount += 1;
+        summary.totalSum += score;
+        const player = summary.byPlayer.get(row.playerId) ?? { count: 0, sum: 0 };
+        player.count += 1;
+        player.sum += score;
+        summary.byPlayer.set(row.playerId, player);
+      }
+      byPosition.set(position, summary);
+    }
+    const excluded = summary.byPlayer.get(playerId);
+    const count = summary.totalCount - (excluded?.count ?? 0);
+    return count >= 20 ? (summary.totalSum - (excluded?.sum ?? 0)) / count : null;
+  };
+}
+
+function isSkippableBenchPlayerError(error: unknown): boolean {
+  return error instanceof Error && (
+    error.message.startsWith('nflverse found no completed weekly statistics for ') ||
+    error.message.startsWith('The historical identity for ') ||
+    error.message === 'Duplicate player-week statistics cannot support a trade.'
+  );
 }
 
 function rosterFitChanges(
@@ -258,10 +302,9 @@ function rosterFitChanges(
     const before = playersByPosition.get(position) ?? 0;
     const after = before - give.filter((player) => player.position?.toUpperCase() === position).length +
       receive.filter((player) => player.position?.toUpperCase() === position).length;
-    const minimumStarters = league.roster_positions.filter((slot) => {
-      const upper = slot.toUpperCase();
-      return (upper === position || (position === 'QB' && upper === 'SUPER_FLEX')) && !NON_STARTER_SLOTS.has(upper);
-    }).length;
+    const minimumStarters = league.roster_positions.filter(
+      (slot) => slot.toUpperCase() === position && !NON_STARTER_SLOTS.has(slot.toUpperCase()),
+    ).length;
     return {
       after,
       before,

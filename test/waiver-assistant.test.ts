@@ -413,7 +413,7 @@ it('raises a rounded zero-dollar suggestion to the affordable minimum bid', () =
   expect(result.targets.every((target) => target.faab?.rationale.includes('league minimum bid is 1'))).toBe(true);
 });
 
-it('uses expectedPoints when higher than recentAverage, caps K/DEF at 3% FAAB, and uncaps high-demand breakout skill players', () => {
+it('caps K and DEF targets at 3% FAAB and keeps high-risk targets capped at 5% FAAB', () => {
   const roster: SleeperRoster = {
     league_id: '123',
     players: [],
@@ -429,20 +429,13 @@ it('uses expectedPoints when higher than recentAverage, caps K/DEF at 3% FAAB, a
     },
     lookbackHours: 24,
     nflverseRows: [
-      stat('n-vet', 'Veteran Receiver', 'WR', 1, { receptions: 10, receivingYards: 120 }),
-      stat('n-vet', 'Veteran Receiver', 'WR', 2, { receptions: 10, receivingYards: 120 }),
-      stat('n-vet', 'Veteran Receiver', 'WR', 3, { receptions: 2, receivingYards: 20 }),
-      stat('n-vet', 'Veteran Receiver', 'WR', 4, { receptions: 2, receivingYards: 20 }),
-      stat('n-vet', 'Veteran Receiver', 'WR', 5, { receptions: 2, receivingYards: 20 }),
-      stat('n-breakout', 'Breakout Back', 'RB', 5, { receptions: 4, receivingYards: 40, rushingYards: 110 }),
       stat('n-k', 'Stream Kicker', 'K', 3, { fantasyPoints: 14, fantasyPointsPpr: 14 }),
       stat('n-k', 'Stream Kicker', 'K', 4, { fantasyPoints: 14, fantasyPointsPpr: 14 }),
       stat('n-k', 'Stream Kicker', 'K', 5, { fantasyPoints: 14, fantasyPointsPpr: 14 }),
     ],
     players: {
-      'vet-wr': player('vet-wr', 'Veteran Receiver', 'WR'),
-      'breakout-rb': {
-        ...player('breakout-rb', 'Breakout Back', 'RB'),
+      'unproven-rb': {
+        ...player('unproven-rb', 'Unproven Back', 'RB'),
         injury_status: 'Questionable',
       },
       'stream-k': player('stream-k', 'Stream Kicker', 'K'),
@@ -452,22 +445,14 @@ it('uses expectedPoints when higher than recentAverage, caps K/DEF at 3% FAAB, a
     selectedRoster: roster,
     throughWeek: 5,
     trendingAdds: [
-      { count: 500, player_id: 'breakout-rb' },
+      { count: 500, player_id: 'unproven-rb' },
       { count: 500, player_id: 'stream-k' },
-      { count: 50, player_id: 'vet-wr' },
     ],
   });
 
-  const vet = result.targets.find((t) => t.player.playerId === 'vet-wr');
-  expect(vet?.production).not.toBeNull();
-  expect(vet!.production!.expectedPoints).toBeGreaterThan(vet!.production!.recentAverage);
-  expect(vet!.productionScore).toBeGreaterThan(
-    Math.round((vet!.production!.recentAverage / 16) * 100 * 100) / 100,
-  );
-
-  const breakout = result.targets.find((t) => t.player.playerId === 'breakout-rb');
-  expect(breakout?.demand.score).toBeGreaterThanOrEqual(75);
-  expect(breakout?.faab?.upper).toBeGreaterThan(5);
+  const unproven = result.targets.find((t) => t.player.playerId === 'unproven-rb');
+  expect(unproven?.risk.level).toBe('high');
+  expect(unproven?.faab?.upperPercent).toBeLessThanOrEqual(5);
 
   const kicker = result.targets.find((t) => t.player.playerId === 'stream-k');
   expect(kicker?.faab?.upper).toBeLessThanOrEqual(3);

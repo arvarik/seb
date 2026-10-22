@@ -39,6 +39,23 @@ describe('isModelCapacityError', () => {
     expect(isModelCapacityError({ status: '503' })).toBe(true);
   });
 
+  it('detects Anthropic 529 overloaded errors and resource exhaustion', () => {
+    expect(isModelCapacityError({ statusCode: 529 })).toBe(true);
+    expect(isModelCapacityError({ status: '529' })).toBe(true);
+    expect(isModelCapacityError(new Error('Overloaded'))).toBe(true);
+    expect(isModelCapacityError({ code: 'overloaded_error' })).toBe(true);
+    expect(isModelCapacityError({ code: 'resource_exhausted' })).toBe(true);
+    expect(isModelCapacityError(new Error('Resource has been exhausted (e.g. check quota).'))).toBe(true);
+  });
+
+  it('detects gateway errors and upstream timeouts as capacity fallback triggers', () => {
+    expect(isModelCapacityError({ statusCode: 502 })).toBe(true);
+    expect(isModelCapacityError({ statusCode: 504 })).toBe(true);
+    expect(isModelCapacityError({ status: 524 })).toBe(true);
+    expect(isModelCapacityError(new Error('Bad Gateway'))).toBe(true);
+    expect(isModelCapacityError(new Error('Gateway Timeout'))).toBe(true);
+  });
+
   it('does not classify authentication failures as capacity errors', () => {
     expect(isModelCapacityError({ statusCode: 401 })).toBe(false);
     expect(isModelCapacityError({
@@ -78,6 +95,21 @@ describe('model error presentation', () => {
     expect(classifyModelError(new DOMException('Deadline', 'TimeoutError'))).toBe(
       'timeout',
     );
+  });
+
+  it('classifies network disconnects and socket resets as provider errors', () => {
+    expect(classifyModelError({ code: 'ECONNRESET' })).toBe('provider');
+    expect(classifyModelError({ code: 'UND_ERR_SOCKET' })).toBe('provider');
+    expect(classifyModelError({ message: 'TypeError: fetch failed' })).toBe('provider');
+    expect(classifyModelError({ message: 'socket hang up' })).toBe('provider');
+    expect(formatModelErrorForUser({ code: 'ECONNRESET' })).toContain(
+      'encountered a connection or service issue',
+    );
+  });
+
+  it('classifies Anthropic 529 as capacity error', () => {
+    expect(classifyModelError({ status: 529 })).toBe('capacity');
+    expect(formatModelErrorForUser({ status: 529 })).toContain('has no available capacity');
   });
 
   it('gives commands that match the active surface', () => {

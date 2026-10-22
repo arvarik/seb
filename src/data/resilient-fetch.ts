@@ -1,4 +1,6 @@
-const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_STATUS_CODES = new Set([
+  408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529,
+]);
 
 type Fetch = typeof globalThis.fetch;
 

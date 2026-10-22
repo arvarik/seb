@@ -33,6 +33,7 @@ import {
 } from '../analysis/recommendation-eligibility.js';
 import { getSharedSebDatabase } from '../data/sqlite-store.js';
 import {
+  classifyModelError,
   formatModelErrorForUser,
   isModelCapacityError,
   type ModelErrorContext,
@@ -390,7 +391,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
             requestSignal.aborted ||
             !(error instanceof ModelResponseError) ||
             error.emittedOutput ||
-            !isModelCapacityError(error.cause) ||
+            !isModelCapacityError(error.cause ?? error) ||
             fallbackAgent === primaryAgent
           ) {
             throw error;
@@ -805,7 +806,10 @@ export function waitForSignal<T>(
 async function postFailureMessage(target: Thread, error: unknown): Promise<void> {
   const signal = AbortSignal.timeout(CONNECTOR_FAILURE_TIMEOUT_MS);
   try {
-    await waitForSignal(target.post(error instanceof ModelResponseError ? error.message : FAILURE_MESSAGE), signal);
+    const message = error instanceof ModelResponseError
+      ? error.message
+      : (classifyModelError(error) ? formatModelErrorForUser(error, 'connector') : FAILURE_MESSAGE);
+    await waitForSignal(target.post(message), signal);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     process.stderr.write(`Seb could not post the failure message: ${reason}\n`);

@@ -176,7 +176,9 @@ export class PlayerProjectionService {
     const eligiblePositionRows = positionRows.filter(
       (row) => row.season === analysisSeason && row.seasonType === 'REG' && row.week <= throughWeek,
     );
-    const learnedResiduals = learned && !overrides?.parameters ? learned.residuals[latest.position] : undefined;
+    const learnedResiduals = learned && !overrides?.parameters
+      ? (learned.residuals[latest.position] ?? learned.residuals[latest.position.toUpperCase()])
+      : undefined;
     const pooledResiduals = !learnedResiduals || learnedResiduals.length < 20
       ? pooledPositionResiduals(eligiblePositionRows, league.scoring_settings, parameters)
       : undefined;

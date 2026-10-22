@@ -258,7 +258,7 @@ export function scorePlayerWeek(
     (row.attempts - row.completions) * setting(settings, 'pass_inc') +
     row.carries * setting(settings, 'rush_att') +
     row.targets * setting(settings, 'rec_tgt') +
-    row.receptions * setting(settings, `bonus_rec_${row.position.toLowerCase()}`) +
+    row.receptions * setting(settings, `bonus_rec_${row.position.toUpperCase() === 'FB' ? 'rb' : row.position.toLowerCase()}`) +
     row.passingYards * setting(settings, 'pass_yd') +
     row.passingTouchdowns * setting(settings, 'pass_td') +
     row.interceptions * setting(settings, 'pass_int') +
@@ -289,7 +289,7 @@ export function inspectPlayerScoringSettings(settings: SleeperSettings, position
   return {
     usedSettings: active.filter((key) => position?.toUpperCase() === 'K' ? KICKING_SETTINGS.has(key) || /^(st_|kr_yd$|pr_yd$|fum)/u.test(key) && SUPPORTED_SETTINGS.has(key) : SUPPORTED_SETTINGS.has(key)),
     ignoredSettings: active.filter(
-      (key) => !SUPPORTED_SETTINGS.has(key) && !NON_PLAYER_SETTINGS.has(key) && !DEFENSE_SETTINGS.has(key) && !KICKING_SETTINGS.has(key),
+      (key) => !SUPPORTED_SETTINGS.has(key) && !NON_PLAYER_SETTINGS.has(key) && !DEFENSE_SETTINGS.has(key) && !KICKING_SETTINGS.has(key) && !key.startsWith('idp_'),
     ),
   };
 }
@@ -301,7 +301,7 @@ function matchupAdjustment(
   settings: SleeperSettings,
 ): ProjectionAdjustment | null {
   if (!opponent) return null;
-  const selected = rows.filter((row) => row.position === position);
+  const selected = rows.filter((row) => row.position.toUpperCase() === position.toUpperCase());
   if (selected.length === 0) return null;
   const byDefense = new Map<string, Map<string, number>>();
   const seen = new Set<string>();
@@ -309,9 +309,10 @@ function matchupAdjustment(
     const identity = `${row.season}:${row.week}:${row.playerId}`;
     if (seen.has(identity)) throw new ResearchDataError('The opponent data contains duplicate player weeks.');
     seen.add(identity);
-    const games = byDefense.get(row.opponentTeam) ?? new Map<string, number>();
+    const opponentTeam = row.opponentTeam.toUpperCase();
+    const games = byDefense.get(opponentTeam) ?? new Map<string, number>();
     games.set(row.gameId, (games.get(row.gameId) ?? 0) + scorePlayerWeek(row, settings));
-    byDefense.set(row.opponentTeam, games);
+    byDefense.set(opponentTeam, games);
   }
   const defenseAverages = [...byDefense.values()]
     .map((games) => average([...games.values()]))

@@ -103,13 +103,17 @@ export interface PlayerTrendSummary {
   playerDisplayName: string;
   playerId: string;
   position: string;
+  recentAirYardsShare?: number | null;
   recentAveragePprPoints: number;
   recentAverageTargets: number;
   recentAverageTouches: number;
+  recentTargetShare?: number | null;
+  recentWopr?: number | null;
   targetShare: number | null;
   team: string;
   totalPprPoints: number;
   volatility: number;
+  wopr?: number | null;
 }
 
 export interface TeamPerformanceSummary {

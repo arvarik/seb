@@ -80,13 +80,13 @@ export async function projectLeagueMatchup(
   });
   const names = prepared.flatMap(({ players }) => players.filter((player) => player.status === 'projected').map((player) => player.name));
   const batch = await projectPlayers(service, { leagueId: request.leagueId, season: request.season, week: request.week, playerNames: names });
-  const byName = new Map(batch.results.map((result) => [result.playerName, result]));
+  const byName = new Map(batch.results.map((result) => [result.playerName.trim().toLowerCase(), result]));
   throwIfRequestAborted();
   const sigmaByPlayerId = new Map<string, number>();
   const rosters = prepared.map(({ side, players }) => {
     for (const player of players) {
       if (player.status !== 'projected') continue;
-      const result = byName.get(player.name);
+      const result = byName.get(player.name.trim().toLowerCase());
       if (!result || result.status === 'unavailable') {
         player.status = 'unavailable';
         player.reason = result?.reason ?? 'The player projection is unavailable.';
@@ -256,11 +256,11 @@ export async function optimizeRosterLineup(
   }
   const names = [...byId.values()].filter((player) => player.status === 'projected').map((player) => player.name);
   const batch = await projectPlayers(service, { leagueId: request.leagueId, season: request.season, week: request.week, playerNames: names });
-  const byName = new Map(batch.results.map((result) => [result.playerName, result]));
+  const byName = new Map(batch.results.map((result) => [result.playerName.trim().toLowerCase(), result]));
   throwIfRequestAborted();
   for (const player of byId.values()) {
     if (player.status !== 'projected') continue;
-    const result = byName.get(player.name);
+    const result = byName.get(player.name.trim().toLowerCase());
     if (!result || result.status === 'unavailable') {
       player.status = 'unavailable';
       player.reason = result?.reason ?? 'The player projection is unavailable.';

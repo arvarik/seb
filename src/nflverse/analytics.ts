@@ -88,7 +88,7 @@ export function summarizeDefenseAgainstPosition(
   const normalizedPosition = position.trim().toUpperCase();
   const matches = rows.filter(
     (row) =>
-      row.opponentTeam === normalizedDefense && row.position === normalizedPosition,
+      row.opponentTeam.toUpperCase() === normalizedDefense && row.position.toUpperCase() === normalizedPosition,
   );
   const games = new Set(matches.map((row) => row.gameId)).size;
   const totalPprPointsAllowed = sum(matches, (row) => row.fantasyPointsPpr);
@@ -110,6 +110,16 @@ function summarizePlayer(rows: readonly NflversePlayerWeek[]): PlayerTrendSummar
   }
   const recent = ordered.slice(-3);
   const points = ordered.map((row) => row.fantasyPointsPpr);
+  const targetShare = averageNullable(ordered.map((row) => row.targetShare));
+  const airYardsShare = averageNullable(ordered.map((row) => row.airYardsShare));
+  const wopr = targetShare !== null && airYardsShare !== null
+    ? round(1.5 * targetShare + 0.7 * airYardsShare)
+    : null;
+  const recentTargetShare = averageNullable(recent.map((row) => row.targetShare));
+  const recentAirYardsShare = averageNullable(recent.map((row) => row.airYardsShare));
+  const recentWopr = recentTargetShare !== null && recentAirYardsShare !== null
+    ? round(1.5 * recentTargetShare + 0.7 * recentAirYardsShare)
+    : null;
   return {
     playerId: latest.playerId,
     playerDisplayName: latest.playerDisplayName,
@@ -133,8 +143,12 @@ function summarizePlayer(rows: readonly NflversePlayerWeek[]): PlayerTrendSummar
       sum(recent, (row) => row.receptions + row.carries),
       recent.length,
     ),
-    targetShare: averageNullable(ordered.map((row) => row.targetShare)),
-    airYardsShare: averageNullable(ordered.map((row) => row.airYardsShare)),
+    targetShare,
+    airYardsShare,
+    wopr,
+    recentTargetShare,
+    recentAirYardsShare,
+    recentWopr,
     volatility: standardDeviation(points),
   };
 }

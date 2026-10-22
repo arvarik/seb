@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PROJECTION_PARAMETERS, forecastMean, forecastInterval, quantile, rollingResiduals, normalCdf } from '../src/projection/statistics.js';
-import { projectPlayer, scorePlayerWeek } from '../src/projection/player-projection.js';
+import { projectPlayer, scorePlayerWeek, inspectPlayerScoringSettings } from '../src/projection/player-projection.js';
 import { compareProjections } from '../src/projection/comparison.js';
 import { PPR_SCORING } from '../src/learning/engine.js';
 import { stat } from './analysis-fixtures.js';
@@ -85,4 +85,13 @@ it('blocks a starter change after kickoff and excludes observed target-game weat
 it('withholds a starter recommendation when kickoff or the current team is unknown', () => {
   expect(projectPlayer({ ...input, kickoffKnown: false }).recommendationEligible).toBe(false);
   expect(projectPlayer({ ...input, currentProfileKnown: false }).recommendationEligible).toBe(false);
+});
+
+it('maps fullback receptions to RB bonus and filters IDP settings without marking partial scoring', () => {
+  const fbScore = scorePlayerWeek(stat({ position: 'FB', receptions: 3 }), { rec: 0.5, bonus_rec_rb: 0.5 });
+  expect(fbScore).toBe(3);
+
+  const inspection = inspectPlayerScoringSettings({ rec: 1, idp_tkl: 1.5, idp_sack: 4 });
+  expect(inspection.usedSettings).toEqual(['rec']);
+  expect(inspection.ignoredSettings).toEqual([]);
 });

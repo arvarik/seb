@@ -247,6 +247,21 @@ describe('SebDatabase', () => {
     expect(result.snapshotsRemoved).toBe(2);
     expect(database.listSnapshotMetadata()).toHaveLength(1);
   });
+
+  it('creates query optimization indexes for pruning and lookup', () => {
+    const database = createDatabase();
+    const external = new Database(database.file, { readonly: true });
+    const cacheIndexes = external
+      .prepare("PRAGMA index_list('cache_entries')")
+      .all() as Array<{ name: string }>;
+    const snapshotIndexes = external
+      .prepare("PRAGMA index_list('snapshots')")
+      .all() as Array<{ name: string }>;
+    external.close();
+
+    expect(cacheIndexes.some((idx) => idx.name === 'cache_stale_until_idx')).toBe(true);
+    expect(snapshotIndexes.some((idx) => idx.name === 'snapshot_as_of_idx')).toBe(true);
+  });
 });
 
 describe('CachedResource', () => {

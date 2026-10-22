@@ -272,6 +272,7 @@ export class WeatherClient {
         lastModified: loaded.lastModified,
         sourceTimestamp: loaded.lastModified,
         value: parse(loaded.document),
+        valueValidated: true,
       };
     }, signal ? { signal } : {});
   }

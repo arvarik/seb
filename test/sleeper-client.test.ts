@@ -11,6 +11,18 @@ describe('SleeperClient', () => {
     }) });
     expect((await client.findPlayers(query))[0]?.player_id).toBe('1');
   });
+
+  it('finds a team defense by its code', async () => {
+    const client = new SleeperClient({
+      database: false,
+      fetch: async () => jsonResponse({
+        KC: { player_id: 'KC', full_name: 'Kansas City Chiefs', position: 'DEF', active: true },
+      }),
+    });
+    const players = await client.findPlayers('KC');
+    expect(players[0]?.player_id).toBe('KC');
+  });
+
   it('builds a league matchup request', async () => {
     let requestedUrl = '';
     const fetch: typeof globalThis.fetch = async (input) => {

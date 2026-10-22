@@ -139,25 +139,27 @@ export class NflverseClient {
       validate: value => defenseDataSchema.parse(value),
     }, this);
     const signal = currentRequestSignal();
-    const loaded = await resource.read(async conditional => {
-      const downloaded = await this.fetchCsv(sourceUrl, conditional, DEFENSE_COLUMNS);
-      if ('notModified' in downloaded) return downloaded;
-      conditional.signal.throwIfAborted();
-      return { etag: downloaded.etag, lastModified: downloaded.lastModified,
-        sourceTimestamp: downloaded.lastModified, value: aggregateDefense(downloaded.rows, season), valueValidated: true };
-    }, signal ? { signal } : {});
-    this.recordSource(`nflverse-defense-${season}`, `nflverse ${season} defense and special teams`, sourceUrl, loaded);
     const teamUrl = `${this.baseUrl}/stats_team/stats_team_week_${season}.csv.gz`;
     const teamResource = new CachedResource<CsvRow[]>(this.database, 'nflverse', `defense-team-v1-${season}`, teamUrl, {
       schemaVersion: 'v1', snapshotKind: 'nflverse-defense-team', snapshotRetention: 2,
       staleIfErrorMs: STALE_IF_ERROR_MS, ttlMs: STATS_TTL_MS,
       validate: value => z.array(z.record(z.string(), z.string())).parse(value),
     }, this);
-    const totals = await teamResource.read(async conditional => {
-      const result = await this.fetchCsv(teamUrl, conditional);
-      if ('notModified' in result) return result;
-      return { etag: result.etag, lastModified: result.lastModified, sourceTimestamp: result.lastModified, value: result.rows };
-    }, signal ? { signal } : {});
+    const [loaded, totals] = await Promise.all([
+      resource.read(async conditional => {
+        const downloaded = await this.fetchCsv(sourceUrl, conditional, DEFENSE_COLUMNS);
+        if ('notModified' in downloaded) return downloaded;
+        conditional.signal.throwIfAborted();
+        return { etag: downloaded.etag, lastModified: downloaded.lastModified,
+          sourceTimestamp: downloaded.lastModified, value: aggregateDefense(downloaded.rows, season), valueValidated: true };
+      }, signal ? { signal } : {}),
+      teamResource.read(async conditional => {
+        const result = await this.fetchCsv(teamUrl, conditional);
+        if ('notModified' in result) return result;
+        return { etag: result.etag, lastModified: result.lastModified, sourceTimestamp: result.lastModified, value: result.rows };
+      }, signal ? { signal } : {}),
+    ]);
+    this.recordSource(`nflverse-defense-${season}`, `nflverse ${season} defense and special teams`, sourceUrl, loaded);
     this.recordSource(`nflverse-defense-team-${season}`, `nflverse ${season} official weekly team statistics`, teamUrl, totals);
     return reconcileDefense(loaded.value, totals.value);
   }

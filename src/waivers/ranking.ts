@@ -496,15 +496,16 @@ function finalizeCandidate(
     0,
     100,
   ));
+  const position = playerPosition(candidate.player) ?? 'UNKNOWN';
   return {
     demand: candidate.demand,
-    faab: faabRange(rankScore, candidate.risk.level, faab),
+    faab: faabRange(rankScore, candidate.risk.level, faab, position),
     player: {
       active: candidate.player.active ?? null,
       injuryStatus: clean(candidate.player.injury_status),
       name: playerName(candidate.player),
       playerId: candidate.player.player_id,
-      position: playerPosition(candidate.player) ?? 'UNKNOWN',
+      position,
       status: clean(candidate.player.status),
       team: clean(candidate.player.team)?.toUpperCase() ?? null,
     },
@@ -521,6 +522,7 @@ function faabRange(
   rankScore: number,
   risk: WaiverRiskLevel,
   faab: Omit<FaabRange, 'lower' | 'lowerPercent' | 'rationale' | 'upper' | 'upperPercent'> | null,
+  position?: string,
 ): FaabRange | null {
   if (!faab || faab.remaining < faab.minimumBid) return null;
   let [lowerPercent, upperPercent] = rankScore >= 80
@@ -534,8 +536,18 @@ function faabRange(
     lowerPercent = 0;
     upperPercent = Math.min(upperPercent, 5);
   }
+  const normalizedPosition = position?.toUpperCase() ?? '';
+  if (normalizedPosition === 'K' || normalizedPosition === 'DEF') {
+    upperPercent = Math.min(upperPercent, 3);
+    lowerPercent = Math.min(lowerPercent, upperPercent);
+  }
   let lower = Math.min(faab.remaining, Math.round(faab.budget * lowerPercent / 100));
   let upper = Math.min(faab.remaining, Math.round(faab.budget * upperPercent / 100));
+  if (normalizedPosition === 'K' || normalizedPosition === 'DEF') {
+    const streamCap = Math.min(faab.remaining, Math.max(1, Math.round(faab.budget * 0.03)));
+    upper = Math.min(upper, streamCap);
+    lower = Math.min(lower, upper);
+  }
   const minimumApplied = lower < faab.minimumBid;
   if (faab.remaining >= faab.minimumBid) {
     lower = Math.max(lower, faab.minimumBid);

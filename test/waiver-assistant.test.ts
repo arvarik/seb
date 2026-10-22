@@ -412,3 +412,49 @@ it('raises a rounded zero-dollar suggestion to the affordable minimum bid', () =
   expect(result.targets.every((target) => target.faab?.lower === 1 && target.faab?.upper === 1)).toBe(true);
   expect(result.targets.every((target) => target.faab?.rationale.includes('league minimum bid is 1'))).toBe(true);
 });
+
+it('caps K and DEF targets at 3% FAAB and keeps high-risk targets capped at 5% FAAB', () => {
+  const roster: SleeperRoster = {
+    league_id: '123',
+    players: [],
+    roster_id: 4,
+    settings: { waiver_budget_used: 0 },
+    starters: [],
+  };
+  const result = rankWaiverTargets({
+    analysisSeason: 2026,
+    league: {
+      ...league(),
+      roster_positions: ['RB', 'WR', 'K', 'DEF', 'BN'],
+    },
+    lookbackHours: 24,
+    nflverseRows: [
+      stat('n-k', 'Stream Kicker', 'K', 3, { fantasyPoints: 14, fantasyPointsPpr: 14 }),
+      stat('n-k', 'Stream Kicker', 'K', 4, { fantasyPoints: 14, fantasyPointsPpr: 14 }),
+      stat('n-k', 'Stream Kicker', 'K', 5, { fantasyPoints: 14, fantasyPointsPpr: 14 }),
+    ],
+    players: {
+      'unproven-rb': {
+        ...player('unproven-rb', 'Unproven Back', 'RB'),
+        injury_status: 'Questionable',
+      },
+      'stream-k': player('stream-k', 'Stream Kicker', 'K'),
+    },
+    resultLimit: 10,
+    rosters: [roster],
+    selectedRoster: roster,
+    throughWeek: 5,
+    trendingAdds: [
+      { count: 500, player_id: 'unproven-rb' },
+      { count: 500, player_id: 'stream-k' },
+    ],
+  });
+
+  const unproven = result.targets.find((t) => t.player.playerId === 'unproven-rb');
+  expect(unproven?.risk.level).toBe('high');
+  expect(unproven?.faab?.upperPercent).toBeLessThanOrEqual(5);
+
+  const kicker = result.targets.find((t) => t.player.playerId === 'stream-k');
+  expect(kicker?.faab?.upper).toBeLessThanOrEqual(3);
+  expect(kicker?.faab?.upperPercent).toBeLessThanOrEqual(3);
+});

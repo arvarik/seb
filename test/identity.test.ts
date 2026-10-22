@@ -14,6 +14,9 @@ import type { NflversePlayerWeek } from '../src/nflverse/types.js';
 describe('identity normalization', () => {
   it('normalizes punctuation, accents, suffixes, and comma-order names', () => {
     expect(normalizePlayerName('D.J. Moore Jr.')).toBe('dj moore');
+    expect(normalizePlayerName('A.J. Brown')).toBe('aj brown');
+    expect(normalizePlayerName('A-J Brown')).toBe('aj brown');
+    expect(normalizePlayerName('A J Brown')).toBe('aj brown');
     expect(normalizePlayerName('St. Brown, Amon-Ra')).toBe('amon ra st brown');
     expect(normalizePlayerName('José Núñez III')).toBe('jose nunez');
     expect(normalizeTeamText('  Tampa-Bay   Buccaneers ')).toBe(

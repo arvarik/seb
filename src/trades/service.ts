@@ -122,9 +122,13 @@ function resolvePlayers(
     const trimmed = name.trim();
     if (Object.hasOwn(players, trimmed)) return players[trimmed] as SleeperPlayer;
     const normalized = normalizeName(name);
-    const matches = Object.values(players).filter((player) =>
+    let matches = Object.values(players).filter((player) =>
       normalizeName(playerName(player)) === normalized,
     );
+    if (matches.length > 1) {
+      const active = matches.filter((player) => player.active !== false);
+      if (active.length === 1) matches = active;
+    }
     if (matches.length === 0) throw new Error(`Sleeper found no player named ${name}.`);
     if (matches.length > 1) throw new Error(`The player name ${name} is ambiguous.`);
     return matches[0] as SleeperPlayer;

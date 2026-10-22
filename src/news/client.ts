@@ -244,6 +244,7 @@ export class NewsClient {
   private readonly database: SebDatabase | false;
   private readonly hostScheduler: HostScheduler;
   private readonly httpByOrigin = new Map<string, ResilientFetch>();
+  private readonly indexedSources = new Map<string, string>();
   private readonly now: () => Date;
   private readonly onSource: SourceObserver | undefined;
   private readonly requestOptions: NewsClientRequestOptions;
@@ -290,9 +291,14 @@ export class NewsClient {
       ? AbortSignal.any([callerSignal, budgetSignal])
       : budgetSignal;
     const failures: NewsSourceFailure[] = [];
+    const feedCounts = new Map<string, number>();
+    for (const source of selected) {
+      feedCounts.set(source.id, (feedCounts.get(source.id) ?? 0) + 1);
+    }
     const loaded = (await Promise.all(selected.map(async (source) => {
       try {
-        return await this.loadSource(source, signal);
+        const skipRawIndex = Boolean(source.enrichArticles) || (feedCounts.get(source.id) ?? 0) > 1;
+        return await this.loadSource(source, signal, skipRawIndex);
       } catch (error) {
         callerSignal?.throwIfAborted();
         failures.push(sourceFailure(source, error));
@@ -361,6 +367,7 @@ export class NewsClient {
       }
       return { ...source, articles };
     }));
+    let reindexedAfterDetails = false;
     if (this.database && typeof this.database.indexNewsArticles === 'function') {
       const grouped = new Map<
         string,
@@ -380,11 +387,15 @@ export class NewsClient {
       for (const [sourceId, group] of grouped) {
         if (group.enriched || group.count > 1) {
           this.database.indexNewsArticles(sourceId, group.articles);
+          this.indexedSources.delete(sourceId);
+          reindexedAfterDetails = true;
         }
       }
     }
     const ftsScores =
-      this.database && typeof this.database.searchNewsArticlesFts === 'function'
+      reindexedAfterDetails &&
+      this.database &&
+      typeof this.database.searchNewsArticlesFts === 'function'
         ? this.database.searchNewsArticlesFts(tokens, loadedSourceIds)
         : initialFtsScores;
 
@@ -565,6 +576,7 @@ export class NewsClient {
   }
 
   clearCache(): void {
+    this.indexedSources.clear();
     this.robotsByOrigin.clear();
     if (this.database) this.database.deleteCache('news');
   }
@@ -618,6 +630,7 @@ export class NewsClient {
   private async loadSource(
     source: NewsSourceDefinition,
     signal?: AbortSignal,
+    skipRawIndex = false,
   ): Promise<LoadedNewsSource> {
     const resource = new CachedResource<DiscoveredNewsArticle[]>(
       this.database,
@@ -661,8 +674,14 @@ export class NewsClient {
         value: parsed,
       };
     }, signal ? { signal } : {});
-    if (this.database && typeof this.database.indexNewsArticles === 'function') {
+    if (
+      !skipRawIndex &&
+      this.database &&
+      typeof this.database.indexNewsArticles === 'function' &&
+      (result.outcome === 'source-updated' || this.indexedSources.get(source.id) !== source.discoveryUrl)
+    ) {
       this.database.indexNewsArticles(source.id, result.value);
+      this.indexedSources.set(source.id, source.discoveryUrl);
     }
     this.recordSource(source, result);
     return {
@@ -842,6 +861,8 @@ export class NewsClient {
 
   private async readRobots(url: string, signal: AbortSignal) {
     const target = new URL(url);
+    const memoryCached = this.robotsByOrigin.get(target.origin);
+    if (memoryCached) return memoryCached.policy;
     const robotsUrl = `${target.origin}/robots.txt`;
     const resource = new CachedResource<string>(
       this.database,
@@ -1439,7 +1460,7 @@ function porterStem(word: string): string {
   if (word.length < 5) return word;
   return word
     .replace(
-      /(?:ation|ition|ating|iting|ated|ited|ment|ness|ance|ence|able|ible|pate|pant|ally|ical|ious|eous|ular|ing|ed|es|er|ly|al|ic|s)$/u,
+      /(?:ation|ition|ment|ness|ance|ence|able|ible|pate|pant|ally|ical|ious|eous|ular|ing|ed|es|er|ly|al|ic|s)$/u,
       '',
     )
     .slice(0, 6);

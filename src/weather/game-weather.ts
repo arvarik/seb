@@ -2,7 +2,7 @@ import { easternKickoff } from '../time.js';
 import { NflverseClient } from '../nflverse/client.js';
 import type { NflverseGame } from '../nflverse/types.js';
 import { WeatherClient } from './client.js';
-import { findHomeStadium } from './stadiums.js';
+import { findHomeStadium, listHomeStadiums } from './stadiums.js';
 import type { NwsAlert, NwsForecastPeriod } from './types.js';
 
 export type WeatherRisk = 'low' | 'medium' | 'high';
@@ -67,7 +67,8 @@ export class GameWeatherService {
       });
     }
 
-    if (game.location && game.location.toLowerCase() !== 'home') {
+    const stadium = findStadium(game);
+    if (game.location && game.location.toLowerCase() !== 'home' && !stadium) {
       return baseResult(game, kickoff, {
         status: 'unavailable',
         reason: 'This game uses a neutral venue. Seb does not apply the home-stadium coordinate.',
@@ -85,7 +86,6 @@ export class GameWeatherService {
       };
     }
 
-    const stadium = findHomeStadium(game.homeTeam);
     if (!stadium) {
       return baseResult(game, kickoff, {
         status: 'unavailable',
@@ -127,10 +127,12 @@ export class GameWeatherService {
       };
     }
 
+    const kickoffMs = kickoff.getTime();
+    const gameEndMs = kickoffMs + 3 * 3_600_000;
     const kickoffAlerts = alerts.filter((alert) => {
       const onset = Date.parse(alert.onset ?? '');
-      const ends = Date.parse(alert.ends ?? '');
-      return onset <= kickoff.getTime() && kickoff.getTime() < ends;
+      const ends = alert.ends === null ? Infinity : Date.parse(alert.ends ?? '');
+      return onset <= gameEndMs && kickoffMs < ends;
     });
     const assessment = assessWeather(period, kickoffAlerts);
     if (alerts.length > kickoffAlerts.length) {
@@ -262,6 +264,17 @@ function maximumWind(value: string): number {
 function isIndoor(roof: string | null): boolean {
   const normalized = roof?.toLowerCase() ?? '';
   return normalized.includes('dome') || normalized.includes('closed');
+}
+
+function findStadium(game: NflverseGame) {
+  const venue = game.stadium?.trim().toLowerCase();
+  const byName = venue
+    ? listHomeStadiums().find((item) => item.name.toLowerCase() === venue) ?? null
+    : null;
+  if (game.location && game.location.toLowerCase() !== 'home') {
+    return byName;
+  }
+  return findHomeStadium(game.homeTeam) ?? byName;
 }
 
 function compactStadium(stadium: {

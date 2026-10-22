@@ -859,6 +859,61 @@ describe('NewsClient cache', () => {
       result.articles.filter((item) => item.title === 'Friday Injury Report'),
     ).toHaveLength(2);
     expect(database.searchNewsArticlesFts(['rehabilitation']).has(articleUrl)).toBe(true);
+
+    // A second search using cached discovery + cached article metadata must retain enriched FTS details
+    const cachedResult = await client.search({
+      limit: 5,
+      query: 'quarterback rehabilitation',
+      teams: ['KC', 'BUF'],
+    });
+    expect(cachedResult.articles.some((item) => item.url === articleUrl)).toBe(true);
+    expect(database.searchNewsArticlesFts(['rehabilitation']).has(articleUrl)).toBe(true);
+  });
+
+  it('stems limited/limiting to limit, rejects single-token unrelated matches, and skips redundant FTS re-indexing on cache-fresh reads', async () => {
+    const source = newsSource('limit-stem-source', 'official');
+    const database = createDatabase();
+    let indexCalls = 0;
+    const originalIndex = database.indexNewsArticles.bind(database);
+    database.indexNewsArticles = (sourceId, articles) => {
+      indexCalls += 1;
+      originalIndex(sourceId, articles);
+    };
+    const calls: FetchCall[] = [];
+    const fetch = routeFetch(new Map([
+      [source.discoveryUrl, rssResponse([
+        article(
+          'Mahomesankle update from Wednesday walkthrough',
+          '/news/mahomes-limit',
+          '2026-08-29T19:00:00Z',
+          'Patrick Mahomes was limited in Wednesday drills.',
+        ),
+        article(
+          'Week 8 Sunday injury report',
+          '/news/sunday-injury-report',
+          '2026-08-29T18:45:00Z',
+        ),
+      ])],
+    ]), calls);
+    const client = createClient([source], fetch, { database });
+
+    const first = await client.search({
+      limit: 5,
+      query: 'Mahomes limiting',
+      sourceIds: [source.id],
+    });
+    expect(first.articles.some((a) => a.url.endsWith('/news/mahomes-limit'))).toBe(true);
+    expect(indexCalls).toBe(1);
+
+    const second = await client.search({
+      limit: 5,
+      query: 'Josh Allen injury update',
+      sourceIds: [source.id],
+    });
+    expect(second.articles).toHaveLength(0);
+    // Cache-fresh read should not re-run indexNewsArticles or re-fetch robots.txt
+    expect(indexCalls).toBe(1);
+    expect(calls.filter((call) => new URL(call.url).pathname === '/robots.txt')).toHaveLength(1);
   });
 });
 

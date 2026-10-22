@@ -252,7 +252,7 @@ export class SebDatabase {
             WHERE namespace = ? AND revision = ?
           )
         `;
-    const row = this.statement(`
+    const result = this.statement(`
         INSERT INTO cache_entries (
           namespace, cache_key, value_json, cached_at, expires_at, stale_until,
           etag, last_modified, source_url, schema_version, checksum
@@ -269,11 +269,8 @@ export class SebDatabase {
           source_url = excluded.source_url,
           schema_version = excluded.schema_version,
           checksum = excluded.checksum
-        RETURNING namespace, cache_key, value_json, cached_at, expires_at,
-                  stale_until, etag, last_modified, source_url, schema_version,
-                  checksum
       `)
-      .get(
+      .run(
         write.namespace,
         write.key,
         valueJson,
@@ -288,11 +285,27 @@ export class SebDatabase {
         ...(expectedRevision === undefined
           ? []
           : [write.namespace, expectedRevision]),
-      ) as DatabaseRow | undefined;
-    if (!row && expectedRevision === undefined) {
-      throw new Error('Seb could not read the cache entry after it saved the entry.');
+      );
+    if (Number(result.changes) === 0) {
+      if (expectedRevision === undefined) {
+        throw new Error('Seb could not read the cache entry after it saved the entry.');
+      }
+      return null;
     }
-    return row ? parseCacheEntry<T>(row, new Date(cachedAt)) : null;
+    return {
+      cachedAt,
+      checksum,
+      etag: write.etag ?? null,
+      expiresAt,
+      freshness: write.ttlMs > 0 ? 'fresh' : 'stale',
+      key: write.key,
+      lastModified: write.lastModified ?? null,
+      namespace: write.namespace,
+      schemaVersion: write.schemaVersion,
+      sourceUrl: write.sourceUrl ?? null,
+      staleUntil,
+      value: write.value,
+    };
   }
 
   touchCache(
@@ -1662,9 +1675,11 @@ export class SebDatabase {
         this.database.pragma('user_version = 6');
       });
     }
-    assertCompatibleUsageTables(this.database);
-    assertNoForeignKeyViolations(this.database);
-    validateSavedUsageRows(this.database);
+    if (version === DATABASE_SCHEMA_VERSION) {
+      assertCompatibleUsageTables(this.database);
+      assertNoForeignKeyViolations(this.database);
+      validateSavedUsageRows(this.database);
+    }
     this.ensureIndexes();
   }
 
@@ -3357,7 +3372,7 @@ function stableJson(value: unknown): string {
     if (item && typeof item === 'object' && !Array.isArray(item)) {
       return Object.fromEntries(
         Object.entries(item as Record<string, unknown>).sort(([left], [right]) =>
-          left.localeCompare(right),
+          left < right ? -1 : left > right ? 1 : 0,
         ),
       );
     }

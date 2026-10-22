@@ -103,7 +103,6 @@ export function createSleeperTools(client: SleeperClient) {
         }))
           .filter((player) => player.team?.toUpperCase() === team)
           .filter((player) => includeInactive || player.active !== false)
-          .filter((player) => !position || player.position?.toUpperCase() === position.toUpperCase())
           .sort(compareTeamPlayers);
         return {
           team,
@@ -150,15 +149,27 @@ export function createSleeperTools(client: SleeperClient) {
       description:
         'List fantasy team names and owner names for a Sleeper league. Use this for team-name or league-member questions.',
       inputSchema: z.object({ leagueId: leagueIdSchema }),
-      execute: async ({ leagueId }) => ({
-        leagueId,
-        teams: (await client.getLeagueUsers(leagueId)).map((user) => ({
-          userId: user.user_id,
-          teamName: user.metadata?.team_name?.trim() || null,
-          displayName: user.display_name ?? user.username ?? null,
-          isCommissioner: user.is_owner ?? null,
-        })),
-      }),
+      execute: async ({ leagueId }) => {
+        const [users, rosters] = await Promise.all([
+          client.getLeagueUsers(leagueId),
+          client.getLeagueRosters(leagueId),
+        ]);
+        const rosterByOwner = new Map(
+          rosters
+            .filter((roster) => roster.owner_id)
+            .map((roster) => [roster.owner_id!, roster]),
+        );
+        return {
+          leagueId,
+          teams: users.map((user) => ({
+            userId: user.user_id,
+            rosterId: rosterByOwner.get(user.user_id)?.roster_id ?? null,
+            teamName: user.metadata?.team_name?.trim() || null,
+            displayName: user.display_name ?? user.username ?? null,
+            isCommissioner: user.is_owner ?? null,
+          })),
+        };
+      },
     }),
 
     getLeagueOverview: tool({
@@ -218,6 +229,15 @@ export function createSleeperTools(client: SleeperClient) {
         leagueId,
         week,
         matchups: await client.getLeagueMatchups(leagueId, week),
+      }),
+      toModelOutput: ({ output }) => ({
+        type: 'json',
+        value: {
+          ...output,
+          matchups: output.matchups.map(
+            ({ players: _players, players_points: _playersPoints, ...matchup }) => matchup,
+          ),
+        } as unknown as JSONValue,
       }),
     }),
 

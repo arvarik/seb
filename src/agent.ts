@@ -83,6 +83,7 @@ type RuntimeContextValue =
   | { [key: string]: RuntimeContextValue };
 
 interface BoundedRuntimeContext {
+  length: number;
   truncated: boolean;
   value: RuntimeContextValue;
 }
@@ -137,7 +138,7 @@ export function createFantasyFootballAgent(
       };
     },
     prepareStep: ({ messages, stepNumber }) => {
-      const prepared = pruneFantasyMessages(messages);
+      const prepared = stepNumber === 0 ? [...messages] : pruneFantasyMessages(messages);
       const conclude = stepNumber >= MAX_AGENT_STEPS - 1 ||
         (stepNumber > 0 && JSON.stringify(prepared).length >= RESEARCH_CONTEXT_CHARACTER_LIMIT);
       if (conclude) {
@@ -459,15 +460,13 @@ function parseRuntimeContextValue(value: string): RuntimeContextValue {
 function fitRuntimeContextValue(
   value: RuntimeContextValue,
   maximumCharacters: number,
+  knownLength = JSON.stringify(value).length,
 ): BoundedRuntimeContext {
-  if (JSON.stringify(value).length <= maximumCharacters) {
-    return { truncated: false, value };
+  if (knownLength <= maximumCharacters) {
+    return { length: knownLength, truncated: false, value };
   }
   if (typeof value === 'string') {
-    return {
-      truncated: true,
-      value: fitRuntimeContextString(value, maximumCharacters),
-    };
+    return fitRuntimeContextString(value, maximumCharacters);
   }
   if (Array.isArray(value)) {
     return fitRuntimeContextArray(value, maximumCharacters);
@@ -475,23 +474,35 @@ function fitRuntimeContextValue(
   if (value && typeof value === 'object') {
     return fitRuntimeContextObject(value, maximumCharacters);
   }
-  return { truncated: true, value: null };
+  return { length: 4, truncated: true, value: null };
 }
 
 function fitRuntimeContextString(
   value: string,
   maximumCharacters: number,
-): string {
-  if (maximumCharacters < 3) return '';
+): BoundedRuntimeContext {
+  if (maximumCharacters < 3) {
+    return { length: 2, truncated: true, value: '' };
+  }
   let lower = 0;
-  let upper = value.length;
+  let upper = Math.min(value.length, Math.max(0, maximumCharacters - 2));
+  let bestLength = 3;
   while (lower < upper) {
     const middle = Math.ceil((lower + upper) / 2);
-    const candidate = `${value.slice(0, middle)}…`;
-    if (JSON.stringify(candidate).length <= maximumCharacters) lower = middle;
-    else upper = middle - 1;
+    const candidateLength = JSON.stringify(value.slice(0, middle)).length + 1;
+    if (candidateLength <= maximumCharacters) {
+      lower = middle;
+      bestLength = candidateLength;
+    } else {
+      upper = middle - 1;
+    }
   }
-  return `${value.slice(0, lower)}…`;
+  const truncatedValue = `${value.slice(0, lower)}…`;
+  return {
+    length: lower === 0 ? JSON.stringify(truncatedValue).length : bestLength,
+    truncated: true,
+    value: truncatedValue,
+  };
 }
 
 function fitRuntimeContextArray(
@@ -511,17 +522,17 @@ function fitRuntimeContextArray(
     }
     const remaining = maximumCharacters - currentLength - separatorLength;
     if (remaining > 1) {
-      const child = fitRuntimeContextValue(value, remaining);
-      const childLength = JSON.stringify(child.value).length;
-      if (currentLength + separatorLength + childLength <= maximumCharacters) {
+      const child = fitRuntimeContextValue(value, remaining, itemLength);
+      if (currentLength + separatorLength + child.length <= maximumCharacters) {
         output.push(child.value);
-        currentLength += separatorLength + childLength;
+        currentLength += separatorLength + child.length;
       }
     }
     truncated = true;
     break;
   }
   return {
+    length: currentLength,
     truncated: truncated || output.length < values.length,
     value: output,
   };
@@ -545,8 +556,7 @@ function fitRuntimeContextObject(
       keyLength - 1;
     if (remaining < 2) break;
     const child = fitRuntimeContextValue(item, remaining);
-    const entryLength = separatorLength + keyLength + 1 +
-      JSON.stringify(child.value).length;
+    const entryLength = separatorLength + keyLength + 1 + child.length;
     if (currentLength + entryLength > maximumCharacters) {
       break;
     }
@@ -561,6 +571,7 @@ function fitRuntimeContextObject(
     childTruncated ||= child.truncated;
   }
   return {
+    length: currentLength,
     truncated: childTruncated || included < entries.length,
     value: output,
   };

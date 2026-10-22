@@ -84,10 +84,11 @@ describe('SleeperClient', () => {
       fetch: async () => jsonResponse({
         '1': { player_id: '1', full_name: 'Test Player', position: 'WR', active: false },
         '2': { player_id: '2', full_name: 'Test Player', position: 'QB', active: true },
+        '3': { player_id: '3', full_name: 'Test Player Dual', position: 'RB', fantasy_positions: ['RB', 'WR'], active: true },
       }),
     });
     const players = await client.findPlayers('Test Player', { active: false, position: 'wr' });
-    expect(players.map((player) => player.player_id)).toEqual(['1']);
+    expect(players.map((player) => player.player_id)).toEqual(['1', '3']);
   });
 
   it('retains citations for different player filters and trending windows', async () => {

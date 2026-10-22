@@ -181,19 +181,14 @@ export class SleeperClient {
       return [];
     }
 
-    const players =
-      options.active === false
-        ? await this.getPlayers()
-        : await this.getPlayers({
-            active: true,
-            ...(options.position ? { position: options.position } : {}),
-          });
+    const players = await this.getPlayers({
+      ...(options.active === false ? {} : { active: true }),
+      ...(options.position ? { position: options.position } : {}),
+    });
     const limit = Math.min(Math.max(options.limit ?? 10, 1), 25);
 
     return Object.values(players)
       .filter((player) => playerMatches(player, normalizedQuery))
-      .filter((player) => !options.position ||
-        player.position?.toUpperCase() === options.position.trim().toUpperCase())
       .sort((left, right) => comparePlayerMatches(left, right, normalizedQuery))
       .slice(0, limit);
   }

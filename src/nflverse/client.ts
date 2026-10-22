@@ -59,6 +59,23 @@ const SCHEDULE_REQUIRED_COLUMNS = [
   'away_team',
   'home_team',
 ] as const;
+const SCHEDULE_COLUMNS: ReadonlySet<string> = new Set([
+  ...SCHEDULE_REQUIRED_COLUMNS,
+  'gametime',
+  'away_score',
+  'home_score',
+  'location',
+  'away_rest',
+  'home_rest',
+  'spread_line',
+  'total_line',
+  'roof',
+  'surface',
+  'temp',
+  'wind',
+  'stadium_id',
+  'stadium',
+]);
 const PLAYER_REQUIRED_COLUMNS = [
   'player_id',
   'player_display_name',
@@ -85,6 +102,37 @@ const PLAYER_REQUIRED_COLUMNS = [
   'fantasy_points',
   'fantasy_points_ppr',
 ] as const;
+const PLAYER_COLUMNS: ReadonlySet<string> = new Set([
+  ...PLAYER_REQUIRED_COLUMNS,
+  'player_name',
+  'fg_made',
+  'fg_att',
+  'pat_made',
+  'pat_att',
+  'fg_made_list',
+  'fg_missed_list',
+  'fg_missed',
+  'fg_blocked_list',
+  'fg_blocked',
+  'kickoff_return_yards',
+  'punt_return_yards',
+  'special_teams_tds',
+  'fumble_recovery_tds',
+  'fumbles_total',
+  'fumbles_lost_total',
+  'passing_2pt_conversions',
+  'rushing_2pt_conversions',
+  'receiving_2pt_conversions',
+  'target_share',
+  'air_yards_share',
+]);
+
+interface PlayerStatsIndex {
+  byNormalizedName: Map<string, NflversePlayerWeek[]>;
+  normalizedNames: WeakMap<NflversePlayerWeek, string>;
+}
+
+const PLAYER_STATS_INDEX = new WeakMap<readonly NflversePlayerWeek[], PlayerStatsIndex>();
 
 export interface NflverseClientOptions {
   baseUrl?: string;
@@ -203,13 +251,14 @@ export class NflverseClient {
     const team = filters.team === undefined ? undefined : normalizeNflverseTeam(filters.team);
     const position = filters.position?.trim().toUpperCase();
     const seasonType = filters.seasonType?.trim().toUpperCase();
+    const index = playerName === undefined ? null : getPlayerStatsIndex(stats);
     return stats.filter(
       (row) =>
         (filters.week === undefined || row.week === filters.week) &&
         (filters.throughWeek === undefined || row.week <= filters.throughWeek) &&
         (playerId === undefined || row.playerId === playerId) &&
         (playerName === undefined ||
-          normalizeText(row.playerDisplayName)?.includes(playerName)) &&
+          index?.normalizedNames.get(row)?.includes(playerName)) &&
         (team === undefined || row.team === team) &&
         (position === undefined || row.position === position) &&
         (seasonType === undefined || row.seasonType === seasonType),
@@ -314,7 +363,7 @@ export class NflverseClient {
     );
     const signal = currentRequestSignal();
     return resource.read(async (conditional) => {
-      const downloaded = await this.fetchCsv(sourceUrl, conditional);
+      const downloaded = await this.fetchCsv(sourceUrl, conditional, SCHEDULE_COLUMNS);
       if ('notModified' in downloaded) return downloaded;
       return {
         etag: downloaded.etag,
@@ -348,7 +397,7 @@ export class NflverseClient {
     );
     const signal = currentRequestSignal();
     return resource.read(async (conditional) => {
-      const downloaded = await this.fetchCsv(sourceUrl, conditional);
+      const downloaded = await this.fetchCsv(sourceUrl, conditional, PLAYER_COLUMNS);
       if ('notModified' in downloaded) return downloaded;
       return {
         etag: downloaded.etag,
@@ -652,6 +701,27 @@ function combineKickDistances(missed: number[] | null, blocked: number[] | null)
 function normalizeText(value: string | undefined): string | undefined {
   const normalized = value === undefined ? undefined : normalizePlayerName(value);
   return normalized || undefined;
+}
+
+function getPlayerStatsIndex(
+  stats: readonly NflversePlayerWeek[],
+): PlayerStatsIndex {
+  const existing = PLAYER_STATS_INDEX.get(stats);
+  if (existing) return existing;
+  const byNormalizedName = new Map<string, NflversePlayerWeek[]>();
+  const normalizedNames = new WeakMap<NflversePlayerWeek, string>();
+  for (const row of stats) {
+    const normalized = normalizeText(row.playerDisplayName);
+    if (normalized) {
+      normalizedNames.set(row, normalized);
+      const group = byNormalizedName.get(normalized) ?? [];
+      group.push(row);
+      byNormalizedName.set(normalized, group);
+    }
+  }
+  const created: PlayerStatsIndex = { byNormalizedName, normalizedNames };
+  PLAYER_STATS_INDEX.set(stats, created);
+  return created;
 }
 
 /** nflverse uses LA for the Rams. The rest of Seb uses Sleeper's LAR code. */

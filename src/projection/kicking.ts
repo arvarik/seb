@@ -20,6 +20,7 @@ export function scoreKicking(row: NflversePlayerWeek, settings: SleeperSettings)
   };
   const missed = (attempted: number | null | undefined, made: number | null | undefined) => count(count(attempted) - count(made));
   const distances = (values: number[] | null | undefined, expected: number) => {
+    if (expected === 0 && (!values || values.length === 0)) return [];
     if (!values || values.length !== expected || values.some((value) => !Number.isInteger(value) || value < 0)) throw new Error('missing distances');
     return values;
   };

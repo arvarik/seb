@@ -195,14 +195,17 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
   if (input.gameStarted) limitations.push('The scheduled game has started. Do not change this player into the starting lineup.');
   if (input.scheduled === false) limitations.push('The source has no verified game for this team in the requested week. This is a historical baseline, not a weekly score. Do not include it in a matchup total.');
 
+  const allPositive = scoredGames.length > 0 && scoredGames.every((score) => score >= 0);
+  const calibratedFloor = inactive ? 0 : (allPositive && median >= 0 ? Math.max(0, interval.lower) : interval.lower);
+  const calibratedCeiling = inactive ? 0 : Math.max(calibratedFloor, interval.upper);
 
   return {
     adjustments,
     analysisSeason: input.analysisSeason,
     season: projectionSeason,
-    ceiling: round(inactive ? 0 : interval.upper),
+    ceiling: round(calibratedCeiling),
     confidence,
-    floor: round(inactive ? 0 : interval.lower),
+    floor: round(calibratedFloor),
     games: ordered.length,
     league: { leagueId: input.leagueId, name: input.leagueName },
     limitations,
@@ -258,7 +261,7 @@ export function scorePlayerWeek(
     (row.attempts - row.completions) * setting(settings, 'pass_inc') +
     row.carries * setting(settings, 'rush_att') +
     row.targets * setting(settings, 'rec_tgt') +
-    row.receptions * setting(settings, `bonus_rec_${row.position.toLowerCase()}`) +
+    row.receptions * setting(settings, `bonus_rec_${row.position.toUpperCase() === 'FB' ? 'rb' : row.position.toLowerCase()}`) +
     row.passingYards * setting(settings, 'pass_yd') +
     row.passingTouchdowns * setting(settings, 'pass_td') +
     row.interceptions * setting(settings, 'pass_int') +
@@ -289,7 +292,7 @@ export function inspectPlayerScoringSettings(settings: SleeperSettings, position
   return {
     usedSettings: active.filter((key) => position?.toUpperCase() === 'K' ? KICKING_SETTINGS.has(key) || /^(st_|kr_yd$|pr_yd$|fum)/u.test(key) && SUPPORTED_SETTINGS.has(key) : SUPPORTED_SETTINGS.has(key)),
     ignoredSettings: active.filter(
-      (key) => !SUPPORTED_SETTINGS.has(key) && !NON_PLAYER_SETTINGS.has(key) && !DEFENSE_SETTINGS.has(key) && !KICKING_SETTINGS.has(key),
+      (key) => !SUPPORTED_SETTINGS.has(key) && !NON_PLAYER_SETTINGS.has(key) && !DEFENSE_SETTINGS.has(key) && !KICKING_SETTINGS.has(key) && !key.startsWith('idp_'),
     ),
   };
 }
@@ -301,7 +304,7 @@ function matchupAdjustment(
   settings: SleeperSettings,
 ): ProjectionAdjustment | null {
   if (!opponent) return null;
-  const selected = rows.filter((row) => row.position === position);
+  const selected = rows.filter((row) => row.position.toUpperCase() === position.toUpperCase());
   if (selected.length === 0) return null;
   const byDefense = new Map<string, Map<string, number>>();
   const seen = new Set<string>();
@@ -309,9 +312,10 @@ function matchupAdjustment(
     const identity = `${row.season}:${row.week}:${row.playerId}`;
     if (seen.has(identity)) throw new ResearchDataError('The opponent data contains duplicate player weeks.');
     seen.add(identity);
-    const games = byDefense.get(row.opponentTeam) ?? new Map<string, number>();
+    const opponentTeam = row.opponentTeam.toUpperCase();
+    const games = byDefense.get(opponentTeam) ?? new Map<string, number>();
     games.set(row.gameId, (games.get(row.gameId) ?? 0) + scorePlayerWeek(row, settings));
-    byDefense.set(row.opponentTeam, games);
+    byDefense.set(opponentTeam, games);
   }
   const defenseAverages = [...byDefense.values()]
     .map((games) => average([...games.values()]))
@@ -344,8 +348,9 @@ function weatherAdjustment(
         : 'The kickoff forecast has a low weather risk.',
     };
   }
+  const pos = position.toUpperCase();
   if (risk === 'medium') {
-    const factor = ['QB', 'WR', 'TE', 'K'].includes(position) ? 0.97 : 0.99;
+    const factor = pos === 'K' ? 0.92 : ['QB', 'WR'].includes(pos) ? 0.95 : pos === 'TE' ? 0.98 : 0.99;
     return {
       factor,
       label: 'Weather adjustment',
@@ -353,7 +358,7 @@ function weatherAdjustment(
     };
   }
   if (risk === 'high') {
-    const factor = ['QB', 'WR', 'TE', 'K'].includes(position) ? 0.92 : 0.97;
+    const factor = pos === 'K' ? 0.80 : ['QB', 'WR'].includes(pos) ? 0.89 : pos === 'TE' ? 0.93 : 0.97;
     return {
       factor,
       label: 'Weather adjustment',

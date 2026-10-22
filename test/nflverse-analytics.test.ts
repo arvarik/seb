@@ -21,6 +21,8 @@ describe('nflverse analytics', () => {
       recentAveragePprPoints: 30,
       averageTouches: 14.75,
       recentAverageTouches: 16.33,
+      wopr: 0.44,
+      recentWopr: 0.44,
     });
     expect(trends[0]?.volatility).toBeGreaterThan(11);
   });

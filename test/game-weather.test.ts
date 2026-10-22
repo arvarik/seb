@@ -57,6 +57,36 @@ describe('GameWeatherService', () => {
     expect(result.stadium?.name).toContain('Arrowhead');
   });
 
+  it('triggers high weather risk at the actionable 20 mph wind threshold', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-05T12:00:00Z'));
+    const weather = {
+      getHourlyForecast: vi.fn().mockResolvedValue({
+        periods: [{
+          startTime: '2026-09-10T20:00:00-04:00',
+          endTime: '2026-09-10T21:00:00-04:00',
+          isDaytime: false,
+          temperature: 65,
+          temperatureUnit: 'F',
+          precipitationProbability: 10,
+          relativeHumidity: 50,
+          windSpeed: '20 mph',
+          windDirection: 'W',
+          shortForecast: 'Windy',
+          detailedForecast: '',
+        }],
+      }),
+      getActiveAlerts: vi.fn().mockResolvedValue([]),
+    };
+    const service = new GameWeatherService(
+      nflverseWithGame(game({ gameDate: '2026-09-10', gameTime: '20:20' })),
+      weather as unknown as WeatherClient,
+    );
+    const result = await service.getGameWeather({ season: 2026, week: 1, team: 'KC' });
+    expect(result.risk).toBe('high');
+    expect(result.fantasyImpact.join(' ')).toContain('Strong wind');
+  });
+
   it.each([
     ['2026-09-10T21:00:00-04:00', '2026-09-10T22:00:00-04:00'],
     ['2026-09-10T19:00:00-04:00', '2026-09-10T20:00:00-04:00'],

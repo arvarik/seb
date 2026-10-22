@@ -154,11 +154,22 @@ export class SleeperClient {
   async getPlayers(filters: PlayerFilters = {}): Promise<SleeperPlayerMap> {
     const players = await this.get('/players/nfl', sleeperPlayerMapSchema, {}, sleeperPolicy('players'));
     const position = filters.position?.trim().toUpperCase();
-    return Object.fromEntries(Object.entries(players).filter(([, player]) =>
-      (filters.active === undefined || player.active === filters.active) &&
-      (!position || player.position?.toUpperCase() === position ||
-        player.fantasy_positions?.some((value) => value.toUpperCase() === position)),
-    ));
+    if (filters.active === undefined && !position) {
+      return players;
+    }
+    const filtered: SleeperPlayerMap = {};
+    for (const id in players) {
+      const player = players[id];
+      if (
+        player &&
+        (filters.active === undefined || player.active === filters.active) &&
+        (!position || player.position?.toUpperCase() === position ||
+          player.fantasy_positions?.some((value) => value.toUpperCase() === position))
+      ) {
+        filtered[id] = player;
+      }
+    }
+    return filtered;
   }
 
   async findPlayers(
@@ -357,13 +368,13 @@ function playerName(player: SleeperPlayer): string {
 }
 
 function playerMatches(player: SleeperPlayer, query: string): boolean {
-  return [
-    playerName(player),
-    player.search_full_name,
-    player.first_name,
-    player.last_name,
-    player.player_id,
-  ].some((value) => value && normalizeName(value).includes(query));
+  if (player.player_id === query) return true;
+  if (player.search_full_name && normalizeName(player.search_full_name).includes(query)) return true;
+  const name = playerName(player);
+  if (name && normalizeName(name).includes(query)) return true;
+  if (player.first_name && normalizeName(player.first_name).includes(query)) return true;
+  if (player.last_name && normalizeName(player.last_name).includes(query)) return true;
+  return false;
 }
 
 function comparePlayerMatches(

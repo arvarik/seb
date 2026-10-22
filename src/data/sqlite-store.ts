@@ -169,6 +169,7 @@ interface DatabaseRow {
 
 export class SebDatabase {
   private readonly database: Database.Database;
+  private readonly statementCache = new Map<string, Database.Statement>();
   readonly file: string;
 
   constructor(file = DEFAULT_DATABASE_FILE) {
@@ -190,9 +191,20 @@ export class SebDatabase {
     }
   }
 
+  private statement(sql: string): Database.Statement {
+    let stmt = this.statementCache.get(sql);
+    if (!stmt) {
+      if (this.statementCache.size >= 256) {
+        this.statementCache.clear();
+      }
+      stmt = this.database.prepare(sql);
+      this.statementCache.set(sql, stmt);
+    }
+    return stmt;
+  }
+
   getCache<T>(namespace: string, key: string, now = new Date()): CacheEntry<T> | null {
-    const row = this.database
-      .prepare(`
+    const row = this.statement(`
         SELECT namespace, cache_key, value_json, cached_at, expires_at,
                stale_until, etag, last_modified, source_url, schema_version,
                checksum
@@ -240,8 +252,7 @@ export class SebDatabase {
             WHERE namespace = ? AND revision = ?
           )
         `;
-    const row = this.database
-      .prepare(`
+    const row = this.statement(`
         INSERT INTO cache_entries (
           namespace, cache_key, value_json, cached_at, expires_at, stale_until,
           etag, last_modified, source_url, schema_version, checksum
@@ -305,7 +316,7 @@ export class SebDatabase {
   }
 
   cacheRevision(namespace: string): number {
-    const existing = this.database.prepare(`
+    const existing = this.statement(`
       SELECT revision FROM cache_generations
       WHERE namespace = ?
     `).get(namespace) as DatabaseRow | undefined;
@@ -314,12 +325,12 @@ export class SebDatabase {
       validateCacheRevision(revision);
       return revision;
     }
-    this.database.prepare(`
+    this.statement(`
       INSERT INTO cache_generations (namespace, revision)
       VALUES (?, 0)
       ON CONFLICT(namespace) DO NOTHING
     `).run(namespace);
-    const row = this.database.prepare(`
+    const row = this.statement(`
       SELECT revision FROM cache_generations
       WHERE namespace = ?
     `).get(namespace) as DatabaseRow | undefined;
@@ -360,8 +371,7 @@ export class SebDatabase {
             WHERE namespace = ? AND revision = ?
           )
         `;
-    const row = this.database
-      .prepare(`
+    const row = this.statement(`
         UPDATE cache_entries
         SET cached_at = ?, expires_at = ?, stale_until = ?
         WHERE namespace = ? AND cache_key = ?
@@ -854,8 +864,7 @@ export class SebDatabase {
     provider: string,
     sourceId: string,
   ): IdentityRecord<T> | null {
-    const row = this.database
-      .prepare(`
+    const row = this.statement(`
         SELECT i.entity_type, i.canonical_id, i.payload_json, i.checksum, i.updated_at
         FROM identity_links l
         JOIN identities i
@@ -870,8 +879,7 @@ export class SebDatabase {
     entityType: 'player' | 'team',
     canonicalId: string,
   ): IdentityRecord<T> | null {
-    const row = this.database
-      .prepare(`
+    const row = this.statement(`
         SELECT entity_type, canonical_id, payload_json, checksum, updated_at
         FROM identities WHERE entity_type = ? AND canonical_id = ?
       `)
@@ -888,7 +896,7 @@ export class SebDatabase {
       ? null
       : normalizeUsageTimestamp(write.startedAt, 'usage start time');
 
-    this.database.prepare(`
+    this.statement(`
       INSERT INTO usage_runs (
         call_id, session_id, surface, agent_kind, started_at, status
       ) VALUES (?, ?, ?, ?, ?, 'running')
@@ -901,8 +909,7 @@ export class SebDatabase {
       suppliedStartedAt ?? new Date().toISOString(),
     );
 
-    const row = this.database
-      .prepare('SELECT * FROM usage_runs WHERE call_id = ?')
+    const row = this.statement('SELECT * FROM usage_runs WHERE call_id = ?')
       .get(callId) as DatabaseRow | undefined;
     if (!row) {
       throw new Error('Seb could not read the usage run after it saved the run.');
@@ -922,20 +929,19 @@ export class SebDatabase {
   putUsageStep(write: UsageStepWrite): UsageStepRecord {
     const incoming = normalizeUsageStepWrite(write);
     return this.transaction(() => {
-      const run = this.database
-        .prepare('SELECT 1 FROM usage_runs WHERE call_id = ?')
+      const run = this.statement('SELECT 1 FROM usage_runs WHERE call_id = ?')
         .get(incoming.callId);
       if (!run) {
         throw new Error(`The usage run ${incoming.callId} does not exist.`);
       }
-      const row = this.database.prepare(`
+      const row = this.statement(`
         SELECT * FROM usage_steps
         WHERE call_id = ? AND step_number = ?
       `).get(incoming.callId, incoming.stepNumber) as DatabaseRow | undefined;
       const record = row
         ? mergeUsageStep(parseUsageStep(row), incoming)
         : incoming;
-      this.database.prepare(`
+      this.statement(`
         INSERT INTO usage_steps (
           call_id, step_number, provider, model_id, finish_reason,
           raw_finish_reason, input_tokens, no_cache_input_tokens,
@@ -972,7 +978,7 @@ export class SebDatabase {
   putUsageToolCall(write: UsageToolCallWrite): UsageToolCallRecord {
     const incoming = normalizeUsageToolCallWrite(write);
     return this.transaction(() => {
-      const step = this.database.prepare(`
+      const step = this.statement(`
         SELECT 1 FROM usage_steps
         WHERE call_id = ? AND step_number = ?
       `).get(incoming.callId, incoming.stepNumber);
@@ -981,7 +987,7 @@ export class SebDatabase {
           `The usage step ${incoming.callId}:${incoming.stepNumber} does not exist.`,
         );
       }
-      const row = this.database.prepare(`
+      const row = this.statement(`
         SELECT * FROM usage_tool_calls
         WHERE call_id = ? AND step_number = ? AND tool_call_id = ?
       `).get(
@@ -992,7 +998,7 @@ export class SebDatabase {
       const record = row
         ? mergeUsageToolCall(parseUsageToolCall(row), incoming)
         : incoming;
-      this.database.prepare(`
+      this.statement(`
         INSERT INTO usage_tool_calls (
           call_id, step_number, tool_call_id, tool_name, execution_location,
           outcome, execution_ms, dynamic
@@ -1036,8 +1042,7 @@ export class SebDatabase {
     }
 
     return this.transaction(() => {
-      const row = this.database
-        .prepare('SELECT * FROM usage_runs WHERE call_id = ?')
+      const row = this.statement('SELECT * FROM usage_runs WHERE call_id = ?')
         .get(callId) as DatabaseRow | undefined;
       if (!row) throw new Error(`The usage run ${callId} does not exist.`);
       const current = parseUsageRun(row);
@@ -1082,13 +1087,12 @@ export class SebDatabase {
             errorKind,
             'usage error kind',
           );
-      this.database.prepare(`
+      this.statement(`
         UPDATE usage_runs
         SET ended_at = ?, status = ?, final_finish_reason = ?, error_kind = ?
         WHERE call_id = ?
       `).run(endedAt, status, mergedFinishReason, mergedErrorKind, callId);
-      const saved = this.database
-        .prepare('SELECT * FROM usage_runs WHERE call_id = ?')
+      const saved = this.statement('SELECT * FROM usage_runs WHERE call_id = ?')
         .get(callId) as DatabaseRow | undefined;
       if (!saved) throw new Error(`The usage run ${callId} disappeared during its update.`);
       return parseUsageRun(saved);
@@ -1216,36 +1220,39 @@ export class SebDatabase {
   }
 
   status(): DatabaseStatus {
-    const cache = this.database.prepare(`
+    const cache = this.statement(`
       SELECT COUNT(*) AS count,
              COALESCE(SUM(length(CAST(value_json AS BLOB))), 0) AS value_bytes
       FROM cache_entries
     `).get() as DatabaseRow;
-    const snapshots = this.database.prepare(`
+    const snapshots = this.statement(`
       SELECT COUNT(*) AS count,
              COALESCE(SUM(length(CAST(payload_json AS BLOB))), 0) AS payload_bytes,
              COALESCE(SUM(length(CAST(provenance_json AS BLOB))), 0) AS provenance_bytes
       FROM snapshots
     `).get() as DatabaseRow;
-    const identities = this.database.prepare('SELECT COUNT(*) AS count FROM identities').get() as DatabaseRow;
-    const identityLinks = this.database.prepare('SELECT COUNT(*) AS count FROM identity_links').get() as DatabaseRow;
-    const usageRuns = this.database.prepare('SELECT COUNT(*) AS count FROM usage_runs').get() as DatabaseRow;
-    const usageSteps = this.database.prepare('SELECT COUNT(*) AS count FROM usage_steps').get() as DatabaseRow;
-    const usageToolCalls = this.database.prepare('SELECT COUNT(*) AS count FROM usage_tool_calls').get() as DatabaseRow;
+    const counts = this.statement(`
+      SELECT
+        (SELECT COUNT(*) FROM identities) AS identities_count,
+        (SELECT COUNT(*) FROM identity_links) AS identity_links_count,
+        (SELECT COUNT(*) FROM usage_runs) AS usage_runs_count,
+        (SELECT COUNT(*) FROM usage_steps) AS usage_steps_count,
+        (SELECT COUNT(*) FROM usage_tool_calls) AS usage_tool_calls_count
+    `).get() as DatabaseRow;
     return {
       cacheEntries: Number(cache.count),
       cacheValueBytes: Number(cache.value_bytes),
       file: this.file,
       fileBytes: databaseFileBytes(this.file),
-      identities: Number(identities.count),
-      identityLinks: Number(identityLinks.count),
+      identities: Number(counts.identities_count),
+      identityLinks: Number(counts.identity_links_count),
       schemaVersion: DATABASE_SCHEMA_VERSION,
       snapshotPayloadBytes: Number(snapshots.payload_bytes),
       snapshotProvenanceBytes: Number(snapshots.provenance_bytes),
       snapshots: Number(snapshots.count),
-      usageRuns: Number(usageRuns.count),
-      usageSteps: Number(usageSteps.count),
-      usageToolCalls: Number(usageToolCalls.count),
+      usageRuns: Number(counts.usage_runs_count),
+      usageSteps: Number(counts.usage_steps_count),
+      usageToolCalls: Number(counts.usage_tool_calls_count),
     };
   }
 
@@ -1265,16 +1272,16 @@ export class SebDatabase {
     if (!Number.isFinite(snapshotMaxAgeDays) || snapshotMaxAgeDays < 1) {
       throw new RangeError('The snapshot maximum age must be at least one day.');
     }
-    const cacheEntriesRemoved = Number(this.database
-      .prepare('DELETE FROM cache_entries WHERE stale_until < ?')
-      .run(now.toISOString()).changes);
+    const cacheEntriesRemoved = Number(this.statement(
+      'DELETE FROM cache_entries WHERE stale_until < ?',
+    ).run(now.toISOString()).changes);
     if (cacheEntriesRemoved > 0) this.syncNewsArticlesFts();
     const cutoff = new Date(now.getTime() - snapshotMaxAgeDays * 24 * 60 * 60 * 1_000)
       .toISOString();
-    let snapshotsRemoved = Number(this.database
-      .prepare('DELETE FROM snapshots WHERE as_of < ?')
-      .run(cutoff).changes);
-    snapshotsRemoved += Number(this.database.prepare(`
+    let snapshotsRemoved = Number(this.statement(
+      'DELETE FROM snapshots WHERE as_of < ?',
+    ).run(cutoff).changes);
+    snapshotsRemoved += Number(this.statement(`
       DELETE FROM snapshots
       WHERE id IN (
         SELECT id FROM (
@@ -1307,8 +1314,7 @@ export class SebDatabase {
     if (sha256(payloadJson) !== checksum) {
       throw new Error(`The canonical identity ${canonicalId} failed its checksum validation.`);
     }
-    const links = this.database
-      .prepare(`
+    const links = this.statement(`
         SELECT provider, source_id FROM identity_links
         WHERE entity_type = ? AND canonical_id = ?
         ORDER BY provider, source_id
@@ -1328,7 +1334,7 @@ export class SebDatabase {
   }
 
   private cacheRevisionMatches(condition: CacheRevisionCondition): boolean {
-    const row = this.database.prepare(`
+    const row = this.statement(`
       SELECT revision FROM cache_generations
       WHERE namespace = ?
     `).get(condition.namespace) as DatabaseRow | undefined;
@@ -1336,6 +1342,7 @@ export class SebDatabase {
   }
 
   close(): void {
+    this.statementCache.clear();
     this.database.close();
     if (sharedDatabases.get(this.file) === this) {
       sharedDatabases.delete(this.file);
@@ -1349,6 +1356,15 @@ export class SebDatabase {
       PRAGMA foreign_keys = ON;
       PRAGMA busy_timeout = 5000;
       PRAGMA temp_store = MEMORY;
+      PRAGMA cache_size = -64000;
+      PRAGMA mmap_size = 268435456;
+    `);
+  }
+
+  private ensureIndexes(): void {
+    this.database.exec(`
+      CREATE INDEX IF NOT EXISTS cache_stale_until_idx ON cache_entries(stale_until);
+      CREATE INDEX IF NOT EXISTS snapshot_as_of_idx ON snapshots(as_of DESC, created_at DESC);
     `);
   }
 
@@ -1383,6 +1399,7 @@ export class SebDatabase {
             PRIMARY KEY (namespace, cache_key)
           );
           CREATE INDEX IF NOT EXISTS cache_expiry_idx ON cache_entries(expires_at);
+          CREATE INDEX IF NOT EXISTS cache_stale_until_idx ON cache_entries(stale_until);
           CREATE TABLE IF NOT EXISTS snapshots (
             id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
@@ -1398,6 +1415,8 @@ export class SebDatabase {
           );
           CREATE INDEX IF NOT EXISTS snapshot_lookup_idx
             ON snapshots(kind, entity_key, as_of DESC);
+          CREATE INDEX IF NOT EXISTS snapshot_as_of_idx
+            ON snapshots(as_of DESC, created_at DESC);
           PRAGMA user_version = 1;
         `);
       });
@@ -1651,6 +1670,7 @@ export class SebDatabase {
     assertCompatibleUsageTables(this.database);
     assertNoForeignKeyViolations(this.database);
     validateSavedUsageRows(this.database);
+    this.ensureIndexes();
   }
 
   private transaction<T>(run: () => T): T {

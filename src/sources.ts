@@ -34,7 +34,7 @@ const MAX_SOURCE_URL_CHARACTERS = 4_096;
 const MAX_SOURCE_WARNING_CHARACTERS = 300;
 const MAX_SOURCE_WARNINGS = 10;
 
-export function normalizeWebUrl(value: string): string | null {
+export function parseWebUrl(value: string): { href: string; hostname: string } | null {
   if (typeof value !== 'string' || value.length > MAX_SOURCE_URL_CHARACTERS) {
     return null;
   }
@@ -42,10 +42,14 @@ export function normalizeWebUrl(value: string): string | null {
     const url = new URL(value);
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
     if (url.username || url.password) return null;
-    return url.href;
+    return { href: url.href, hostname: url.hostname };
   } catch {
     return null;
   }
+}
+
+export function normalizeWebUrl(value: string): string | null {
+  return parseWebUrl(value)?.href ?? null;
 }
 
 export function normalizeSourceLabel(
@@ -92,13 +96,12 @@ export class SourceTracker {
     title?: string | undefined;
     url: string;
   }): boolean {
-    const normalizedUrl = normalizeWebUrl(source.url);
-    if (!normalizedUrl) return false;
-    const hostname = new URL(normalizedUrl).hostname;
+    const parsed = parseWebUrl(source.url);
+    if (!parsed) return false;
     this.record({
       id: `web:${source.id}`,
-      label: normalizeSourceLabel(source.title, hostname),
-      url: normalizedUrl,
+      label: normalizeSourceLabel(source.title, parsed.hostname),
+      url: parsed.href,
     });
     return true;
   }
@@ -128,8 +131,8 @@ export function createSourceEvidenceSnapshot(
 function normalizeSourceRecord(
   source: DataSourceRecord,
 ): DataSourceRecord | null {
-  const url = normalizeWebUrl(source.url);
-  if (!url) return null;
+  const parsed = parseWebUrl(source.url);
+  if (!parsed) return null;
   const id = typeof source.id === 'string'
     ? source.id.trim().slice(0, MAX_SOURCE_ID_CHARACTERS)
     : '';
@@ -154,7 +157,7 @@ function normalizeSourceRecord(
     id,
     label: normalizeSourceLabel(
       typeof source.label === 'string' ? source.label : undefined,
-      new URL(url).hostname,
+      parsed.hostname,
     ),
     ...(typeof source.retrievedAt === 'string' && source.retrievedAt
       ? { retrievedAt: source.retrievedAt.slice(0, 64) }
@@ -162,7 +165,7 @@ function normalizeSourceRecord(
     accessedAt: typeof source.accessedAt === 'string'
       ? source.accessedAt.slice(0, 64)
       : '',
-    url,
+    url: parsed.href,
     ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

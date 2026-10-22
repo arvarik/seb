@@ -26,8 +26,8 @@ vi.mock('ai', async (importOriginal) => ({
 }));
 
 const usage = {
-  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-  outputTokens: { total: 1, text: 1, reasoning: undefined },
+  inputTokens: { total: 10, noCache: 3, cacheRead: 5, cacheWrite: 2 },
+  outputTokens: { total: 4, text: 4, reasoning: undefined },
 };
 let exporter: InMemorySpanExporter;
 let module: typeof import('../src/ai/judgment.js');
@@ -73,6 +73,7 @@ function expectSessionOnEverySpan(rootName: string, sessionId: string): void {
   // Root, operation, two steps, two model calls, and a tool execution.
   expect(spans.length).toBeGreaterThanOrEqual(7);
   expect(spans.some((span) => span.name.includes('lookup'))).toBe(true);
+  expect(spans.some((span) => span.attributes['ai.usage.inputTokenDetails.noCacheTokens'] === 3)).toBe(true);
   for (const span of spans) {
     expect(span.attributes['judgment.session_id'], span.name).toBe(sessionId);
   }

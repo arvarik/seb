@@ -13,6 +13,7 @@ const fake = vi.hoisted(() => ({
   setSpanKind: vi.fn(),
   forceFlush: vi.fn(),
   shutdown: vi.fn(),
+  otelOptions: vi.fn(),
   toolEnd: vi.fn(),
 }));
 
@@ -39,6 +40,7 @@ vi.mock('judgeval', () => {
 
 vi.mock('@ai-sdk/otel', () => ({
   OpenTelemetry: class {
+    constructor(options: unknown) { fake.otelOptions(options); }
     onToolExecutionEnd(event: unknown) { fake.toolEnd(event); }
     onEnd() {}
   },
@@ -108,6 +110,9 @@ describe('optional Judgment tracing', () => {
     expect(fake.init).toHaveBeenCalledExactlyOnceWith({
       projectName: 'seb', apiKey: 'test-key', organizationId: 'test-organization',
     });
+    expect(fake.otelOptions).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      usage: true,
+    }));
     expect(fake.register).toHaveBeenCalledTimes(1);
     expect(module.judgmentTelemetry()).toHaveLength(1);
     await Promise.all([module.shutdownJudgmentTracing(), module.shutdownJudgmentTracing()]);

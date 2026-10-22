@@ -58,6 +58,7 @@ async function initialize(environment: NodeJS.ProcessEnv): Promise<void> {
     }
     const telemetry = new OpenTelemetry({
       tracer: Tracer.getOTELTracer(),
+      usage: true,
       enrichSpan: () => {
         const state = currentTrace.getStore();
         return state ? { 'judgment.session_id': state.sessionId } : undefined;

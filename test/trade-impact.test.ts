@@ -214,36 +214,29 @@ describe('trade impact analysis', () => {
     });
   });
 
-  it('supports players placed in reserve (IR) or taxi slots', async () => {
-    const give = player('give-ir', 'IR Receiver', 'WR');
-    const receive = player('receive-taxi', 'Taxi Runner', 'RB');
-    const sleeper = {
-      getLeague: async () => league(),
-      getLeagueRosters: async () => [
-        { league_id: 'league-1', players: [], reserve: ['give-ir'], roster_id: 4, settings: {} },
-        { league_id: 'league-1', players: [], taxi: ['receive-taxi'], roster_id: 8, settings: {} },
+  it('retains all weeks of stats when a traded player played on multiple teams in the same season', () => {
+    const give = player('traded-player', 'Traded Receiver', 'WR');
+    give.team = 'BUF';
+    const receive = player('receive', 'Receive Runner', 'RB');
+    const result = analyzeTradeImpact({
+      analysisSeason: 2026,
+      givePlayers: [give],
+      league: league(),
+      receivePlayers: [receive],
+      roster: roster(),
+      rosterPlayers: [give],
+      rows: [
+        stat('Traded Receiver', 'other-person-id', 1, { position: 'WR', receivingYards: 20, team: 'KC' }),
+        stat('Traded Receiver', 'player-trade-id', 1, { position: 'WR', receivingYards: 50, team: 'TEN' }),
+        stat('Traded Receiver', 'player-trade-id', 2, { position: 'WR', receivingYards: 70, team: 'BUF' }),
+        stat('Receive Runner', 'receive', 1, { position: 'RB', rushingYards: 80 }),
       ],
-      getNflState: async () => ({ season: '2026', season_type: 'regular', week: 4, leg: 4 }),
-      getPlayers: async () => ({ 'give-ir': give, 'receive-taxi': receive }),
-    } as unknown as SleeperClient;
-    const nflverse = {
-      getPlayerWeeklyStats: async () => [
-        stat('IR Receiver', 'give-ir', 1, { position: 'WR', receivingYards: 40 }),
-        stat('Taxi Runner', 'receive-taxi', 1, { position: 'RB', rushingYards: 70 }),
-      ],
-    } as unknown as NflverseClient;
-    const execute = createTradeTools(sleeper, nflverse).analyzeTradeImpact.execute;
-    const result = await execute?.({
-      givePlayerNames: ['IR Receiver'],
-      leagueId: '123456789012345678',
-      receivePlayerNames: ['Taxi Runner'],
-      rosterId: 4,
-    }, { context: {}, messages: [], toolCallId: 'test-reserve' });
-
-    expect(result).toMatchObject({
-      give: { players: [expect.objectContaining({ playerId: 'give-ir' })] },
-      receive: { players: [expect.objectContaining({ playerId: 'receive-taxi' })] },
+      throughWeek: 2,
     });
+
+    const giveImpact = result.give.players.find((p) => p.playerId === 'traded-player');
+    expect(giveImpact).toBeDefined();
+    expect(giveImpact?.games).toBe(2);
   });
 
   it('notes uneven roster count trade limitations and disambiguates multi-team player stats', () => {

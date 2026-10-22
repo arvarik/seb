@@ -522,7 +522,7 @@ function faabRange(
   risk: WaiverRiskLevel,
   faab: Omit<FaabRange, 'lower' | 'lowerPercent' | 'rationale' | 'upper' | 'upperPercent'> | null,
 ): FaabRange | null {
-  if (!faab || faab.budget <= 0 || faab.remaining < faab.minimumBid) return null;
+  if (!faab || faab.remaining < faab.minimumBid) return null;
   let [lowerPercent, upperPercent] = rankScore >= 80
     ? [18, 30]
     : rankScore >= 65
@@ -539,7 +539,7 @@ function faabRange(
   const minimumApplied = lower < faab.minimumBid;
   if (faab.remaining >= faab.minimumBid) {
     lower = Math.max(lower, faab.minimumBid);
-    upper = Math.min(faab.remaining, Math.max(upper, lower));
+    upper = Math.max(upper, lower);
   }
   return {
     ...faab,
@@ -555,14 +555,14 @@ function leagueFaab(
   league: SleeperLeague,
   roster: SleeperRoster,
 ): Omit<FaabRange, 'lower' | 'lowerPercent' | 'rationale' | 'upper' | 'upperPercent'> | null {
-  const type = numericSetting(league.settings?.waiver_type);
+  const type = numericSetting(league.settings.waiver_type);
   if (type !== null && type !== 2) return null;
-  const budget = numericSetting(league.settings?.waiver_budget);
-  if (budget === null || budget <= 0) return null;
-  const used = Math.max(0, numericSetting(roster.settings?.waiver_budget_used) ?? 0);
+  const budget = numericSetting(league.settings.waiver_budget);
+  if (budget === null || budget < 0) return null;
+  const used = Math.max(0, roster.settings.waiver_budget_used ?? 0);
   return {
     budget,
-    minimumBid: Math.max(0, numericSetting(league.settings?.waiver_bid_min) ?? 0),
+    minimumBid: Math.max(0, numericSetting(league.settings.waiver_bid_min) ?? 0),
     remaining: Math.max(0, budget - used),
     used,
   };

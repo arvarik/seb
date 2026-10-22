@@ -174,9 +174,14 @@ function tradeSide(
     }
     const ids = new Set(matches.map((row) => row.playerId));
     if (ids.size > 1 && player.team) {
-      const byTeam = matches.filter((row) => row.team === player.team?.toUpperCase());
-      const teamIds = new Set(byTeam.map((row) => row.playerId));
-      if (teamIds.size === 1) matches = byTeam;
+      const targetTeam = player.team.toUpperCase();
+      const matchingTeamIds = new Set(
+        matches.filter((row) => row.team === targetTeam).map((row) => row.playerId),
+      );
+      if (matchingTeamIds.size === 1) {
+        const teamMatchId = [...matchingTeamIds][0]!;
+        matches = matches.filter((row) => row.playerId === teamMatchId);
+      }
     }
     const resolvedIds = new Set(matches.map((row) => row.playerId));
     if (resolvedIds.size > 1) throw new Error(`The historical identity for ${name} is ambiguous.`);

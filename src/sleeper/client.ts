@@ -371,10 +371,6 @@ function comparePlayerMatches(
   right: SleeperPlayer,
   query: string,
 ): number {
-  const leftIdMatch = left.player_id === query ? 0 : 1;
-  const rightIdMatch = right.player_id === query ? 0 : 1;
-  if (leftIdMatch !== rightIdMatch) return leftIdMatch - rightIdMatch;
-
   const leftName = normalizeName(playerName(left));
   const rightName = normalizeName(playerName(right));
   const leftScore = leftName === query ? 0 : leftName.startsWith(query) ? 1 : 2;

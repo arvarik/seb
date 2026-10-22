@@ -381,30 +381,6 @@ describe('waiver budget boundaries', () => {
     const result = rankWaiverTargets(base);
     expect(result.targets.every((target) => target.faab === null)).toBe(true);
   });
-  it('returns null FAAB when league waiver_budget is 0', () => {
-    const base = input(); base.league.settings.waiver_budget = 0;
-    const result = rankWaiverTargets(base);
-    expect(result.faab.budget).toBeNull();
-    expect(result.targets.every((target) => target.faab === null)).toBe(true);
-  });
-  it('allows 0-dollar bid when remaining FAAB is 0 and minimum bid is 0', () => {
-    const base = input();
-    base.league.settings.waiver_budget = 100;
-    base.league.settings.waiver_bid_min = 0;
-    base.selectedRoster.settings = { waiver_budget_used: 100 };
-    const result = rankWaiverTargets(base);
-    expect(result.faab.remaining).toBe(0);
-    expect(result.targets.every((target) => target.faab?.lower === 0 && target.faab?.upper === 0)).toBe(true);
-  });
-  it('caps upper bid at remaining FAAB budget', () => {
-    const base = input();
-    base.league.settings.waiver_budget = 100;
-    base.league.settings.waiver_bid_min = 0;
-    base.selectedRoster.settings = { waiver_budget_used: 95 };
-    const result = rankWaiverTargets(base);
-    expect(result.faab.remaining).toBe(5);
-    expect(result.targets.every((target) => target.faab && target.faab.upper <= 5)).toBe(true);
-  });
   it('matches nflverse rows using Sleeper gsis_id directly', () => {
     const base = input();
     const trendPlayer = base.players['free-rb'];

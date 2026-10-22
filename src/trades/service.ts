@@ -7,7 +7,6 @@ import { SleeperClient } from '../sleeper/client.js';
 import type {
   SleeperPlayer,
   SleeperPlayerMap,
-  SleeperRoster,
 } from '../sleeper/types.js';
 import {
   analyzeTradeImpact,
@@ -56,7 +55,7 @@ export class TradeImpactService {
     const receivePlayers = resolvePlayers(players, request.receivePlayerNames);
     assertUniquePlayers(givePlayers, 'give');
     assertUniquePlayers(receivePlayers, 'receive');
-    const ownPlayerIds = collectAllRosterPlayerIds(roster);
+    const ownPlayerIds = new Set(roster.players ?? []);
     const invalidGive = givePlayers.find((player) => !ownPlayerIds.has(player.player_id));
     if (invalidGive) {
       throw new Error(`${playerName(invalidGive)} is not on roster ${request.rosterId}.`);
@@ -65,7 +64,7 @@ export class TradeImpactService {
     if (invalidReceive) {
       throw new Error(`${playerName(invalidReceive)} is already on roster ${request.rosterId}.`);
     }
-    const rosteredIds = new Set(rosters.flatMap((candidate) => [...collectAllRosterPlayerIds(candidate)]));
+    const rosteredIds = new Set(rosters.flatMap((candidate) => candidate.players ?? []));
     const freeAgent = receivePlayers.find((player) => !rosteredIds.has(player.player_id));
     if (freeAgent) {
       throw new Error(`${playerName(freeAgent)} is not rostered in this league. Use the waiver assistant.`);
@@ -73,7 +72,7 @@ export class TradeImpactService {
     const receivePlayerIds = new Set(receivePlayers.map((player) => player.player_id));
     const counterparties = rosters.filter((candidate) => {
       if (candidate.roster_id === request.rosterId) return false;
-      const candidatePlayerIds = collectAllRosterPlayerIds(candidate);
+      const candidatePlayerIds = new Set(candidate.players ?? []);
       return [...receivePlayerIds].every((playerId) => candidatePlayerIds.has(playerId));
     });
     if (counterparties.length === 0) {
@@ -87,7 +86,7 @@ export class TradeImpactService {
       league,
       receivePlayers,
       roster,
-      rosterPlayers: [...ownPlayerIds].flatMap((playerId) => {
+      rosterPlayers: (roster.players ?? []).flatMap((playerId) => {
         const player = players[playerId];
         return player ? [player] : [];
       }),
@@ -115,24 +114,13 @@ function assertUniquePlayers(
   }
 }
 
-function collectAllRosterPlayerIds(roster: SleeperRoster): Set<string> {
-  return new Set([
-    ...(roster.players ?? []),
-    ...(roster.starters ?? []),
-    ...(roster.reserve ?? []),
-    ...(roster.taxi ?? []),
-  ].filter(Boolean));
-}
-
 function resolvePlayers(
   players: SleeperPlayerMap,
   names: readonly string[],
 ): SleeperPlayer[] {
   return names.map((name) => {
     const trimmed = name.trim();
-    if (players[trimmed]) return players[trimmed] as SleeperPlayer;
-    const byId = Object.values(players).find((p) => p.player_id === trimmed);
-    if (byId) return byId;
+    if (Object.hasOwn(players, trimmed)) return players[trimmed] as SleeperPlayer;
     const normalized = normalizeName(name);
     const matches = Object.values(players).filter((player) =>
       normalizeName(playerName(player)) === normalized,

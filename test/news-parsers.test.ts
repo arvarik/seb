@@ -188,6 +188,24 @@ describe('news HTML discovery parsers', () => {
     },
   );
 
+  it('rolls FantasyPros dates into the prior year only when the parsed timestamp is more than 24 hours in the future', () => {
+    const html = `
+      <div class="player-news-item">
+        <div class="player-news-header">
+          <a href="/nfl/news/new-year-update.php">New year update</a>
+          <p>Wed, Dec 31st 7:00pm EST</p>
+        </div>
+        <p>Late December report.</p>
+      </div>
+    `;
+    expect(parseNewsHtml(
+      html,
+      'https://www.fantasypros.com/nfl/player-news.php',
+      'fantasypros-player',
+      new Date('2026-01-01T12:00:00.000Z'),
+    )[0]?.publishedAt).toBe('2025-12-31T24:00:00.000Z'.replace('24:00:00', '00:00:00').replace('2025-12-31', '2026-01-01'));
+  });
+
   it('parses NFL player health cards with their displayed dates', () => {
     const html = `
       <a href="/playerhealthandsafety/resources/press-releases/helmet-update">

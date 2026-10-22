@@ -860,6 +860,52 @@ describe('NewsClient cache', () => {
     ).toHaveLength(2);
     expect(database.searchNewsArticlesFts(['rehabilitation']).has(articleUrl)).toBe(true);
   });
+
+  it('stems limited/limiting to limit, ignores common fantasy query words, allows distinctive title matches, and skips redundant FTS re-indexing on cache-fresh reads', async () => {
+    const source = newsSource('limit-stem-source', 'official');
+    const database = createDatabase();
+    let indexCalls = 0;
+    const originalIndex = database.indexNewsArticles.bind(database);
+    database.indexNewsArticles = (sourceId, articles) => {
+      indexCalls += 1;
+      originalIndex(sourceId, articles);
+    };
+    const calls: FetchCall[] = [];
+    const fetch = routeFetch(new Map([
+      [source.discoveryUrl, rssResponse([
+        article(
+          'Mahomesankle update from Wednesday walkthrough',
+          '/news/mahomes-limit',
+          '2026-08-29T19:00:00Z',
+          'Patrick Mahomes was limited in Wednesday drills.',
+        ),
+        article(
+          'Patrick Mahomes ready for Sunday kickoff',
+          '/news/mahomes-week-8',
+          '2026-08-29T18:45:00Z',
+        ),
+      ])],
+    ]), calls);
+    const client = createClient([source], fetch, { database });
+
+    const first = await client.search({
+      limit: 5,
+      query: 'Mahomes limiting',
+      sourceIds: [source.id],
+    });
+    expect(first.articles.some((a) => a.url.endsWith('/news/mahomes-limit'))).toBe(true);
+    expect(indexCalls).toBe(1);
+
+    const second = await client.search({
+      limit: 5,
+      query: 'Mahomes week 8',
+      sourceIds: [source.id],
+    });
+    expect(second.articles.some((a) => a.url.endsWith('/news/mahomes-week-8'))).toBe(true);
+    // Cache-fresh read should not re-run indexNewsArticles or re-fetch robots.txt
+    expect(indexCalls).toBe(1);
+    expect(calls.filter((call) => new URL(call.url).pathname === '/robots.txt')).toHaveLength(1);
+  });
 });
 
 interface FetchCall {

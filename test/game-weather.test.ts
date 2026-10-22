@@ -108,6 +108,38 @@ describe('GameWeatherService', () => {
     expect(weather.getHourlyForecast).not.toHaveBeenCalled();
   });
 
+  it('resolves weather for a neutral-site game at a known US NFL stadium', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-05T12:00:00Z'));
+    const weather = {
+      getHourlyForecast: vi.fn().mockResolvedValue({
+        periods: [{
+          startTime: '2026-09-10T20:00:00-04:00',
+          endTime: '2026-09-10T21:00:00-04:00',
+          isDaytime: false,
+          temperature: 78,
+          temperatureUnit: 'F',
+          precipitationProbability: 10,
+          relativeHumidity: 65,
+          windSpeed: '8 mph',
+          windDirection: 'E',
+          shortForecast: 'Clear',
+          detailedForecast: '',
+        }],
+      }),
+      getActiveAlerts: vi.fn().mockResolvedValue([]),
+    };
+    const service = new GameWeatherService(
+      nflverseWithGame(game({ location: 'Neutral', stadium: 'Hard Rock Stadium' })),
+      weather as unknown as WeatherClient,
+    );
+
+    const result = await service.getGameWeather({ season: 2026, week: 1, team: 'KC' });
+
+    expect(result.status).toBe('available');
+    expect(result.stadium?.name).toBe('Hard Rock Stadium');
+  });
+
   it('selects a preseason schedule when the caller passes PRE', async () => {
     const getSchedule = vi.fn().mockResolvedValue([game({
       gameType: 'PRE',
@@ -170,9 +202,11 @@ function game(overrides: Partial<NflverseGame>): NflverseGame {
 
 it.each([
   ['2026-09-05T00:00:00Z', '2026-09-06T00:00:00Z', 'low'],
-  ['2026-09-11T02:00:00Z', '2026-09-11T03:00:00Z', 'low'],
+  ['2026-09-11T04:00:00Z', '2026-09-11T05:00:00Z', 'low'],
   [null, null, 'low'],
   ['2026-09-11T00:00:00Z', '2026-09-11T01:00:00Z', 'high'],
+  ['2026-09-11T02:00:00Z', '2026-09-11T03:00:00Z', 'high'],
+  ['2026-09-11T00:00:00Z', null, 'high'],
 ])('applies a severe alert only during its verified kickoff window: %s', async (onset, ends, risk) => {
   vi.useFakeTimers(); vi.setSystemTime(new Date('2026-09-05T12:00:00Z'));
   const weather = {

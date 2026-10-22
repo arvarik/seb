@@ -416,8 +416,7 @@ function parseFantasyProsDate(value: string, referenceDate: Date): string | null
   }
   if (period === 'pm' && hour !== 12) hour += 12;
   if (period === 'am' && hour === 12) hour = 0;
-  let year = referenceDate.getUTCFullYear();
-  if (month > referenceDate.getUTCMonth() + 1) year -= 1;
+  const year = referenceDate.getUTCFullYear();
   const offsetHours = zone === 'EDT' ? 4 : 5;
   let timestamp = Date.UTC(year, month, day, hour + offsetHours, minute);
   if (timestamp > referenceDate.getTime() + 24 * 60 * 60 * 1_000) {

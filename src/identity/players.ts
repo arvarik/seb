@@ -360,15 +360,17 @@ function applyRelocationMatches(seeds: readonly PreparedSeed[], parent: Map<stri
   }
   for (const group of groups.values()) {
     const active = group.filter((seed) => seed.source.provider === 'sleeper' && seed.active);
-    if (active.length !== 1 || new Set(group.map((seed) => seed.source.provider)).size !== group.length) continue;
-    const roots = new Set(group.map((seed) => find(parent, sourceIdentityKey(seed.source))));
+    if (active.length !== 1) continue;
+    const candidates = group.filter((seed) => seed.source.provider !== 'sleeper' || seed.active);
+    if (new Set(candidates.map((seed) => seed.source.provider)).size !== candidates.length) continue;
+    const roots = new Set(candidates.map((seed) => find(parent, sourceIdentityKey(seed.source))));
     const members = [...roots].flatMap((root) => membersByRoot.get(root) ?? []);
     // Keep explicit links outside this exact name-position group unchanged.
-    if (members.length !== group.length) continue;
+    if (members.length !== candidates.length) continue;
     if (new Set(members.map((seed) => seed.source.provider)).size !== members.length) continue;
     const canonicalIds = new Set(members.flatMap((seed) => seed.canonicalId ? [seed.canonicalId] : []));
     if (canonicalIds.size > 1) continue;
-    for (const seed of group) union(parent, sourceIdentityKey(active[0]!.source), sourceIdentityKey(seed.source));
+    for (const seed of candidates) union(parent, sourceIdentityKey(active[0]!.source), sourceIdentityKey(seed.source));
   }
 }
 

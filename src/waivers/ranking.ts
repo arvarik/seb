@@ -469,8 +469,11 @@ function assignProductionScores(candidates: PreparedCandidate[]): void {
   for (const candidate of candidates) {
     const position = playerPosition(candidate.player);
     const reference = position ? PRODUCTION_REFERENCE_POINTS.get(position) ?? 16 : 16;
+    const effectivePoints = candidate.production
+      ? Math.max(candidate.production.expectedPoints, candidate.production.recentAverage)
+      : 0;
     candidate.productionScore = candidate.production
-      ? round(clamp(candidate.production.recentAverage / reference * 100, 0, 100))
+      ? round(clamp(effectivePoints / reference * 100, 0, 100))
       : 0;
   }
 }
@@ -496,15 +499,16 @@ function finalizeCandidate(
     0,
     100,
   ));
+  const position = playerPosition(candidate.player) ?? 'UNKNOWN';
   return {
     demand: candidate.demand,
-    faab: faabRange(rankScore, candidate.risk.level, faab),
+    faab: faabRange(rankScore, candidate.risk.level, faab, position, candidate.demand.score),
     player: {
       active: candidate.player.active ?? null,
       injuryStatus: clean(candidate.player.injury_status),
       name: playerName(candidate.player),
       playerId: candidate.player.player_id,
-      position: playerPosition(candidate.player) ?? 'UNKNOWN',
+      position,
       status: clean(candidate.player.status),
       team: clean(candidate.player.team)?.toUpperCase() ?? null,
     },
@@ -521,6 +525,8 @@ function faabRange(
   rankScore: number,
   risk: WaiverRiskLevel,
   faab: Omit<FaabRange, 'lower' | 'lowerPercent' | 'rationale' | 'upper' | 'upperPercent'> | null,
+  position?: string,
+  demand = 0,
 ): FaabRange | null {
   if (!faab || faab.remaining < faab.minimumBid) return null;
   let [lowerPercent, upperPercent] = rankScore >= 80
@@ -530,12 +536,23 @@ function faabRange(
       : rankScore >= 50
         ? [5, 10]
         : rankScore >= 35 ? [2, 5] : [0, 2];
-  if (risk === 'high') {
+  const normalizedPosition = position?.toUpperCase() ?? '';
+  const breakoutSkill = demand >= 75 && ['RB', 'WR', 'TE'].includes(normalizedPosition);
+  if (risk === 'high' && !breakoutSkill) {
     lowerPercent = 0;
     upperPercent = Math.min(upperPercent, 5);
   }
+  if (normalizedPosition === 'K' || normalizedPosition === 'DEF') {
+    upperPercent = Math.min(upperPercent, 3);
+    lowerPercent = Math.min(lowerPercent, upperPercent);
+  }
   let lower = Math.min(faab.remaining, Math.round(faab.budget * lowerPercent / 100));
   let upper = Math.min(faab.remaining, Math.round(faab.budget * upperPercent / 100));
+  if (normalizedPosition === 'K' || normalizedPosition === 'DEF') {
+    const streamCap = Math.min(faab.remaining, Math.max(1, Math.round(faab.budget * 0.03)));
+    upper = Math.min(upper, streamCap);
+    lower = Math.min(lower, upper);
+  }
   const minimumApplied = lower < faab.minimumBid;
   if (faab.remaining >= faab.minimumBid) {
     lower = Math.max(lower, faab.minimumBid);

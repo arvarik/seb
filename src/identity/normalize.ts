@@ -34,7 +34,8 @@ function normalizeWords(value: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
     .replace(/\s+/g, ' ')
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/\b([a-z])\s+(?=[a-z]\b)/gu, '$1');
 }
 
 function reorderCommaName(value: string): string {

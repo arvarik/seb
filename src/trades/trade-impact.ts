@@ -77,7 +77,7 @@ export interface AnalyzeTradeImpactInput {
 
 const OFFENSIVE_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE']);
 const OFFENSIVE_SLOTS = new Set(['QB', 'RB', 'WR', 'TE', 'FLEX', 'SUPER_FLEX', 'REC_FLEX', 'WRTE_FLEX', 'WRRB_FLEX', 'WRRBTE_FLEX']);
-const NON_STARTER_SLOTS = new Set(['BN', 'BENCH', 'FLEX', 'SUPER_FLEX', 'REC_FLEX', 'IDP_FLEX', 'IR', 'RESERVE', 'TAXI']);
+const NON_STARTER_SLOTS = new Set(['BN', 'BENCH', 'FLEX', 'REC_FLEX', 'IDP_FLEX', 'IR', 'RESERVE', 'TAXI']);
 
 export function analyzeTradeImpact(
   input: AnalyzeTradeImpactInput,
@@ -88,20 +88,29 @@ export function analyzeTradeImpact(
   if ([...input.givePlayers, ...input.receivePlayers].some((player) => !OFFENSIVE_POSITIONS.has(player.position?.toUpperCase() ?? ''))) throw new Error('Trade forecasts support QB, RB, WR, and TE players.');
   const rowsByName = groupRowsByName(input.rows.filter((row) => row.season === input.analysisSeason && row.seasonType === 'REG'), input.throughWeek);
   const allRows = [...rowsByName.values()].flat();
-  const give = tradeSide(input.givePlayers, rowsByName, allRows, input.league, input.parameters);
-  const receive = tradeSide(input.receivePlayers, rowsByName, allRows, input.league, input.parameters);
+  const priors = new Map<string, number | null>();
+  const give = tradeSide(input.givePlayers, rowsByName, allRows, input.league, input.parameters, priors);
+  const receive = tradeSide(input.receivePlayers, rowsByName, allRows, input.league, input.parameters, priors);
   const giveIds = new Set(input.givePlayers.map((player) => player.player_id));
   const afterPlayers = [...input.rosterPlayers.filter((player) => !giveIds.has(player.player_id)), ...input.receivePlayers];
   let lineupImpact: TradeImpactAnalysis['lineupImpact'] = null;
   try {
     const knownSlots = new Set([...OFFENSIVE_SLOTS, 'K', 'DEF', 'DL', 'DE', 'DT', 'LB', 'DB', 'CB', 'S', 'IDP_FLEX', 'IDP', 'BN', 'BENCH', 'IR', 'RESERVE', 'TAXI']);
     if (input.league.roster_positions.some((slot) => !knownSlots.has(slot.toUpperCase()))) throw new Error('Unsupported starter slot.');
-    const hasStats = (player: SleeperPlayer) =>
-      (rowsByName.get(normalizeName(playerName(player))) ?? []).some((row) => row.position === player.position?.toUpperCase());
     const lineup = (players: SleeperPlayer[]) => optimizeLineup(
-      tradeSide(players.filter((player) => OFFENSIVE_POSITIONS.has(player.position?.toUpperCase() ?? '') && hasStats(player)), rowsByName, allRows, input.league, input.parameters).players.map((player) => ({
-        id: player.playerId, name: player.name, positions: [player.position], points: player.estimatedWeeklyValue,
-      })), input.league.roster_positions.filter((slot) => OFFENSIVE_SLOTS.has(slot.toUpperCase())));
+      players.filter((player) => OFFENSIVE_POSITIONS.has(player.position?.toUpperCase() ?? '')).flatMap((player) => {
+        try {
+          const [impact] = tradeSide([player], rowsByName, allRows, input.league, input.parameters, priors).players;
+          return impact ? [{
+            id: impact.playerId,
+            name: impact.name,
+            positions: player.fantasy_positions?.length ? player.fantasy_positions : [impact.position],
+            points: impact.estimatedWeeklyValue,
+          }] : [];
+        } catch {
+          return [];
+        }
+      }), input.league.roster_positions.filter((slot) => OFFENSIVE_SLOTS.has(slot.toUpperCase())));
     if ((input.roster.players ?? []).some((id) => !input.rosterPlayers.some((player) => player.player_id === id))) throw new Error('Missing roster identity.');
     const before = lineup(input.rosterPlayers);
     const after = lineup(afterPlayers);
@@ -163,11 +172,13 @@ function tradeSide(
   allRows: readonly NflversePlayerWeek[],
   league: SleeperLeague,
   parameters?: ProjectionParameters,
+  priors = new Map<string, number | null>(),
 ): TradeSideImpact {
   const impacts = players.map((player) => {
     const name = playerName(player);
     const gsisId = player.gsis_id?.trim();
-    let matches = (rowsByName.get(normalizeName(name)) ?? []).filter((row) => row.position === player.position?.toUpperCase());
+    const normalizedPos = player.position?.toUpperCase() ?? '';
+    let matches = (rowsByName.get(normalizeName(name)) ?? []).filter((row) => row.position === normalizedPos);
     if (gsisId) {
       const byGsis = allRows.filter((row) => row.playerId?.trim() === gsisId);
       if (byGsis.length > 0) matches = byGsis;
@@ -197,16 +208,19 @@ function tradeSide(
     const availabilityFactor = playerAvailabilityFactor(
       [player.injury_status, player.status].filter(Boolean).join(' ') || null,
     );
+    if (!priors.has(normalizedPos)) {
+      priors.set(normalizedPos, positionPrior(allRows, normalizedPos, rows[0]!.playerId, league.scoring_settings));
+    }
     return {
       availabilityFactor,
       estimatedWeeklyValue: round(
-        forecastMean(values, positionPrior(allRows, player.position ?? '', rows[0]!.playerId, league.scoring_settings), parameters) * availabilityFactor,
+        forecastMean(values, priors.get(normalizedPos) ?? null, parameters) * availabilityFactor,
       ),
       games: rows.length,
       injuryStatus: [player.injury_status, player.status].filter(Boolean).join(' ') || null,
       name,
       playerId: player.player_id,
-      position: player.position?.toUpperCase() ?? 'UNKNOWN',
+      position: normalizedPos || 'UNKNOWN',
       recentAverage: round(recentAverage),
       seasonAverage: round(seasonAverage),
       team: player.team ?? null,
@@ -244,9 +258,10 @@ function rosterFitChanges(
     const before = playersByPosition.get(position) ?? 0;
     const after = before - give.filter((player) => player.position?.toUpperCase() === position).length +
       receive.filter((player) => player.position?.toUpperCase() === position).length;
-    const minimumStarters = league.roster_positions.filter(
-      (slot) => slot.toUpperCase() === position && !NON_STARTER_SLOTS.has(slot.toUpperCase()),
-    ).length;
+    const minimumStarters = league.roster_positions.filter((slot) => {
+      const upper = slot.toUpperCase();
+      return (upper === position || (position === 'QB' && upper === 'SUPER_FLEX')) && !NON_STARTER_SLOTS.has(upper);
+    }).length;
     return {
       after,
       before,
@@ -302,7 +317,7 @@ function average(values: readonly number[]): number {
 function standardDeviation(values: readonly number[]): number {
   if (values.length < 2) return 0;
   const mean = average(values);
-  return Math.sqrt(average(values.map((value) => (value - mean) ** 2)));
+  return Math.sqrt(values.reduce((total, value) => total + (value - mean) ** 2, 0) / (values.length - 1));
 }
 
 function round(value: number): number {

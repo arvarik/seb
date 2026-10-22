@@ -67,8 +67,11 @@ const GENERAL_QUERY_WORDS = new Set([
   'fantasy',
   'find',
   'football',
+  'game',
+  'games',
   'impact',
   'latest',
+  'lineup',
   'news',
   'nfl',
   'our',
@@ -77,16 +80,23 @@ const GENERAL_QUERY_WORDS = new Set([
   'report',
   'reports',
   'reporting',
-  'status',
   'should',
   'show',
+  'sit',
+  'start',
+  'status',
   'tell',
   'that',
   'today',
   'the',
   'this',
+  'trade',
   'update',
   'updates',
+  'waiver',
+  'waivers',
+  'week',
+  'weeks',
   'what',
   'when',
   'where',
@@ -244,6 +254,7 @@ export class NewsClient {
   private readonly database: SebDatabase | false;
   private readonly hostScheduler: HostScheduler;
   private readonly httpByOrigin = new Map<string, ResilientFetch>();
+  private readonly indexedSources = new Set<string>();
   private readonly now: () => Date;
   private readonly onSource: SourceObserver | undefined;
   private readonly requestOptions: NewsClientRequestOptions;
@@ -314,8 +325,9 @@ export class NewsClient {
       this.database && typeof this.database.searchNewsArticlesFts === 'function'
         ? this.database.searchNewsArticlesFts(tokens, loadedSourceIds)
         : new Map<string, number>();
+    let anyEnrichedUpdated = false;
     const enriched = await Promise.all(loaded.map(async (source) => {
-      if (!source.source.enrichArticles) return source;
+      if (!source.source.enrichArticles) return { ...source, metadataUpdated: false };
       const candidates = rankDiscovered(
         source.articles,
         query,
@@ -329,6 +341,7 @@ export class NewsClient {
         )
         .slice(0, ENRICHMENT_LIMIT_PER_SOURCE);
       const candidateUrls = new Set(candidates.map((article) => article.url));
+      let metadataUpdated = false;
       const enrichedCandidates = (await mapWithConcurrency(
         candidates,
         3,
@@ -339,6 +352,10 @@ export class NewsClient {
               article,
               signal,
             );
+            if (metadata.outcome === 'source-updated') {
+              metadataUpdated = true;
+              anyEnrichedUpdated = true;
+            }
             return applyArticleMetadata(article, metadata);
           } catch {
             callerSignal?.throwIfAborted();
@@ -359,32 +376,34 @@ export class NewsClient {
           label: source.source.label,
         });
       }
-      return { ...source, articles };
+      return { ...source, articles, metadataUpdated };
     }));
     if (this.database && typeof this.database.indexNewsArticles === 'function') {
       const grouped = new Map<
         string,
-        { articles: DiscoveredNewsArticle[]; count: number; enriched: boolean }
+        { articles: DiscoveredNewsArticle[]; count: number; updated: boolean }
       >();
       for (const source of enriched) {
         const entry = grouped.get(source.source.id) ?? {
           articles: [],
           count: 0,
-          enriched: false,
+          updated: false,
         };
         entry.articles.push(...source.articles);
         entry.count += 1;
-        entry.enriched ||= Boolean(source.source.enrichArticles);
+        entry.updated ||= source.metadataUpdated || (entry.count > 1 && source.outcome === 'source-updated');
         grouped.set(source.source.id, entry);
       }
       for (const [sourceId, group] of grouped) {
-        if (group.enriched || group.count > 1) {
+        if (group.updated) {
           this.database.indexNewsArticles(sourceId, group.articles);
         }
       }
     }
     const ftsScores =
-      this.database && typeof this.database.searchNewsArticlesFts === 'function'
+      anyEnrichedUpdated &&
+      this.database &&
+      typeof this.database.searchNewsArticlesFts === 'function'
         ? this.database.searchNewsArticlesFts(tokens, loadedSourceIds)
         : initialFtsScores;
 
@@ -565,6 +584,7 @@ export class NewsClient {
   }
 
   clearCache(): void {
+    this.indexedSources.clear();
     this.robotsByOrigin.clear();
     if (this.database) this.database.deleteCache('news');
   }
@@ -661,8 +681,13 @@ export class NewsClient {
         value: parsed,
       };
     }, signal ? { signal } : {});
-    if (this.database && typeof this.database.indexNewsArticles === 'function') {
+    if (
+      this.database &&
+      typeof this.database.indexNewsArticles === 'function' &&
+      (result.outcome === 'source-updated' || !this.indexedSources.has(source.id))
+    ) {
       this.database.indexNewsArticles(source.id, result.value);
+      this.indexedSources.add(source.id);
     }
     this.recordSource(source, result);
     return {
@@ -842,6 +867,8 @@ export class NewsClient {
 
   private async readRobots(url: string, signal: AbortSignal) {
     const target = new URL(url);
+    const memoryCached = this.robotsByOrigin.get(target.origin);
+    if (memoryCached) return memoryCached.policy;
     const robotsUrl = `${target.origin}/robots.txt`;
     const resource = new CachedResource<string>(
       this.database,
@@ -1222,6 +1249,10 @@ function filterRelevantArticles(
   if (tokens.length === 0) return [...articles];
   const minimumMatches = Math.min(2, tokens.length);
   return articles.filter((article) => {
+    const titleTokens = searchTokenSet(article.title);
+    if (tokens.some((token) => token.length >= 5 && searchTokenMatches(token, titleTokens))) {
+      return true;
+    }
     const text = searchTokenSet(
       `${article.title} ${article.excerpt ?? ''} ${article.categories.join(' ')} ${article.url}`,
     );
@@ -1439,7 +1470,7 @@ function porterStem(word: string): string {
   if (word.length < 5) return word;
   return word
     .replace(
-      /(?:ation|ition|ating|iting|ated|ited|ment|ness|ance|ence|able|ible|pate|pant|ally|ical|ious|eous|ular|ing|ed|es|er|ly|al|ic|s)$/u,
+      /(?:ation|ition|ment|ness|ance|ence|able|ible|pate|pant|ally|ical|ious|eous|ular|ing|ed|es|er|ly|al|ic|s)$/u,
       '',
     )
     .slice(0, 6);

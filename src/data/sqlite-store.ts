@@ -1356,8 +1356,6 @@ export class SebDatabase {
       PRAGMA foreign_keys = ON;
       PRAGMA busy_timeout = 5000;
       PRAGMA temp_store = MEMORY;
-      PRAGMA cache_size = -64000;
-      PRAGMA mmap_size = 268435456;
     `);
   }
 
@@ -1399,7 +1397,6 @@ export class SebDatabase {
             PRIMARY KEY (namespace, cache_key)
           );
           CREATE INDEX IF NOT EXISTS cache_expiry_idx ON cache_entries(expires_at);
-          CREATE INDEX IF NOT EXISTS cache_stale_until_idx ON cache_entries(stale_until);
           CREATE TABLE IF NOT EXISTS snapshots (
             id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
@@ -1415,8 +1412,6 @@ export class SebDatabase {
           );
           CREATE INDEX IF NOT EXISTS snapshot_lookup_idx
             ON snapshots(kind, entity_key, as_of DESC);
-          CREATE INDEX IF NOT EXISTS snapshot_as_of_idx
-            ON snapshots(as_of DESC, created_at DESC);
           PRAGMA user_version = 1;
         `);
       });

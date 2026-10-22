@@ -22,8 +22,21 @@ describe('forecast statistics and safeguards', () => {
   it.each([-0.1, 0.9])('rejects out-of-bounds recency weights %s', (recentWeight) => {
     expect(() => forecastMean([1], null, { ...DEFAULT_PROJECTION_PARAMETERS, recentWeight })).toThrow();
   });
-  it('uses only previous games for calibration errors', () => {
+  it('uses only previous games for calibration errors and threads priorMean', () => {
     expect(rollingResiduals([10, 10, 10, 1000], DEFAULT_PROJECTION_PARAMETERS)).toEqual([990]);
+    expect(rollingResiduals([10, 10, 10, 1000], DEFAULT_PROJECTION_PARAMETERS, 45)).toEqual([
+      1000 - forecastMean([10, 10, 10], 45, DEFAULT_PROJECTION_PARAMETERS),
+    ]);
+  });
+  it('shrinks opponent defense matchup sensitivity for small sample sizes', () => {
+    const oppRows = ['MIA', 'BUF', 'KC', 'NYJ'].flatMap((opp) => [
+      stat({ gameId: `${opp}-1`, opponentTeam: opp, playerId: `${opp}-p1`, rushingYards: opp === 'MIA' ? 200 : 100 }),
+      stat({ gameId: `${opp}-2`, opponentTeam: opp, playerId: `${opp}-p2`, rushingYards: opp === 'MIA' ? 200 : 100 }),
+    ]);
+    const twoGame = projectPlayer({ ...input, opponent: 'MIA', opponentRows: oppRows });
+    const adj = twoGame.adjustments.find((a) => a.label === 'Opponent adjustment');
+    // allowed = 20, leagueAvg = 12.5 => (20/12.5 - 1) = 0.6; weight = 0.35 * (2 / 6) = 0.11667 => factor = 1.07 (not 1.10 cap)
+    expect(adj?.factor).toBeCloseTo(1.07, 3);
   });
   it('uses a finite-sample residual rank for an 80 percent interval', () => {
     const interval = forecastInterval(10, Array.from({ length: 20 }, (_, i) => i + 1), [10, 10]);
@@ -67,12 +80,18 @@ describe('forecast statistics and safeguards', () => {
   });
 });
 
-it('requires a legal starter slot for comparisons across positions', () => {
+it('requires a legal starter slot for comparisons across positions and honors fantasy_positions', () => {
   const rb = projectPlayer(input);
   const qb = projectPlayer({ ...input, rows: input.rows.map((row) => ({ ...row, playerId: 'qb', position: 'QB' })) });
   expect(compareProjections([rb, qb]).preferredPlayerId).toBeNull();
   expect(compareProjections([rb, qb], 'FLEX').recommendationEligible).toBe(false);
   expect(compareProjections([rb, qb], 'SUPER_FLEX').recommendationEligible).toBe(true);
+  const dualWrRb = projectPlayer({
+    ...input,
+    fantasyPositions: ['WR', 'RB'],
+    rows: input.rows.map((row) => ({ ...row, playerId: 'dual', position: 'WR' })),
+  });
+  expect(compareProjections([rb, dualWrRb], 'RB').recommendationEligible).toBe(true);
   expect(() => compareProjections([rb, { ...qb, season: 2024 }])).toThrow('same league');
 });
 

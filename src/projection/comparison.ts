@@ -21,7 +21,9 @@ export function sameGameCorrelation(
   const oppB = b.opponent?.toUpperCase() ?? null;
   if (teamA === teamB) {
     if (oppA && oppB && oppA !== oppB) return 0;
-    if ((posA === 'QB' && SKILL.has(posB)) || (posB === 'QB' && SKILL.has(posA))) return 0.3;
+    if ((posA === 'QB' && (posB === 'WR' || posB === 'TE')) || (posB === 'QB' && (posA === 'WR' || posA === 'TE'))) return 0.3;
+    if ((posA === 'QB' && posB === 'RB') || (posB === 'QB' && posA === 'RB')) return 0.05;
+    if ((posA === 'RB' && posB === 'DEF') || (posB === 'RB' && posA === 'DEF')) return 0.15;
     if (SKILL.has(posA) && SKILL.has(posB)) return -0.1;
     if ((posA === 'K' && OFFENSE.has(posB)) || (posB === 'K' && OFFENSE.has(posA))) return 0.1;
     return 0;
@@ -59,7 +61,7 @@ export function compareProjections(projections: readonly ScoringAwarePlayerProje
   const probability = normalCdf(difference / standardError);
   const positions = new Set(projections.map((projection) => projection.player.position));
   const slot = requestedSlot?.toUpperCase() ?? (positions.size === 1 ? first.player.position : null);
-  const eligible = Boolean(slot) && projections.every((projection) => projection.recommendationEligible && eligibleForSlot([projection.player.position], slot!));
+  const eligible = Boolean(slot) && projections.every((projection) => projection.recommendationEligible && eligibleForSlot(projection.player.fantasy_positions?.length ? projection.player.fantasy_positions : [projection.player.position], slot!));
   return { slot, projections: ordered, recommendationEligible: eligible,
     preferredPlayerId: eligible ? leader.player.playerId : null,
     expectedPointAdvantage: Math.round(difference * 100) / 100,

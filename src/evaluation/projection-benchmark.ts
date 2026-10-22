@@ -4,7 +4,7 @@ import { throwIfRequestAborted } from '../ai/request-signal.js';
 import type { NflversePlayerWeek } from '../nflverse/types.js';
 import { forecastMean, forecastInterval, mean, normalCdf, DEFAULT_PROJECTION_PARAMETERS, type ProjectionParameters } from '../projection/statistics.js';
 import { scorePlayerWeek } from '../projection/player-projection.js';
-import { learnFromCompletedRows, PPR_SCORING, positionPrior } from '../learning/engine.js';
+import { learnFromCompletedRows, PPR_SCORING } from '../learning/engine.js';
 import { calculateRegressionMetrics, calculateIntervalMetrics, calculateRankMetrics, calculateProbabilityMetrics, calculateDecisionRegret } from './metrics.js';
 import type { SleeperSettings } from '../sleeper/types.js';
 
@@ -20,6 +20,7 @@ export async function evaluateProjectionModels(
   const rows = input.rows.filter((row) => row.season === input.season && row.seasonType === 'REG' &&
     row.week <= input.throughWeek && ['QB', 'RB', 'WR', 'TE'].includes(row.position));
   if (new Set(rows.map((row) => `${row.playerId}:${row.week}`)).size !== rows.length) throw new Error('Evaluation rejects duplicate player-week outcomes.');
+  const scores = new Map(rows.map((row) => [row, scorePlayerWeek(row, scoring)]));
   type Result = { week: number; actual: number; predicted: number; lower: number; upper: number; groupId: string; itemId: string; position: string };
   const results: Record<'legacy' | 'ensemble' | 'adaptive', Result[]> = { legacy: [], ensemble: [], adaptive: [] };
   let missingOutcomes = 0;
@@ -31,8 +32,16 @@ export async function evaluateProjectionModels(
     const learned = learnFromCompletedRows({ rows: historyRows, season: input.season, throughWeek: week - 1, scoring });
     updates.push({ throughWeek: week - 1, promoted: learned.promoted, reason: learned.reason });
     const histories = new Map<string, NflversePlayerWeek[]>();
+    const posTotals = new Map<string, { sum: number; count: number }>();
+    const playerTotals = new Map<string, { sum: number; count: number }>();
     for (const row of historyRows) {
       const group = histories.get(row.playerId) ?? []; group.push(row); histories.set(row.playerId, group);
+      const score = scores.get(row)!;
+      const pos = posTotals.get(row.position) ?? { sum: 0, count: 0 };
+      pos.sum += score; pos.count += 1; posTotals.set(row.position, pos);
+      const pKey = `${row.playerId}:${row.position}`;
+      const pTot = playerTotals.get(pKey) ?? { sum: 0, count: 0 };
+      pTot.sum += score; pTot.count += 1; playerTotals.set(pKey, pTot);
     }
     const outcomes = new Map(rows.filter((row) => row.week === week).map((row) => [row.playerId, row]));
     for (const [id, history] of histories) {
@@ -40,16 +49,20 @@ export async function evaluateProjectionModels(
       const outcome = outcomes.get(id);
       if (!outcome) { missingOutcomes += 1; continue; }
       const ordered = history.sort((a, b) => a.week - b.week);
-      const values = ordered.map((row) => scorePlayerWeek(row, scoring));
+      const values = ordered.map((row) => scores.get(row)!);
       const latest = ordered.at(-1)!;
-      const prior = positionPrior(historyRows, latest.position, id, scoring);
-      const actual = scorePlayerWeek(outcome, scoring);
+      const posTotal = posTotals.get(latest.position) ?? { sum: 0, count: 0 };
+      const playerTotal = playerTotals.get(`${id}:${latest.position}`) ?? { sum: 0, count: 0 };
+      const peerCount = posTotal.count - playerTotal.count;
+      const prior = peerCount >= 20 ? (posTotal.sum - playerTotal.sum) / peerCount : null;
+      const actual = scores.get(outcome)!;
       const legacy = Math.max(0, mean(values) * 0.55 + mean(values.slice(-3)) * 0.45);
       const ensemble = forecastMean(values, prior, input.parameters ?? DEFAULT_PROJECTION_PARAMETERS);
       const adaptive = forecastMean(values, prior, learned.parameters);
       for (const [name, predicted] of Object.entries({ legacy, ensemble, adaptive }) as Array<[keyof typeof results, number]>) {
-        const residuals = results[name].filter((value) => value.week < week && value.week >= week - 3 && value.position === latest.position)
+        const recentResiduals = results[name].filter((value) => value.week < week && value.week >= week - 3 && value.position === latest.position)
           .map((value) => value.actual - value.predicted);
+        const residuals = recentResiduals.length >= 20 ? recentResiduals : (learned.residuals[latest.position] ?? recentResiduals);
         const legacyWidth = Math.max(Math.sqrt(mean(values.map((value) => (value - mean(values)) ** 2))) * 0.85, predicted * 0.2, 1);
         const interval = name === 'legacy' ? { lower: Math.max(0, predicted - legacyWidth), upper: predicted + legacyWidth }
           : forecastInterval(predicted, residuals, values);

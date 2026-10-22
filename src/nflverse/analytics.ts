@@ -166,7 +166,7 @@ function standardDeviation(values: readonly number[]): number {
   }
   const mean = sum(values, (value) => value) / values.length;
   const variance =
-    sum(values, (value) => (value - mean) ** 2) / values.length;
+    sum(values, (value) => (value - mean) ** 2) / (values.length - 1);
   return round(Math.sqrt(variance));
 }
 

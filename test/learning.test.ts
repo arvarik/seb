@@ -82,11 +82,14 @@ describe('local weekly learning', () => {
     const now = scenario === 'too-early' ? new Date('2025-09-07T20:00:00Z') : new Date('2025-09-10T00:00:00Z');
     await expect(new LearningService(client, local, () => now).update({ season: 2025, throughWeek: 1 })).rejects.toThrow();
   });
-  it('evaluates production forecasts by chronological week and position', async () => {
+  it('evaluates production forecasts by chronological week and position and falls back to learned residuals in Week 4', async () => {
     const result = await evaluateProjectionModels({ rows: trainingRows(10, 4), season: 2025, throughWeek: 10 });
     expect(result.models.adaptive?.regression.sampleSize).toBe(28);
     expect(result.byPosition.RB?.adaptive?.regression.sampleSize).toBe(28);
     expect(result.updates.every((update) => update.throughWeek < 10)).toBe(true);
+    const week4Result = await evaluateProjectionModels({ rows: trainingRows(4, 25), season: 2025, throughWeek: 4 });
+    expect(week4Result.models.ensemble?.intervals.sampleSize).toBe(25);
+    expect(week4Result.models.ensemble?.intervals.meanWidth).toBeGreaterThan(0);
   });
 });
 

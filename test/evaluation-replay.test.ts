@@ -42,6 +42,11 @@ describe('historical replay', () => {
       { entityId: 'a', predicted: 10, actual: 30, historyCount: 1 },
       { entityId: 'b', predicted: 20, actual: 10, historyCount: 1 },
     ]);
+    // Sample standard deviation of [10, 20] with Bessel's correction is sqrt(50) ≈ 7.0710678
+    expect((report.periods[0]!.projections[0]!.upper - report.periods[0]!.projections[0]!.lower) / 2).toBeCloseTo(
+      1.28155 * Math.sqrt(50),
+      2,
+    );
     expect(report.periods[0]?.metrics.decisions).toMatchObject({
       decisions: 1,
       totalRegret: 20,

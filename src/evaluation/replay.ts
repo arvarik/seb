@@ -460,7 +460,7 @@ function populationStandardDeviation(values: readonly number[]): number {
   }
   const average = mean(values);
   return Math.sqrt(
-    mean(values.map((value) => (value - average) ** 2)),
+    values.reduce((total, value) => total + (value - average) ** 2, 0) / (values.length - 1),
   );
 }
 

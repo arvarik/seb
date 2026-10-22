@@ -59,9 +59,11 @@ describe('deterministic matchup totals', () => {
     expect(result.rosters[1]).toMatchObject({ completedPoints: 0, complete: true });
     expect(result.rosters[1]!.players[1]).toMatchObject({ status: 'completed', points: 0 });
   });
-  it('does not mistake in-progress points for a completed final score', async () => {
-    const f = fixture(); f.schedule[1]!.gameDate = '2026-09-10'; f.schedule[1]!.gameTime = '13:00';
+  it('does not mistake in-progress points for a completed final score but counts completed games 4h after kickoff', async () => {
+    const f = fixture(); f.schedule[1]!.gameDate = '2026-09-10'; f.schedule[1]!.gameTime = '16:00';
     expect((await f.run()).rosters[0]).toMatchObject({ completedPoints: 0, inProgressPoints: 7.25, projectedSubtotal: 10.55, complete: false });
+    f.schedule[1]!.gameTime = '13:00';
+    expect((await f.run()).rosters[0]).toMatchObject({ completedPoints: 7.25, inProgressPoints: 0, projectedSubtotal: 17.8, complete: true });
   });
   it('keeps a completed player unavailable when the individual score is missing', async () => {
     const f = fixture(); f.sides[0]!.players_points = {};
@@ -110,6 +112,9 @@ describe('deterministic matchup totals', () => {
 
   it('computes correlated matchup win probability and stack correlations when uncertainty bounds exist', async () => {
     expect(sameGameCorrelation({ position: 'QB', team: 'BUF' }, { position: 'WR', team: 'BUF' })).toBe(0.3);
+    expect(sameGameCorrelation({ position: 'QB', team: 'BUF' }, { position: 'TE', team: 'BUF' })).toBe(0.3);
+    expect(sameGameCorrelation({ position: 'QB', team: 'BUF' }, { position: 'RB', team: 'BUF' })).toBe(0.05);
+    expect(sameGameCorrelation({ position: 'RB', team: 'BUF' }, { position: 'DEF', team: 'BUF' })).toBe(0.15);
     expect(sameGameCorrelation({ position: 'RB', team: 'BUF' }, { position: 'WR', team: 'BUF' })).toBe(-0.1);
     expect(sameGameCorrelation({ position: 'QB', team: 'BUF', opponent: 'MIA' }, { position: 'DEF', team: 'MIA', opponent: 'BUF' })).toBe(-0.25);
     expect(sameGameCorrelation({ position: 'QB', team: 'BUF', opponent: 'MIA' }, { position: 'WR', team: 'MIA', opponent: 'BUF' })).toBe(0.12);

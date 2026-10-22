@@ -50,8 +50,12 @@ export function forecastMean(
 }
 
 /** Chronological residuals never use the predicted game's result as an input. */
-export function rollingResiduals(values: readonly number[], parameters: ProjectionParameters): number[] {
-  return values.slice(3).map((actual, index) => actual - forecastMean(values.slice(0, index + 3), null, parameters));
+export function rollingResiduals(
+  values: readonly number[],
+  parameters: ProjectionParameters = DEFAULT_PROJECTION_PARAMETERS,
+  priorMean: number | null = null,
+): number[] {
+  return values.slice(3).map((actual, index) => actual - forecastMean(values.slice(0, index + 3), priorMean, parameters));
 }
 
 export function forecastInterval(

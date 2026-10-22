@@ -131,6 +131,9 @@ export function analyzeTradeImpact(
     limitations: [
       'The verdict measures the change in the best legal offensive starting lineup. Unchanged kicker and defense slots cancel from the comparison.',
       ...(!lineupImpact ? ['The full lineup lacks resolved production or supported starter slots. Seb cannot give a lineup value verdict.'] : []),
+      ...(input.givePlayers.length !== input.receivePlayers.length
+        ? [`Uneven trade (${input.givePlayers.length} for ${input.receivePlayers.length}): total value delta does not account for the replacement waiver player or dropped roster spot.`]
+        : []),
       'The value uses completed weekly production and the selected league scoring rules.',
       'The value excludes draft picks, contract values, and unverified market rankings.',
       'The Sleeper injury field is not an official injury report.',
@@ -163,9 +166,25 @@ function tradeSide(
 ): TradeSideImpact {
   const impacts = players.map((player) => {
     const name = playerName(player);
-    const matches = (rowsByName.get(normalizeName(name)) ?? []).filter((row) => row.position === player.position?.toUpperCase());
+    const gsisId = player.gsis_id?.trim();
+    let matches = (rowsByName.get(normalizeName(name)) ?? []).filter((row) => row.position === player.position?.toUpperCase());
+    if (gsisId) {
+      const byGsis = allRows.filter((row) => row.playerId?.trim() === gsisId);
+      if (byGsis.length > 0) matches = byGsis;
+    }
     const ids = new Set(matches.map((row) => row.playerId));
-    if (ids.size > 1) throw new Error(`The historical identity for ${name} is ambiguous.`);
+    if (ids.size > 1 && player.team) {
+      const targetTeam = player.team.toUpperCase();
+      const matchingTeamIds = new Set(
+        matches.filter((row) => row.team === targetTeam).map((row) => row.playerId),
+      );
+      if (matchingTeamIds.size === 1) {
+        const teamMatchId = [...matchingTeamIds][0]!;
+        matches = matches.filter((row) => row.playerId === teamMatchId);
+      }
+    }
+    const resolvedIds = new Set(matches.map((row) => row.playerId));
+    if (resolvedIds.size > 1) throw new Error(`The historical identity for ${name} is ambiguous.`);
     const rows = matches;
     if (new Set(rows.map((row) => row.week)).size !== rows.length) throw new Error('Duplicate player-week statistics cannot support a trade.');
     if (rows.length === 0) {

@@ -285,14 +285,26 @@ function resolveNflverseRows(
 ): Map<string, NflversePlayerWeek[]> {
   const groups = new Map<string, NflversePlayerWeek[]>();
   const byName = new Map<string, NflversePlayerWeek[]>();
+  const byGsisId = new Map<string, NflversePlayerWeek[]>();
   for (const row of rows) {
     const key = normalizePlayerName(row.playerDisplayName);
     const group = byName.get(key) ?? [];
     group.push(row); byName.set(key, group);
+    if (row.playerId) {
+      const gsis = row.playerId.trim();
+      const gsisGroup = byGsisId.get(gsis) ?? [];
+      gsisGroup.push(row); byGsisId.set(gsis, gsisGroup);
+    }
   }
   for (const trend of trendingAdds) {
     const player = players[trend.player_id];
     if (!player) continue;
+    const gsisId = player.gsis_id?.trim();
+    if (gsisId && byGsisId.has(gsisId)) {
+      const gsisMatches = byGsisId.get(gsisId)!;
+      groups.set(player.player_id, [...gsisMatches].sort((a, b) => a.week - b.week));
+      continue;
+    }
     const name = normalizePlayerName(playerName(player));
     const position = playerPosition(player);
     const matches = (byName.get(name) ?? []).filter((row) =>

@@ -33,6 +33,7 @@ export interface SleeperPlayer {
   age?: number | null | undefined;
   years_exp?: number | null | undefined;
   search_rank?: number | null | undefined;
+  gsis_id?: string | null | undefined;
 }
 
 export type SleeperPlayerMap = Record<string, SleeperPlayer>;

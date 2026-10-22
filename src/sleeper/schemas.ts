@@ -53,6 +53,7 @@ export const sleeperPlayerSchema: z.ZodType<SleeperPlayer> = z.object({
   age: z.number().nullable().optional(),
   years_exp: z.number().nullable().optional(),
   search_rank: z.number().nullable().optional(),
+  gsis_id: nullableString,
 }).passthrough();
 
 export const sleeperPlayerMapSchema: z.ZodType<SleeperPlayerMap> = z.record(

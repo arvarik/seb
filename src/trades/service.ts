@@ -119,6 +119,8 @@ function resolvePlayers(
   names: readonly string[],
 ): SleeperPlayer[] {
   return names.map((name) => {
+    const trimmed = name.trim();
+    if (Object.hasOwn(players, trimmed)) return players[trimmed] as SleeperPlayer;
     const normalized = normalizeName(name);
     const matches = Object.values(players).filter((player) =>
       normalizeName(playerName(player)) === normalized,

@@ -129,6 +129,18 @@ export class PlayerIdentityRegistry {
         reason: `The player query matches ${candidates.length} identities. Add a position, team, or source ID.`,
       };
     }
+    const trimmed = query.name.trim();
+    const canonical = this.byCanonicalId.get(trimmed);
+    if (canonical && (!position || canonical.position === position) && (!teamId || canonical.teamId === teamId)) {
+      return resolved(canonical, 'canonical-id', query.name, 'exact');
+    }
+    for (const provider of ['sleeper', 'nflverse']) {
+      const sourceKey = sourceIdentityKey({ provider, id: trimmed });
+      const sourceMatch = this.bySourceId.get(sourceKey);
+      if (sourceMatch && (!position || sourceMatch.position === position) && (!teamId || sourceMatch.teamId === teamId)) {
+        return resolved(sourceMatch, 'source-id', query.name, 'exact');
+      }
+    }
     return missing(normalizedQuery, `No canonical player matches "${query.name}" with the supplied filters.`);
   }
 
@@ -227,7 +239,7 @@ export function playerSeedFromSleeper(player: SleeperPlayer): PlayerIdentitySeed
     displayName,
     ...(player.position !== undefined ? { position: player.position } : {}),
     ...(player.team !== undefined ? { team: player.team } : {}),
-    aliases: [player.search_full_name ?? ''].filter(Boolean),
+    aliases: unique([player.search_full_name ?? '', player.player_id].filter(Boolean)),
   };
 }
 

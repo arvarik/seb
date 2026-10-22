@@ -29,6 +29,15 @@ describe('analysis tool integration', () => {
     const settings = scenario === 'divisions' ? { divisions: 2 } : scenario === 'start' ? { playoff_week_start: 2 } : {};
     await expect(createPlayoffTools(client(settings, scenario === 'missing')).simulatePlayoffOdds.execute!({ leagueId: '123456', throughWeek: 2, simulations: 100 }, options)).rejects.toThrow();
   });
+  it('allows single-division leagues without error', async () => {
+    const result = await createPlayoffTools(client({ divisions: 1 })).simulatePlayoffOdds.execute!({ leagueId: '123456', throughWeek: 2, simulations: 100 }, options);
+    expect(result).toMatchObject({ playoffTeams: 1, simulations: 100 });
+  });
+  it('rejects when playoff spots exceed total league teams', async () => {
+    await expect(
+      createPlayoffTools(client({ playoff_teams: 5 })).simulatePlayoffOdds.execute!({ leagueId: '123456', throughWeek: 2, simulations: 100 }, options),
+    ).rejects.toThrow('Playoff spots cannot exceed the total number of league teams.');
+  });
   it('updates and inspects compact local learning through the agent tools', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'seb-learning-tool-'));
     try {

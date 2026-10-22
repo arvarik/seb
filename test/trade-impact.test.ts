@@ -181,6 +181,90 @@ describe('trade impact analysis', () => {
       rosterId: 4,
     }, context)).rejects.toThrow('same opposing roster');
   });
+
+  it('resolves trade players by numeric player ID', async () => {
+    const give = player('650', 'Nick Folk', 'WR');
+    const receive = player('4034', 'Christian McCaffrey', 'RB');
+    const sleeper = {
+      getLeague: async () => league(),
+      getLeagueRosters: async () => [
+        { league_id: 'league-1', players: ['650'], roster_id: 4, settings: {} },
+        { league_id: 'league-1', players: ['4034'], roster_id: 8, settings: {} },
+      ],
+      getNflState: async () => ({ season: '2026', season_type: 'regular', week: 4, leg: 4 }),
+      getPlayers: async () => ({ '650': give, '4034': receive }),
+    } as unknown as SleeperClient;
+    const nflverse = {
+      getPlayerWeeklyStats: async () => [
+        stat('Nick Folk', '650', 1, { position: 'WR', receivingYards: 50 }),
+        stat('Christian McCaffrey', '4034', 1, { position: 'RB', rushingYards: 100 }),
+      ],
+    } as unknown as NflverseClient;
+    const execute = createTradeTools(sleeper, nflverse).analyzeTradeImpact.execute;
+    const result = await execute?.({
+      givePlayerNames: ['650'],
+      leagueId: '123456789012345678',
+      receivePlayerNames: ['4034'],
+      rosterId: 4,
+    }, { context: {}, messages: [], toolCallId: 'test-id' });
+
+    expect(result).toMatchObject({
+      give: { players: [expect.objectContaining({ playerId: '650', name: 'Nick Folk' })] },
+      receive: { players: [expect.objectContaining({ playerId: '4034', name: 'Christian McCaffrey' })] },
+    });
+  });
+
+  it('retains all weeks of stats when a traded player played on multiple teams in the same season', () => {
+    const give = player('traded-player', 'Traded Receiver', 'WR');
+    give.team = 'BUF';
+    const receive = player('receive', 'Receive Runner', 'RB');
+    const result = analyzeTradeImpact({
+      analysisSeason: 2026,
+      givePlayers: [give],
+      league: league(),
+      receivePlayers: [receive],
+      roster: roster(),
+      rosterPlayers: [give],
+      rows: [
+        stat('Traded Receiver', 'other-person-id', 1, { position: 'WR', receivingYards: 20, team: 'KC' }),
+        stat('Traded Receiver', 'player-trade-id', 1, { position: 'WR', receivingYards: 50, team: 'TEN' }),
+        stat('Traded Receiver', 'player-trade-id', 2, { position: 'WR', receivingYards: 70, team: 'BUF' }),
+        stat('Receive Runner', 'receive', 1, { position: 'RB', rushingYards: 80 }),
+      ],
+      throughWeek: 2,
+    });
+
+    const giveImpact = result.give.players.find((p) => p.playerId === 'traded-player');
+    expect(giveImpact).toBeDefined();
+    expect(giveImpact?.games).toBe(2);
+  });
+
+  it('notes uneven roster count trade limitations and disambiguates multi-team player stats', () => {
+    const give1 = player('give-1', 'Shared Receiver', 'WR');
+    give1.team = 'SEA';
+    const give2 = player('give-2', 'Give Two Receiver', 'WR');
+    const receive = player('receive', 'Receive Runner', 'RB');
+    const result = analyzeTradeImpact({
+      analysisSeason: 2026,
+      givePlayers: [give1, give2],
+      league: league(),
+      receivePlayers: [receive],
+      roster: roster(),
+      rosterPlayers: [give1, give2],
+      rows: [
+        stat('Shared Receiver', 'other-id', 1, { position: 'WR', receivingYards: 10, team: 'KC' }),
+        stat('Shared Receiver', 'sea-id', 1, { position: 'WR', receivingYards: 60, team: 'SEA' }),
+        stat('Give Two Receiver', 'give-2', 1, { position: 'WR', receivingYards: 40 }),
+        stat('Receive Runner', 'receive', 1, { position: 'RB', rushingYards: 80 }),
+      ],
+      throughWeek: 1,
+    });
+
+    expect(result.limitations).toContainEqual(
+      expect.stringContaining('Uneven trade (2 for 1)'),
+    );
+    expect(result.give.players).toHaveLength(2);
+  });
 });
 
 function league(): SleeperLeague {

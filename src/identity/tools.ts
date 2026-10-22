@@ -10,6 +10,7 @@ import {
 } from './players.js';
 import { TeamIdentityRegistry } from './teams.js';
 import { IdentityRepository } from './repository.js';
+import type { PlayerIdentityLink } from './types.js';
 
 const seasonSchema = z.number().int().min(1999).max(2100);
 
@@ -71,34 +72,58 @@ export function createIdentityTools(
           return teamResolution;
         }
         const teamCode = teamResolution?.identity.code;
-        const [sleeperPlayers, nflverseRows] = await Promise.all([
+        const [sleeperPlayers, initialNflverseRows] = await Promise.all([
           sleeper.findPlayers(name, {
             active: false,
             ...(position ? { position } : {}),
             limit: 25,
           }),
           nflverse.getPlayerWeeklyStats({
-            season,
             playerName: name,
+            season,
             seasonType: 'REG',
             ...(position ? { position } : {}),
             ...(teamCode ? { team: teamCode } : {}),
           }),
         ]);
+        let nflverseRows = initialNflverseRows;
+        const exactSleeper = sleeperPlayers.find((p) => p.player_id === name.trim()) ??
+          (sleeperPlayers.length === 1 ? sleeperPlayers[0] : undefined);
+        if (nflverseRows.length === 0 && exactSleeper?.full_name && exactSleeper.full_name !== name.trim()) {
+          nflverseRows = await nflverse.getPlayerWeeklyStats({
+            playerName: exactSleeper.full_name,
+            season,
+            seasonType: 'REG',
+            ...(position ? { position } : {}),
+            ...(teamCode ? { team: teamCode } : {}),
+          });
+        }
+        const links: PlayerIdentityLink[] = [];
+        for (const p of sleeperPlayers) {
+          const gsisId = p.gsis_id?.trim();
+          if (gsisId) {
+            links.push({
+              members: [
+                { provider: 'sleeper', id: p.player_id },
+                { provider: 'nflverse', id: gsisId },
+              ],
+            });
+          }
+        }
         const build = buildPlayerIdentityRegistry(
           [
             ...sleeperPlayers.map(playerSeedFromSleeper),
             ...nflverseRows.map(playerSeedFromNflverse),
           ],
-          { automaticMatching: 'strict', teamRegistry: teams },
+          { automaticMatching: 'strict', links, teamRegistry: teams },
         );
         const resolution = build.registry.resolveName({
-            name,
-            ...(position ? { position } : {}),
-            ...(teamResolution?.status === 'resolved'
-              ? { team: teamResolution.identity.canonicalId }
-              : {}),
-          });
+          name,
+          ...(position ? { position } : {}),
+          ...(teamResolution?.status === 'resolved'
+            ? { team: teamResolution.identity.canonicalId }
+            : {}),
+        });
         const persisted = resolution.status === 'resolved' && repository
           ? { ...resolution, identity: repository.savePlayer(resolution.identity) }
           : resolution;

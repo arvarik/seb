@@ -4,7 +4,7 @@ import { ResearchDataError } from '../data/research-error.js';
 import { easternKickoff } from '../time.js';
 import { resolveCompletedAnalysisWindow } from '../analysis/window.js';
 import { LearningStore } from '../learning/store.js';
-import { positionPrior } from '../learning/engine.js';
+import { scoringKey } from '../learning/engine.js';
 import { normalizePlayerName } from '../identity/normalize.js';
 import { TeamIdentityRegistry } from '../identity/teams.js';
 import { throwIfRequestAborted } from '../ai/request-signal.js';
@@ -32,6 +32,9 @@ export interface PlayerProjectionRequest {
 
 export class PlayerProjectionService {
   private readonly gameWeather: GameWeatherService;
+  private readonly teams = new TeamIdentityRegistry();
+  private readonly priorCache = new Map<string, { sum: number; count: number; byPlayer: Map<string, { sum: number; count: number }> }>();
+  private readonly residualCache = new Map<string, number[]>();
 
   constructor(
     private readonly sleeper: SleeperClient,
@@ -44,7 +47,7 @@ export class PlayerProjectionService {
 
   async project(request: PlayerProjectionRequest): Promise<ScoringAwarePlayerProjection> {
     throwIfRequestAborted();
-    const team = new TeamIdentityRegistry().resolve(request.playerName.replace(/\s+(?:D\/ST|DST|DEF|defense)$/iu, ''));
+    const team = this.teams.resolve(request.playerName.replace(/\s+(?:D\/ST|DST|DEF|defense)$/iu, ''));
     let analysisSeason = request.analysisSeason ??
       (request.week === 1 ? request.season - 1 : request.season);
     let throughWeek = request.throughWeek ??
@@ -179,8 +182,16 @@ export class PlayerProjectionService {
     const learnedResiduals = learned && !overrides?.parameters
       ? (learned.residuals[latest.position] ?? learned.residuals[latest.position.toUpperCase()])
       : undefined;
+    const priorMean = this.cachedPositionPrior(
+      eligiblePositionRows,
+      analysisSeason,
+      throughWeek,
+      latest.position,
+      latest.playerId,
+      league.scoring_settings,
+    );
     const pooledResiduals = !learnedResiduals || learnedResiduals.length < 20
-      ? pooledPositionResiduals(eligiblePositionRows, league.scoring_settings, parameters)
+      ? this.cachedPooledResiduals(eligiblePositionRows, analysisSeason, throughWeek, latest.position, league.scoring_settings, parameters)
       : undefined;
     const calibrationResiduals = learnedResiduals && learnedResiduals.length >= 20
       ? learnedResiduals
@@ -194,13 +205,14 @@ export class PlayerProjectionService {
       currentProfileKnown: Boolean(player?.team && player.active !== false),
       gameStarted: Boolean(game && (easternKickoff(game.gameDate, game.gameTime)?.getTime() ?? Infinity) <= Date.now()),
       manualOverride: Boolean(overrides?.parameters) && overrides?.enabled !== false,
-      priorMean: positionPrior(eligiblePositionRows, latest.position, latest.playerId, league.scoring_settings),
+      priorMean,
       ...(parameters ? { parameters } : {}),
       ...(calibrationResiduals ? { calibrationResiduals } : {}),
       ...(learned && !overrides?.parameters ? {
         learningThroughWeek: learned.throughWeek,
         learningSeason: learned.season,
       } : {}),
+      ...(player?.fantasy_positions?.length ? { fantasyPositions: player.fantasy_positions } : {}),
       analysisSeason,
       currentTeam,
       injuryStatus: [player?.injury_status, player?.status].filter(Boolean).join(' ') || null,
@@ -215,6 +227,58 @@ export class PlayerProjectionService {
       weatherStatus: weather?.status ?? null,
       week: request.week,
     });
+  }
+
+  private cachedPositionPrior(
+    rows: readonly NflversePlayerWeek[],
+    analysisSeason: number,
+    throughWeek: number,
+    position: string,
+    playerId: string,
+    scoring: import('../sleeper/types.js').SleeperSettings,
+  ): number | null {
+    if (rows.length < 20) return null;
+    const normalizedPos = position.toUpperCase();
+    const key = `${analysisSeason}:${throughWeek}:${normalizedPos}:${scoringKey(scoring)}:${rows.length}`;
+    let entry = this.priorCache.get(key);
+    if (!entry) {
+      let sum = 0;
+      let count = 0;
+      const byPlayer = new Map<string, { sum: number; count: number }>();
+      for (const row of rows) {
+        if (row.position.toUpperCase() !== normalizedPos) continue;
+        const score = scorePlayerWeek(row, scoring);
+        sum += score;
+        count += 1;
+        const p = byPlayer.get(row.playerId) ?? { sum: 0, count: 0 };
+        p.sum += score;
+        p.count += 1;
+        byPlayer.set(row.playerId, p);
+      }
+      entry = { sum, count, byPlayer };
+      this.priorCache.set(key, entry);
+    }
+    const p = entry.byPlayer.get(playerId);
+    const peerCount = entry.count - (p?.count ?? 0);
+    return peerCount >= 20 ? (entry.sum - (p?.sum ?? 0)) / peerCount : null;
+  }
+
+  private cachedPooledResiduals(
+    rows: readonly NflversePlayerWeek[],
+    analysisSeason: number,
+    throughWeek: number,
+    position: string,
+    scoring: import('../sleeper/types.js').SleeperSettings,
+    parameters: ProjectionParameters = DEFAULT_PROJECTION_PARAMETERS,
+  ): number[] {
+    const key = `${analysisSeason}:${throughWeek}:${position.toUpperCase()}:${scoringKey(scoring)}:${rows.length}:${JSON.stringify(parameters)}`;
+    let residuals = this.residualCache.get(key);
+    if (!residuals) {
+      const positionPriorMean = this.cachedPositionPrior(rows, analysisSeason, throughWeek, position, '', scoring);
+      residuals = pooledPositionResiduals(rows, scoring, parameters, positionPriorMean);
+      this.residualCache.set(key, residuals);
+    }
+    return residuals;
   }
 
   private async learningContext(
@@ -295,6 +359,7 @@ function pooledPositionResiduals(
   rows: readonly NflversePlayerWeek[],
   scoring: import('../sleeper/types.js').SleeperSettings,
   parameters: ProjectionParameters = DEFAULT_PROJECTION_PARAMETERS,
+  priorMean: number | null = null,
 ): number[] {
   const byPlayer = new Map<string, NflversePlayerWeek[]>();
   for (const row of rows) {
@@ -309,7 +374,7 @@ function pooledPositionResiduals(
     if (new Set(ordered.map((r) => r.week)).size !== ordered.length) continue;
     try {
       const scores = ordered.map((row) => scorePlayerWeek(row, scoring));
-      for (const residual of rollingResiduals(scores, parameters)) {
+      for (const residual of rollingResiduals(scores, parameters, priorMean)) {
         residuals.push(residual);
         if (residuals.length >= 200) return residuals;
       }

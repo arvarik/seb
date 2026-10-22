@@ -45,25 +45,33 @@ export function learnFromCompletedRows(input: {
     keys.add(key);
   }
   if (!rows.length) throw new Error('Learning needs completed offensive player statistics.');
+  const scores = new Map(rows.map((row) => [row, scorePlayerWeek(row, scoring)]));
+  const rowsByWeek = new Map<number, NflversePlayerWeek[]>();
+  for (const row of rows) {
+    const group = rowsByWeek.get(row.week) ?? [];
+    group.push(row); rowsByWeek.set(row.week, group);
+  }
   const samples: Sample[] = [];
-  for (let week = 2; week <= input.throughWeek; week += 1) {
-    const priorRows = rows.filter((row) => row.week < week);
-    const histories = new Map<string, number[]>();
-    const positionTotals = new Map<string, number[]>();
-    for (const row of priorRows) {
-      const score = scorePlayerWeek(row, scoring);
-      const history = histories.get(row.playerId) ?? [];
-      history.push(score); histories.set(row.playerId, history);
-      const values = positionTotals.get(row.position) ?? [];
-      values.push(score); positionTotals.set(row.position, values);
+  const histories = new Map<string, { scores: number[]; sum: number }>();
+  const positionTotals = new Map<string, { sum: number; count: number }>();
+  for (let week = 1; week <= input.throughWeek; week += 1) {
+    const weekRows = rowsByWeek.get(week) ?? [];
+    if (week >= 2) {
+      for (const row of weekRows) {
+        const history = histories.get(row.playerId);
+        if (!history || history.scores.length < 3) continue;
+        const pos = positionTotals.get(row.position) ?? { sum: 0, count: 0 };
+        const count = pos.count - history.scores.length;
+        samples.push({ week, history: [...history.scores], actual: scores.get(row)!, position: row.position,
+          team: row.team, prior: count >= 20 ? (pos.sum - history.sum) / count : null });
+      }
     }
-    for (const row of rows.filter((value) => value.week === week)) {
-      const history = histories.get(row.playerId) ?? [];
-      if (history.length < 3) continue;
-      const peers = positionTotals.get(row.position) ?? [];
-      const count = peers.length - history.length;
-      samples.push({ week, history, actual: scorePlayerWeek(row, scoring), position: row.position,
-        team: row.team, prior: count >= 20 ? (mean(peers) * peers.length - mean(history) * history.length) / count : null });
+    for (const row of weekRows) {
+      const score = scores.get(row)!;
+      const history = histories.get(row.playerId) ?? { scores: [], sum: 0 };
+      history.scores.push(score); history.sum += score; histories.set(row.playerId, history);
+      const pos = positionTotals.get(row.position) ?? { sum: 0, count: 0 };
+      pos.sum += score; pos.count += 1; positionTotals.set(row.position, pos);
     }
   }
   const validationWeeks = [...new Set(samples.map((sample) => sample.week))].slice(-3);
@@ -105,8 +113,8 @@ export function learnFromCompletedRows(input: {
     const recent = values.slice(-3);
     const opportunities = (row: NflversePlayerWeek) => row.attempts + row.carries + row.targets;
     return [id, { name: last.playerDisplayName, team: last.team, position: last.position,
-      games: values.length, averagePoints: mean(values.map((row) => scorePlayerWeek(row, scoring))),
-      recentPoints: mean(recent.map((row) => scorePlayerWeek(row, scoring))),
+      games: values.length, averagePoints: mean(values.map((row) => scores.get(row)!)),
+      recentPoints: mean(recent.map((row) => scores.get(row)!)),
       averageOpportunities: mean(values.map(opportunities)), recentOpportunities: mean(recent.map(opportunities)) }];
   }));
   return learningRevisionSchema.parse({

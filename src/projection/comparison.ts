@@ -59,7 +59,7 @@ export function compareProjections(projections: readonly ScoringAwarePlayerProje
   const probability = normalCdf(difference / standardError);
   const positions = new Set(projections.map((projection) => projection.player.position));
   const slot = requestedSlot?.toUpperCase() ?? (positions.size === 1 ? first.player.position : null);
-  const eligible = Boolean(slot) && projections.every((projection) => projection.recommendationEligible && eligibleForSlot([projection.player.position], slot!));
+  const eligible = Boolean(slot) && projections.every((projection) => projection.recommendationEligible && eligibleForSlot(projection.player.fantasy_positions?.length ? projection.player.fantasy_positions : [projection.player.position], slot!));
   return { slot, projections: ordered, recommendationEligible: eligible,
     preferredPlayerId: eligible ? leader.player.playerId : null,
     expectedPointAdvantage: Math.round(difference * 100) / 100,

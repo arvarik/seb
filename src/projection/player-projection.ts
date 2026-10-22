@@ -39,6 +39,7 @@ export interface ScoringAwarePlayerProjection {
 
   opponent: string | null;
   player: {
+    fantasy_positions?: readonly string[] | null | undefined;
     name: string;
     playerId: string;
     position: string;
@@ -67,6 +68,7 @@ export interface ProjectPlayerInput {
   learningSeason?: number;
   manualOverride?: boolean;
   currentTeam?: string | null;
+  fantasyPositions?: readonly string[] | null;
   injuryStatus?: string | null;
   leagueId: string;
   leagueName: string;
@@ -171,7 +173,7 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
   const factor = adjustments.reduce((value, adjustment) => value * adjustment.factor, 1);
   const median = base * factor;
   const interval = forecastInterval(median,
-    input.calibrationResiduals ?? rollingResiduals(scoredGames, parameters), scoredGames);
+    input.calibrationResiduals ?? rollingResiduals(scoredGames, parameters, input.priorMean ?? null), scoredGames);
 
   const limitations = projectionLimitations(
     input,
@@ -214,6 +216,7 @@ export function projectPlayer(input: ProjectPlayerInput): ScoringAwarePlayerProj
     model: { version: PROJECTION_MODEL_VERSION, parameters: { ...parameters }, learningThroughWeek: input.learningThroughWeek ?? null, learningSeason: input.learningSeason ?? null, manualOverride: input.manualOverride ?? false },
     opponent: input.opponent ?? null,
     player: {
+      ...(input.fantasyPositions ? { fantasy_positions: input.fantasyPositions } : {}),
       name: latest.playerDisplayName,
       playerId: latest.playerId,
       position: latest.position,

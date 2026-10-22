@@ -265,5 +265,45 @@ describe('full-roster optimal lineup solver', () => {
     f.sides[0]!.starters = ['a', 'a'];
     await expect(optimizeRosterLineup(sleeperWithRosters, f.nflverse, f.service, request, now)).rejects.toBeInstanceOf(ResearchDataError);
   });
+
+  it('honors multi-position fantasy_positions eligibility when filling secondary lineup slots', async () => {
+    const f = fixture();
+    f.sides[0]!.starters = ['a', '0'];
+    f.sides[0]!.players = ['a', 'dual'];
+    f.profiles.dual = { player_id: 'dual', full_name: 'Taysom Hill', position: 'QB', team: 'BUF' };
+    const rosters: SleeperRoster[] = [{
+      roster_id: 1,
+      league_id: '123',
+      starters: ['a', '0'],
+      players: ['a', 'dual'],
+      settings: {},
+    }];
+    const sleeperWithRosters = {
+      ...f.sleeper,
+      getLeague: vi.fn(async () => league({ season: '2026', roster_positions: ['RB', 'TE', 'BN'] })),
+      getLeagueRosters: vi.fn(async () => rosters),
+    };
+    f.service.project.mockImplementation(async ({ playerName }: { playerName: string }) => ({
+      expectedPoints: playerName === 'Taysom Hill' ? 12.5 : 10.55,
+      floor: 6,
+      ceiling: 18,
+      scoreScope: 'weekly-estimate',
+      recommendationEligible: true,
+      limitations: [],
+      player: {
+        playerId: playerName === 'Taysom Hill' ? 'dual' : 'a',
+        name: playerName,
+        position: playerName === 'Taysom Hill' ? 'QB' : 'RB',
+        fantasy_positions: playerName === 'Taysom Hill' ? ['QB', 'TE'] : ['RB'],
+        team: 'BUF',
+      },
+      league: { leagueId: '123', name: 'Test League' },
+      scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+    } as unknown as ScoringAwarePlayerProjection));
+
+    const result = await optimizeRosterLineup(sleeperWithRosters, f.nflverse, f.service, request, now);
+    expect(result.complete).toBe(true);
+    expect(result.optimalLineup.find((entry) => entry.slot === 'TE')?.playerId).toBe('dual');
+  });
 });
 

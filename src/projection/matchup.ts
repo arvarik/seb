@@ -271,6 +271,9 @@ export async function optimizeRosterLineup(
       player.points = result.projection.expectedPoints;
       player.ignoredSettings = result.projection.scoring.ignoredSettings;
       player.recommendationEligible = result.projection.recommendationEligible === true;
+      if (result.projection.player?.fantasy_positions?.length) {
+        player.positions = [...new Set([...player.positions, ...result.projection.player.fantasy_positions.map((pos) => pos.toUpperCase())])];
+      }
     }
   }
   const eligiblePlayers: LineupPlayer[] = [...byId.values()]

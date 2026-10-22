@@ -6,6 +6,8 @@ import { formatInteractiveStreamError } from '../src/interactive/stream-error.js
 import { ResearchDataError } from '../src/data/research-error.js';
 import { NflverseApiError } from '../src/nflverse/client.js';
 import { WeatherApiError } from '../src/weather/client.js';
+import { CircuitOpenError } from '../src/data/resilient-fetch.js';
+import { ModelProviderConfigurationError } from '../src/ai/model-provider.js';
 
 const context = { providerLabel: 'Google Gemini' };
 describe('interactive stream errors', () => {
@@ -20,12 +22,20 @@ describe('interactive stream errors', () => {
     [new ResearchDataError('nflverse found no completed games.'), 'no completed games'],
     [new NflverseApiError('secret', 404, 'https://private'), 'nflverse could not return'],
     [new WeatherApiError('secret', 503, 'https://private'), 'weather service'],
+    [new CircuitOpenError('https://api.sleeper.app', '2026-10-22T00:00:00Z'), 'temporarily unavailable'],
+    [new Error('Tool failed', { cause: new WeatherApiError('secret', 503, 'https://private') }), 'weather service'],
   ])('identifies a tool or source failure safely', (error, expected) => {
     const message = formatInteractiveStreamError(error, context);
     expect(message).toContain(expected);
     expect(message).not.toMatch(/Gemini|private|secret/u);
   });
-  it('preserves provider-specific diagnostics for model errors', () => {
+  it('preserves provider configuration and diagnostics for model errors', () => {
     expect(formatInteractiveStreamError({ code: 'invalid_request' }, context)).toContain('Google Gemini rejected');
+    expect(
+      formatInteractiveStreamError(
+        new ModelProviderConfigurationError('Google Gemini needs GOOGLE_GENERATIVE_AI_API_KEY.'),
+        context,
+      ),
+    ).toBe('Google Gemini needs GOOGLE_GENERATIVE_AI_API_KEY.');
   });
 });

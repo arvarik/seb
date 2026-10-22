@@ -26,6 +26,24 @@ describe('ResilientFetch', () => {
     expect(delays).toEqual([2_000]);
   });
 
+  it('retries HTTP 529 overloaded and Cloudflare 524 timeout status codes', async () => {
+    let calls = 0;
+    const client = new ResilientFetch({
+      fetch: async () => {
+        calls += 1;
+        if (calls === 1) return new Response('overloaded', { status: 529 });
+        if (calls === 2) return new Response('gateway timeout', { status: 524 });
+        return new Response('ok', { status: 200 });
+      },
+      policy: { maxAttempts: 3 },
+      sleep: async () => undefined,
+    });
+
+    const response = await client.request('https://api.anthropic.com/v1/messages');
+    expect(response.status).toBe(200);
+    expect(calls).toBe(3);
+  });
+
   it('opens the circuit after the configured number of failures', async () => {
     let now = 1_000;
     const client = new ResilientFetch({

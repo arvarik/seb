@@ -1,5 +1,13 @@
 const CAPACITY_MESSAGE =
-  /high demand|service unavailable|temporarily unavailable|quota exceeded|rate limit/i;
+  /high demand|service unavailable|temporarily unavailable|quota exceeded|rate limit|resource.*exhausted|overloaded|too many requests/i;
+
+const CAPACITY_STATUS_CODES = new Set([429, 503, 529]);
+const CAPACITY_ERROR_CODES = new Set([
+  'insufficient-quota',
+  'overloaded-error',
+  'rate-limit-exceeded',
+  'resource-exhausted',
+]);
 
 export type ModelErrorCategory =
   | 'authentication'
@@ -32,7 +40,7 @@ export function isModelCapacityError(error: unknown, depth = 0): boolean {
     return false;
   }
   if (typeof error === 'string') {
-    return CAPACITY_MESSAGE.test(error) || /\b(?:429|503)\b/.test(error);
+    return CAPACITY_MESSAGE.test(error) || /\b(?:429|503|529)\b/.test(error);
   }
   if (!error || typeof error !== 'object') {
     return false;
@@ -41,18 +49,20 @@ export function isModelCapacityError(error: unknown, depth = 0): boolean {
   const value = error as Record<string, unknown>;
   const name = normalizedCode(value.name);
   if (name === 'aborterror' || name === 'timeouterror') return false;
+  const code = normalizedCode(value.code);
+  if (code && CAPACITY_ERROR_CODES.has(code)) return true;
   const status = numericStatus(value.statusCode ?? value.status);
-  if (status === 429 || status === 503) {
-    return true;
+  if (status !== null) {
+    return CAPACITY_STATUS_CODES.has(status);
   }
-  if (status !== null) return false;
   if (typeof value.message === 'string' && isModelCapacityError(value.message)) {
     return true;
   }
 
   return (
     isModelCapacityError(value.cause, depth + 1) ||
-    isModelCapacityError(value.lastError, depth + 1)
+    isModelCapacityError(value.lastError, depth + 1) ||
+    isModelCapacityError(value.error, depth + 1)
   );
 }
 
@@ -89,9 +99,24 @@ export function classifyModelError(
   ) {
     return 'authentication';
   }
-  if (status === 408 || status === 504) return 'provider-timeout';
-  if (status === 429 || status === 503) return 'capacity';
+  if (status === 408 || status === 504 || status === 524) return 'provider-timeout';
+  if (status === 429 || status === 503 || status === 529) return 'capacity';
+  if (status === 502) return 'provider';
   if (isModelCapacityError(error)) return 'capacity';
+  if (
+    code === 'etimedout' ||
+    code === 'und-err-connect-timeout'
+  ) {
+    return 'timeout';
+  }
+  if (
+    code === 'econnreset' ||
+    code === 'econnrefused' ||
+    code === 'und-err-socket' ||
+    code === 'enotfound'
+  ) {
+    return 'provider';
+  }
   if (
     name === 'apicallerror' ||
     name === 'ai-apicallerror' ||
@@ -138,6 +163,8 @@ export function formatModelErrorForUser(
       return `${context.providerLabel} stopped before it completed the answer. Ask a narrower question, then retry.`;
     case 'invalid-request':
       return `${context.providerLabel} rejected the request as invalid. ${diagnostics}, then retry.`;
+    case 'provider':
+      return `${context.providerLabel} encountered a connection or service issue. ${diagnostics}, then retry.`;
     case 'provider-timeout':
       return `The ${context.providerLabel} service timed out before it returned a response. Retry the request.`;
     case 'timeout':
@@ -161,7 +188,10 @@ function normalizedCode(value: unknown): string | null {
 
 function classifyModelErrorText(value: string): ModelErrorCategory | null {
   const text = value.slice(0, 1_000).toLowerCase();
-  if (CAPACITY_MESSAGE.test(text) || /\b(?:429|503)\b/u.test(text)) {
+  if (/\b(?:408|504|524)\b/u.test(text) || /gateway timeout/u.test(text)) {
+    return 'provider-timeout';
+  }
+  if (CAPACITY_MESSAGE.test(text) || /\b(?:429|503|529)\b/u.test(text)) {
     return 'capacity';
   }
   if (/api key|permission denied|unauthenticated|unauthorized/u.test(text)) {
@@ -170,7 +200,9 @@ function classifyModelErrorText(value: string): ModelErrorCategory | null {
   if (/invalid[_ -](?:argument|request)|\b400\b/u.test(text)) {
     return 'invalid-request';
   }
-  if (/\b(?:408|504)\b/u.test(text)) return 'provider-timeout';
   if (/timed? out|timeout/u.test(text)) return 'timeout';
+  if (/\b502\b|bad gateway|econnreset|socket hang up|fetch failed/u.test(text)) {
+    return 'provider';
+  }
   return null;
 }

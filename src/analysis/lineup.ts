@@ -16,7 +16,7 @@ export function eligibleForSlot(positions: readonly string[], slot: string): boo
 /** Exact assignment across overlapping starter slots. A player can occupy only one slot. */
 export function optimizeLineup(players: readonly LineupPlayer[], rosterSlots: readonly string[]) {
   const slots = rosterSlots.map((slot) => slot.toUpperCase()).filter((slot) => !BENCH.has(slot));
-  if (slots.length > 18 || players.length > 60) throw new Error('Lineup optimization supports at most 18 starter slots and 60 players.');
+  if (slots.length > 12 || players.length > 60) throw new Error('Lineup optimization supports at most 12 starter slots and 60 players.');
   if (new Set(players.map((player) => player.id)).size !== players.length ||
     players.some((player) => !player.id || !Number.isFinite(player.points))) {
     throw new Error('Lineup players need unique IDs and finite point estimates.');

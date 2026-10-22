@@ -13,7 +13,7 @@ describe('SleeperAnalysisService regular-season windowing', () => {
     settings: { wins: 7, losses: 7 },
   }));
 
-  it('caps default throughWeek before playoff_week_start while allowing explicit playoff week requests', async () => {
+  it('keeps completed playoff weeks for scoring and matchup predictions while capping regular-season records', async () => {
     const requestedWeeks: number[] = [];
     const client = {
       getLeague: async () =>
@@ -27,21 +27,35 @@ describe('SleeperAnalysisService regular-season windowing', () => {
         ({ season: '2026', season_type: 'post', week: 1 }) as SleeperNflState,
       getLeagueMatchups: async (_leagueId: string, week: number) => {
         requestedWeeks.push(week);
+        if (week <= 14) {
+          return [
+            { roster_id: 1, matchup_id: 1, points: 100 },
+            { roster_id: 2, matchup_id: 1, points: 95 },
+          ];
+        }
         return [
-          { roster_id: 1, matchup_id: week <= 14 ? 1 : null, points: 100 },
-          { roster_id: 2, matchup_id: week <= 14 ? 1 : null, points: 95 },
+          { roster_id: 1, matchup_id: null, points: 130 },
+          { roster_id: 2, matchup_id: null, points: 0 },
         ];
       },
     } as unknown as SleeperClient;
 
     const service = new SleeperAnalysisService(client);
     const defaultAnalysis = await service.analyzeLeague('123456');
-    expect(defaultAnalysis.throughWeek).toBe(14);
+    expect(defaultAnalysis.throughWeek).toBe(18);
     expect(defaultAnalysis.historyComplete).toBe(true);
-    expect(Math.max(...requestedWeeks)).toBe(14);
+    expect(Math.max(...requestedWeeks)).toBe(18);
 
-    const explicitAnalysis = await service.analyzeLeague('123456', 16);
-    expect(explicitAnalysis.throughWeek).toBe(16);
-    expect(explicitAnalysis.historyComplete).toBe(false);
+    const team1 = defaultAnalysis.teams.find((t) => t.rosterId === 1)!;
+    const team2 = defaultAnalysis.teams.find((t) => t.rosterId === 2)!;
+    // Regular-season record is capped at weeks 1-14 (playoff_week_start - 1)
+    expect(team1.record).toEqual({ wins: 14, losses: 0, ties: 0, winRate: 1 });
+    expect(team2.record).toEqual({ wins: 0, losses: 14, ties: 0, winRate: 0 });
+    // Completed playoff scores (> 0) are kept for recent form, while unscheduled 0s are ignored
+    expect(team1.recentAverage).toBe(130);
+    expect(team2.recentAverage).toBe(95);
+
+    const prediction = await service.predictMatchup('123456', 1, 2, 16);
+    expect(prediction.favoredRosterId).toBe(1);
   });
 });

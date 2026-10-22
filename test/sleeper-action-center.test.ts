@@ -50,7 +50,7 @@ describe('action center league rules and statuses', () => {
     expect(result.actions.map((action) => action.kind)).toEqual(['deadline']);
   });
 
-  it('enforces reserve capacity, doubtful reserve rules, and COV status urgency', () => {
+  it('enforces reserve capacity and COV status urgency', () => {
     const fullReserveRoster: SleeperRoster = {
       league_id: '123456',
       players: ['cov', 'doubt', 'ir1'],
@@ -74,28 +74,20 @@ describe('action center league rules and statuses', () => {
     const openReserveRoster: SleeperRoster = {
       ...fullReserveRoster,
       reserve: [],
-      players: ['doubt'],
+      players: ['cov', 'doubt'],
     };
-    const disallowDoubtful = buildFantasyLeagueActionCenter({
+    const openReserve = buildFantasyLeagueActionCenter({
       league: league({
         roster_positions: ['WR', 'BN', 'IR'],
-        settings: { reserve_slots: 1, reserve_allow_doubtful: 0 },
+        settings: { reserve_slots: 1 },
       }),
       players,
       rosters: [openReserveRoster],
       week: 6,
     });
-    expect(disallowDoubtful.actions.filter((a) => a.id.includes(':reserve-'))).toEqual([]);
-
-    const allowDoubtful = buildFantasyLeagueActionCenter({
-      league: league({
-        roster_positions: ['WR', 'BN', 'IR'],
-        settings: { reserve_slots: 1, reserve_allow_doubtful: 1 },
-      }),
-      players,
-      rosters: [openReserveRoster],
-      week: 6,
-    });
-    expect(allowDoubtful.actions.map((a) => a.id)).toContain('123456:roster-1:reserve-doubt');
+    expect(openReserve.actions.filter((a) => a.id.includes(':reserve-')).map((a) => a.id)).toEqual([
+      '123456:roster-1:reserve-cov',
+      '123456:roster-1:reserve-doubt',
+    ]);
   });
 });

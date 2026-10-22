@@ -105,13 +105,22 @@ export function analyzeLeague(input: {
     !rosterIds.has(matchup.roster_id) || !Number.isFinite(matchup.custom_points ?? matchup.points)))) {
     throw new Error('League history contains an unknown roster or an invalid score or week.');
   }
+  const regularSeasonLimit =
+    typeof input.league.settings.playoff_week_start === 'number' &&
+    input.league.settings.playoff_week_start >= 2 &&
+    input.league.settings.playoff_week_start <= 18
+      ? Math.floor(input.league.settings.playoff_week_start) - 1
+      : 18;
+  const regularWeeks = weeks.filter((week) => week.week <= regularSeasonLimit);
   const historyComplete = input.rosters.length > 0 && Array.from({ length: input.throughWeek }, (_, index) => index + 1).every((number) => {
     const week = weeks.find((candidate) => candidate.week === number);
-    return week && week.matchups.length === input.rosters.length && week.matchups.every((matchup) =>
+    if (!week || week.matchups.length === 0) return false;
+    if (number > regularSeasonLimit) return true;
+    return week.matchups.length === input.rosters.length && week.matchups.every((matchup) =>
       Number.isSafeInteger(matchup.matchup_id) && week.matchups.filter((other) => other.matchup_id === matchup.matchup_id).length === 2);
   });
-  const scoresByRoster = collectScores(weeks);
-  const records = recordsFromWeeks(weeks, input.league.settings.league_average_match === 1);
+  const scoresByRoster = collectScores(weeks, regularSeasonLimit);
+  const records = recordsFromWeeks(regularWeeks, input.league.settings.league_average_match === 1);
 
   const baseTeams = input.rosters.map<BaseTeamAnalysis>((roster) => {
     const ownerId = roster.owner_id ?? null;
@@ -297,14 +306,18 @@ export function predictMatchup(
   };
 }
 
-function collectScores(weeks: WeeklyMatchups[]): Map<number, number[]> {
+function collectScores(weeks: WeeklyMatchups[], regularSeasonLimit: number): Map<number, number[]> {
   const scores = new Map<number, number[]>();
   const sortedWeeks = [...weeks].sort((left, right) => left.week - right.week);
 
   for (const week of sortedWeeks) {
     for (const matchup of week.matchups) {
+      const score = matchup.custom_points ?? matchup.points ?? 0;
+      if (week.week > regularSeasonLimit && matchup.matchup_id === null && score <= 0) {
+        continue;
+      }
       const current = scores.get(matchup.roster_id) ?? [];
-      current.push(matchup.custom_points ?? matchup.points ?? 0);
+      current.push(score);
       scores.set(matchup.roster_id, current);
     }
   }
@@ -315,7 +328,7 @@ function collectScores(weeks: WeeklyMatchups[]): Map<number, number[]> {
 function recordsFromWeeks(weeks: WeeklyMatchups[], medianMatch: boolean) {
   const records = new Map<number, { wins: number; losses: number; ties: number; pointsAgainst: number; opponentGames: number }>();
   for (const week of weeks) {
-    const median = week.matchups.length ? quantile(week.matchups.map((matchup) => matchup.custom_points ?? matchup.points), 0.5) : 0;
+    const median = medianMatch && week.matchups.length ? quantile(week.matchups.map((matchup) => matchup.custom_points ?? matchup.points), 0.5) : 0;
     for (const matchup of week.matchups) {
       const record = records.get(matchup.roster_id) ?? { wins: 0, losses: 0, ties: 0, pointsAgainst: 0, opponentGames: 0 };
       const score = matchup.custom_points ?? matchup.points;

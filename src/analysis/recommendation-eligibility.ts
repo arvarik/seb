@@ -635,18 +635,17 @@ function hasMatchupScoring(value: unknown): boolean {
     rosters.every((roster) => isEmptyArray(asRecord(roster)?.ignoredSettings ?? []));
 }
 
-const MULTI_PLAYER_LIST_TOOLS = new Set([
-  'getRosterPlayers',
-  'getTrendingPlayers',
-  'rankWaiverTargets',
-]);
 const evidenceTextCache = new WeakMap<object, string>();
 
 function isIndividualPlayerTool(toolName: string, hasQuestionMatch = false): boolean {
   return toolName === 'findPlayers' ||
     toolName === 'projectPlayer' ||
     toolName === 'resolvePlayerIdentity' ||
-    (hasQuestionMatch && MULTI_PLAYER_LIST_TOOLS.has(toolName));
+    (hasQuestionMatch && (
+      toolName === 'getRosterPlayers' ||
+      toolName === 'rankWaiverTargets' ||
+      toolName === 'getTrendingPlayers'
+    ));
 }
 
 function individualPlayerResultMatchesQuestion(
@@ -673,38 +672,16 @@ function relevantPlayerSubjects(
   const hasLineupOptimization = toolResults.some(
     (result) => asRecord(result.input)?.fromLineupOptimization === true,
   );
-  const newsValues = !hasQuestionMatch && !hasLineupOptimization
-    ? toolResults.flatMap((result) =>
-        result.toolName === 'searchCurrentNews' || result.toolName === 'searchFirstClassNews'
-          ? [result.input, result.output]
-          : [],
-      )
-    : [];
   const subjects = toolResults.flatMap((result) => {
     if (!PLAYER_IDENTITY_TOOLS.has(result.toolName)) return [];
     const candidates = [
       ...toolInputPlayerSubjects(result),
       ...playerSubjects([result.output]),
     ];
-    if (
-      isIndividualPlayerTool(result.toolName, hasQuestionMatch || hasLineupOptimization) &&
-      asRecord(result.input)?.fromLineupOptimization !== true
-    ) {
-      return candidates.filter((subject) => textMentionsSubject(question, subject));
-    }
-    if (
-      !hasQuestionMatch &&
-      !hasLineupOptimization &&
-      MULTI_PLAYER_LIST_TOOLS.has(result.toolName) &&
-      newsValues.length > 0
-    ) {
-      const matched = candidates.filter((subject) => {
-        const normalized = normalizePlayerName(subject);
-        return Boolean(normalized) && evidenceMatchesSubjects(newsValues, [normalized]);
-      });
-      if (matched.length > 0) return matched;
-    }
-    return candidates;
+    return isIndividualPlayerTool(result.toolName, hasQuestionMatch || hasLineupOptimization) &&
+        asRecord(result.input)?.fromLineupOptimization !== true
+      ? candidates.filter((subject) => textMentionsSubject(question, subject))
+      : candidates;
   });
   return [...new Set(subjects.map(normalizePlayerName).filter(Boolean))];
 }

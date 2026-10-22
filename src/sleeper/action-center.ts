@@ -186,7 +186,6 @@ function playerStatusActions(
     if (
       signal.urgency === 'high' &&
       (reserveByRoster.get(signal.rosterId)?.size ?? 0) < reserveCapacity &&
-      (!/\bdoubtful\b/iu.test(signal.label) || Number(league.settings.reserve_allow_doubtful ?? 0) === 1) &&
       !reserveByRoster.get(signal.rosterId)?.has(signal.playerId)
     ) {
       return [{

@@ -48,20 +48,20 @@ describe('legal lineup optimization', () => {
   it('rejects duplicate identities and unbounded requests', () => {
     expect(() => optimizeLineup([player('a', 1), player('a', 2)], ['RB'])).toThrow('unique');
     expect(() => optimizeLineup([player('a', NaN)], ['RB'])).toThrow('finite');
-    expect(() => optimizeLineup([], Array(19).fill('RB'))).toThrow('18');
+    expect(() => optimizeLineup([], Array(13).fill('RB'))).toThrow('12');
   });
-  it('supports up to 18 starter slots and granular IDP/OP flex positions', () => {
+  it('supports granular IDP/OP flex positions and duplicate-slot symmetry breaking up to 12 starter slots', () => {
     expect(eligibleForSlot(['QB'], 'OP')).toBe(true);
     expect(eligibleForSlot(['DE'], 'DL')).toBe(true);
     expect(eligibleForSlot(['ILB'], 'LB')).toBe(true);
     expect(eligibleForSlot(['CB'], 'DB')).toBe(true);
     expect(eligibleForSlot(['FS'], 'IDP_FLEX')).toBe(true);
     expect(eligibleForSlot(['DT'], 'IDP')).toBe(true);
-    const slots = ['QB', 'RB', 'RB', 'WR', 'WR', 'WR', 'TE', 'FLEX', 'OP', 'DL', 'DL', 'LB', 'LB', 'LB', 'DB', 'DB', 'IDP_FLEX', 'IDP'];
-    const pool = slots.map((slot, i) => player(`p${i}`, 10 + i, [slot === 'OP' ? 'QB' : slot === 'FLEX' ? 'RB' : slot === 'IDP_FLEX' || slot === 'IDP' ? 'CB' : slot]));
+    const slots = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'FLEX', 'OP', 'DL', 'LB', 'DB', 'IDP_FLEX'];
+    const pool = slots.map((slot, i) => player(`p${i}`, 10 + i, [slot === 'OP' ? 'QB' : slot === 'FLEX' ? 'RB' : slot === 'IDP_FLEX' ? 'CB' : slot]));
     const result = optimizeLineup(pool, slots);
     expect(result.complete).toBe(true);
-    expect(result.assignments).toHaveLength(18);
+    expect(result.assignments).toHaveLength(12);
   });
 });
 

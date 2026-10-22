@@ -36,6 +36,7 @@ export class SleeperAnalysisService {
       rosters,
       state,
       requestedThroughWeek,
+      league.settings.playoff_week_start,
     );
     const weeklyMatchups: WeeklyMatchups[] = await Promise.all(
       Array.from({ length: throughWeek }, (_, index) => index + 1).map(
@@ -97,6 +98,7 @@ function chooseThroughWeek(
   rosters: SleeperRoster[],
   state: SleeperNflState,
   requestedThroughWeek?: number,
+  playoffWeekStart?: string | number | boolean | null | undefined,
 ): number {
   const currentSeason = state.season;
   const maximum = Number(leagueSeason) < Number(currentSeason) ? 18
@@ -117,12 +119,20 @@ function chooseThroughWeek(
     return 0;
   }
 
-  if (Number(leagueSeason) >= Number(currentSeason)) return maximum;
+  const regularSeasonMaximum =
+    typeof playoffWeekStart === 'number' && playoffWeekStart >= 2 && playoffWeekStart <= 18
+      ? Math.min(maximum, Math.floor(playoffWeekStart) - 1)
+      : maximum;
+
+  if (Number(leagueSeason) >= Number(currentSeason)) return regularSeasonMaximum;
 
   if (typeof leagueLeg === 'number' && leagueLeg >= 1 && leagueLeg <= 18) {
-    return leagueStatus === 'complete'
-      ? Math.floor(leagueLeg)
-      : Math.max(Math.floor(leagueLeg) - 1, 0);
+    return Math.min(
+      regularSeasonMaximum,
+      leagueStatus === 'complete'
+        ? Math.floor(leagueLeg)
+        : Math.max(Math.floor(leagueLeg) - 1, 0),
+    );
   }
 
   const games = Math.max(
@@ -134,5 +144,5 @@ function chooseThroughWeek(
         (roster.settings.ties ?? 0),
     ),
   );
-  return Math.min(Math.max(games, 0), 18);
+  return Math.min(Math.max(games, 0), regularSeasonMaximum);
 }

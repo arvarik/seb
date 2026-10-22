@@ -1,5 +1,5 @@
 import { ResearchDataError } from '../data/research-error.js';
-import { quantile } from '../projection/statistics.js';
+import { normalCdf, quantile } from '../projection/statistics.js';
 import type {
   SleeperLeague,
   SleeperMatchup,
@@ -268,13 +268,8 @@ export function predictMatchup(
   const scoreA = expectedScore(rosterA);
   const scoreB = expectedScore(rosterB);
   const difference = scoreA - scoreB;
-  const pooledVolatility = Math.sqrt(
-    ((rosterA.weeklyVolatility ?? 15) ** 2 +
-      (rosterB.weeklyVolatility ?? 15) ** 2) /
-      2,
-  );
-  const scale = Math.max(12, pooledVolatility);
-  const rawProbability = 1 / (1 + Math.exp(-difference / scale));
+  const scale = Math.max(12, Math.hypot(rosterA.weeklyVolatility ?? 15, rosterB.weeklyVolatility ?? 15));
+  const rawProbability = normalCdf(difference / scale);
   const rosterAWinProbability = clamp(rawProbability, 0.1, 0.9);
   const advantage = Math.abs(rosterAWinProbability - 0.5);
   const favoredRosterId =
@@ -353,7 +348,7 @@ function standardDeviation(values: number[]): number | null {
   const mean = average(values) ?? 0;
   const variance =
     values.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
-    values.length;
+    (values.length - 1);
   return Math.sqrt(variance);
 }
 

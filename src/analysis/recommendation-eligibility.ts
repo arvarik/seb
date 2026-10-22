@@ -635,15 +635,18 @@ function hasMatchupScoring(value: unknown): boolean {
     rosters.every((roster) => isEmptyArray(asRecord(roster)?.ignoredSettings ?? []));
 }
 
+const MULTI_PLAYER_LIST_TOOLS = new Set([
+  'getRosterPlayers',
+  'getTrendingPlayers',
+  'rankWaiverTargets',
+]);
+const evidenceTextCache = new WeakMap<object, string>();
+
 function isIndividualPlayerTool(toolName: string, hasQuestionMatch = false): boolean {
   return toolName === 'findPlayers' ||
     toolName === 'projectPlayer' ||
     toolName === 'resolvePlayerIdentity' ||
-    (hasQuestionMatch && (
-      toolName === 'getRosterPlayers' ||
-      toolName === 'rankWaiverTargets' ||
-      toolName === 'getTrendingPlayers'
-    ));
+    (hasQuestionMatch && MULTI_PLAYER_LIST_TOOLS.has(toolName));
 }
 
 function individualPlayerResultMatchesQuestion(
@@ -670,16 +673,38 @@ function relevantPlayerSubjects(
   const hasLineupOptimization = toolResults.some(
     (result) => asRecord(result.input)?.fromLineupOptimization === true,
   );
+  const newsValues = !hasQuestionMatch && !hasLineupOptimization
+    ? toolResults.flatMap((result) =>
+        result.toolName === 'searchCurrentNews' || result.toolName === 'searchFirstClassNews'
+          ? [result.input, result.output]
+          : [],
+      )
+    : [];
   const subjects = toolResults.flatMap((result) => {
     if (!PLAYER_IDENTITY_TOOLS.has(result.toolName)) return [];
     const candidates = [
       ...toolInputPlayerSubjects(result),
       ...playerSubjects([result.output]),
     ];
-    return isIndividualPlayerTool(result.toolName, hasQuestionMatch || hasLineupOptimization) &&
-        asRecord(result.input)?.fromLineupOptimization !== true
-      ? candidates.filter((subject) => textMentionsSubject(question, subject))
-      : candidates;
+    if (
+      isIndividualPlayerTool(result.toolName, hasQuestionMatch || hasLineupOptimization) &&
+      asRecord(result.input)?.fromLineupOptimization !== true
+    ) {
+      return candidates.filter((subject) => textMentionsSubject(question, subject));
+    }
+    if (
+      !hasQuestionMatch &&
+      !hasLineupOptimization &&
+      MULTI_PLAYER_LIST_TOOLS.has(result.toolName) &&
+      newsValues.length > 0
+    ) {
+      const matched = candidates.filter((subject) => {
+        const normalized = normalizePlayerName(subject);
+        return Boolean(normalized) && evidenceMatchesSubjects(newsValues, [normalized]);
+      });
+      if (matched.length > 0) return matched;
+    }
+    return candidates;
   });
   return [...new Set(subjects.map(normalizePlayerName).filter(Boolean))];
 }
@@ -755,8 +780,19 @@ function evidenceMatchesSubjects(
   subjects: readonly string[],
 ): boolean {
   if (subjects.length === 0) return false;
-  const evidence = normalizeEvidenceText(values.map(stringifyEvidence).join(' '));
+  const evidence = values.map(normalizedEvidenceForValue).join(' ');
   return subjects.some((subject) => ` ${evidence} `.includes(` ${normalizeEvidenceText(subject)} `));
+}
+
+function normalizedEvidenceForValue(value: unknown): string {
+  if (value && typeof value === 'object') {
+    const cached = evidenceTextCache.get(value);
+    if (cached !== undefined) return cached;
+    const computed = normalizeEvidenceText(stringifyEvidence(value));
+    evidenceTextCache.set(value, computed);
+    return computed;
+  }
+  return normalizeEvidenceText(stringifyEvidence(value));
 }
 
 function stringifyEvidence(value: unknown): string {

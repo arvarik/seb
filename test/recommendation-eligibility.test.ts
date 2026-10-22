@@ -590,3 +590,30 @@ it('filters roster and waiver tool subjects to players named in the question and
   expect(result).toMatchObject({ identity: 'resolved', injury: 'present', leagueScoring: 'present' });
 });
 
+it('narrows multi-player list tools to news-matched targets on open-ended waiver questions', () => {
+  const result = buildRecommendationEvidence({
+    analysis: exampleAnalysis(),
+    question: 'Who should I claim off waivers this week in league 123456?',
+    sources: [directSource(), webSource()],
+    toolResults: [
+      {
+        toolName: 'rankWaiverTargets',
+        output: {
+          leagueId: '123456',
+          methodology: { scoringKeysUsed: ['rec'], scoringKeysIgnored: [] },
+          targets: [
+            { player: { playerId: 'w1', name: 'Top Target', injuryStatus: null } },
+            { player: { playerId: 'w2', name: 'Other Candidate', injuryStatus: null } },
+          ],
+        },
+      },
+      {
+        input: { query: 'Top Target injury status' },
+        toolName: 'searchCurrentNews',
+        output: { result: 'Top Target practiced in full.' },
+      },
+    ],
+  });
+  expect(result).toMatchObject({ identity: 'resolved', injury: 'present', leagueScoring: 'present' });
+});
+

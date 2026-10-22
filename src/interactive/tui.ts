@@ -14,7 +14,6 @@ import {
   formatModelErrorForUser,
   type ModelErrorContext,
 } from '../model-capacity-error.js';
-import { formatInteractiveStreamError } from './stream-error.js';
 import { SourceTracker } from '../sources.js';
 import { FilePromptHistory, type PromptHistory } from './history.js';
 import {
@@ -343,10 +342,9 @@ function requestSetupErrorStream(
   error: unknown,
   context?: ModelErrorContext,
 ): ReadableStream<UIMessageChunk> {
-  const errorText = formatInteractiveStreamError(
-    error,
-    context ?? { providerLabel: 'The model provider' },
-  );
+  const errorText = classifyModelError(error)
+    ? formatModelErrorForUser(error, 'interactive', context)
+    : 'Seb could not start this request. Retry the request.';
   return new ReadableStream<UIMessageChunk>({
     start(controller) {
       controller.enqueue({ type: 'start' });
@@ -369,7 +367,7 @@ function pendingRequestStream(
     } else {
       reader = stream.getReader();
     }
-  }).catch(() => undefined);
+  });
   return new ReadableStream({
     async pull(controller) {
       await ready;

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { CircuitOpenError, ResilientFetch } from '../src/data/resilient-fetch.js';
-import { DEFAULT_MODEL_REQUEST_POLICY } from '../src/ai/resilient-fetch.js';
 
 describe('ResilientFetch', () => {
   it('retries temporary responses and honors Retry-After', async () => {
@@ -43,12 +42,6 @@ describe('ResilientFetch', () => {
     const response = await client.request('https://api.anthropic.com/v1/messages');
     expect(response.status).toBe(200);
     expect(calls).toBe(3);
-  });
-
-  it('exports default model request policy from ai/resilient-fetch', () => {
-    expect(DEFAULT_MODEL_REQUEST_POLICY.timeoutMs).toBe(30_000);
-    expect(DEFAULT_MODEL_REQUEST_POLICY.maxAttempts).toBe(3);
-    expect(DEFAULT_MODEL_REQUEST_POLICY.circuitBreakerCooldownMs).toBe(60_000);
   });
 
   it('opens the circuit after the configured number of failures', async () => {

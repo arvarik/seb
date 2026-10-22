@@ -48,14 +48,6 @@ describe('isModelCapacityError', () => {
     expect(isModelCapacityError(new Error('Resource has been exhausted (e.g. check quota).'))).toBe(true);
   });
 
-  it('detects gateway errors and upstream timeouts as capacity fallback triggers', () => {
-    expect(isModelCapacityError({ statusCode: 502 })).toBe(true);
-    expect(isModelCapacityError({ statusCode: 504 })).toBe(true);
-    expect(isModelCapacityError({ status: 524 })).toBe(true);
-    expect(isModelCapacityError(new Error('Bad Gateway'))).toBe(true);
-    expect(isModelCapacityError(new Error('Gateway Timeout'))).toBe(true);
-  });
-
   it('does not classify authentication failures as capacity errors', () => {
     expect(isModelCapacityError({ statusCode: 401 })).toBe(false);
     expect(isModelCapacityError({
@@ -92,6 +84,7 @@ describe('model error presentation', () => {
       status: 504,
     })).toBe('provider-timeout');
     expect(classifyModelError({ statusCode: '408' })).toBe('provider-timeout');
+    expect(classifyModelError(new Error('504 Gateway Timeout'))).toBe('provider-timeout');
     expect(classifyModelError(new DOMException('Deadline', 'TimeoutError'))).toBe(
       'timeout',
     );

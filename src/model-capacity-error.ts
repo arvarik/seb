@@ -1,7 +1,7 @@
 const CAPACITY_MESSAGE =
-  /high demand|service unavailable|temporarily unavailable|quota exceeded|rate limit|resource.*exhausted|overloaded|too many requests|bad gateway|gateway timeout/i;
+  /high demand|service unavailable|temporarily unavailable|quota exceeded|rate limit|resource.*exhausted|overloaded|too many requests/i;
 
-const CAPACITY_STATUS_CODES = new Set([429, 502, 503, 504, 524, 529]);
+const CAPACITY_STATUS_CODES = new Set([429, 503, 529]);
 const CAPACITY_ERROR_CODES = new Set([
   'insufficient-quota',
   'overloaded-error',
@@ -40,7 +40,7 @@ export function isModelCapacityError(error: unknown, depth = 0): boolean {
     return false;
   }
   if (typeof error === 'string') {
-    return CAPACITY_MESSAGE.test(error) || /\b(?:429|502|503|504|524|529)\b/.test(error);
+    return CAPACITY_MESSAGE.test(error) || /\b(?:429|503|529)\b/.test(error);
   }
   if (!error || typeof error !== 'object') {
     return false;

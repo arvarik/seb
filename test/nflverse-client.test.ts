@@ -13,6 +13,7 @@ const scheduleCsv = `game_id,season,game_type,week,gameday,weekday,gametime,away
 const statsCsv = `player_id,player_display_name,position,season,week,season_type,game_id,team,opponent_team,completions,attempts,passing_yards,passing_tds,passing_interceptions,carries,rushing_yards,rushing_tds,receptions,targets,receiving_yards,receiving_tds,receiving_air_yards,target_share,air_yards_share,fantasy_points,fantasy_points_ppr
 00-1,Josh Allen,QB,2025,1,REG,2025_01_BUF_BAL,BUF,BAL,20,30,250,2,1,8,45,1,0,0,0,0,0,,,28.5,28.5
 00-2,James Cook,RB,2025,1,REG,2025_01_BUF_BAL,BUF,BAL,0,0,0,0,0,15,80,1,4,5,35,0,10,0.12,0.04,17.5,21.5
+00-2,James Cook,RB,2025,2,REG,2025_02_BUF_MIA,BUF,MIA,0,0,0,0,0,12,65,1,2,3,20,0,5,0.10,0.02,14.5,16.5
 `;
 
 describe('NflverseClient', () => {
@@ -84,6 +85,7 @@ describe('NflverseClient', () => {
       season: 2025,
       playerName: 'james cook',
       seasonType: 'REG',
+      week: 1,
     });
 
     expect(stats).toHaveLength(1);
@@ -156,7 +158,7 @@ describe('NflverseClient', () => {
       fetch: async () => csvResponse(aggregate),
     });
 
-    const stats = await client.getPlayerWeeklyStats({ season: 2025 });
+    const stats = await client.getPlayerWeeklyStats({ season: 2025, week: 1 });
 
     expect(stats).toHaveLength(1);
     expect(stats[0]?.playerId).toBe('00-2');

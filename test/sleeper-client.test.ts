@@ -84,6 +84,7 @@ describe('SleeperClient', () => {
       fetch: async () => jsonResponse({
         '1': { player_id: '1', full_name: 'Test Player', position: 'WR', active: false },
         '2': { player_id: '2', full_name: 'Test Player', position: 'QB', active: true },
+        '3': { player_id: '3', full_name: 'Test Player Dual', position: 'RB', fantasy_positions: ['RB', 'WR'], active: true },
       }),
     });
     const players = await client.findPlayers('Test Player', { active: false, position: 'wr' });

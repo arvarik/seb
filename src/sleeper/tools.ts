@@ -98,7 +98,7 @@ export function createSleeperTools(client: SleeperClient) {
       ],
       execute: async ({ team, position, includeInactive, limit }) => {
         const players = Object.values(await client.getPlayers({
-          active: !includeInactive,
+          ...(includeInactive ? {} : { active: true }),
           ...(position ? { position } : {}),
         }))
           .filter((player) => player.team?.toUpperCase() === team)
@@ -150,15 +150,27 @@ export function createSleeperTools(client: SleeperClient) {
       description:
         'List fantasy team names and owner names for a Sleeper league. Use this for team-name or league-member questions.',
       inputSchema: z.object({ leagueId: leagueIdSchema }),
-      execute: async ({ leagueId }) => ({
-        leagueId,
-        teams: (await client.getLeagueUsers(leagueId)).map((user) => ({
-          userId: user.user_id,
-          teamName: user.metadata?.team_name?.trim() || null,
-          displayName: user.display_name ?? user.username ?? null,
-          isCommissioner: user.is_owner ?? null,
-        })),
-      }),
+      execute: async ({ leagueId }) => {
+        const [users, rosters] = await Promise.all([
+          client.getLeagueUsers(leagueId),
+          client.getLeagueRosters(leagueId),
+        ]);
+        const rosterByOwner = new Map(
+          rosters
+            .filter((roster) => roster.owner_id)
+            .map((roster) => [roster.owner_id!, roster]),
+        );
+        return {
+          leagueId,
+          teams: users.map((user) => ({
+            userId: user.user_id,
+            rosterId: rosterByOwner.get(user.user_id)?.roster_id ?? null,
+            teamName: user.metadata?.team_name?.trim() || null,
+            displayName: user.display_name ?? user.username ?? null,
+            isCommissioner: user.is_owner ?? null,
+          })),
+        };
+      },
     }),
 
     getLeagueOverview: tool({

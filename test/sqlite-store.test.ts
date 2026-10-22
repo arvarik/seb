@@ -126,6 +126,19 @@ describe('SebDatabase', () => {
     expect(
       database.getCache('schedule', '2026', new Date('2026-08-20T12:00:04.000Z')),
     ).toMatchObject({ freshness: 'expired' });
+    const mutable = [{ gameId: 'game-2' }];
+    const saved = database.putCache({
+      cachedAt: '2026-08-20T12:00:00.000Z',
+      key: 'zero-ttl',
+      namespace: 'schedule',
+      schemaVersion: 'v1',
+      staleIfErrorMs: 2_000,
+      ttlMs: 0,
+      value: mutable,
+    });
+    mutable[0]!.gameId = 'mutated';
+    expect(saved.freshness).toBe('stale');
+    expect(saved.value).toEqual([{ gameId: 'game-2' }]);
   });
 
   it('does not apply an old policy update to a replacement cache row', () => {
@@ -1180,6 +1193,47 @@ describe('CachedResource', () => {
 
     database.deleteCachePrefix('news', 'discovery:source-b:');
     expect(database.searchNewsArticlesFts(['rehabilitation']).size).toBe(0);
+  });
+
+  it('bounds the L1 cache to 128 entries and clears L1 on deleteCachePrefix', async () => {
+    const database = createDatabase();
+    const policy = { schemaVersion: 'v1', staleIfErrorMs: 60_000, ttlMs: 60_000 };
+    for (let index = 0; index <= 128; index += 1) {
+      const resource = new CachedResource<{ index: number }>(
+        database,
+        'l1-test',
+        `key-${index}`,
+        `https://example.test/${index}`,
+        policy,
+      );
+      await resource.read(async () => ({ value: { index } }));
+    }
+    const getCacheSpy = vi.spyOn(database, 'getCache');
+    const newest = new CachedResource<{ index: number }>(
+      database,
+      'l1-test',
+      'key-128',
+      'https://example.test/128',
+      policy,
+    );
+    await newest.read(async () => ({ value: { index: -1 } }));
+    expect(getCacheSpy).not.toHaveBeenCalled();
+
+    const evicted = new CachedResource<{ index: number }>(
+      database,
+      'l1-test',
+      'key-0',
+      'https://example.test/0',
+      policy,
+    );
+    await evicted.read(async () => ({ value: { index: -1 } }));
+    expect(getCacheSpy).toHaveBeenCalledWith('l1-test', 'key-0');
+
+    getCacheSpy.mockClear();
+    database.deleteCachePrefix('l1-test', 'key-12');
+    await expect(
+      newest.read(async () => ({ value: { index: 999 } })),
+    ).resolves.toMatchObject({ outcome: 'source-updated', value: { index: 999 } });
   });
 });
 

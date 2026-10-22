@@ -58,6 +58,7 @@ const SCOPED_RESOURCE_FLIGHTS = new WeakMap<object, Map<string, ResourceFlight>>
 const DATABASE_L1_CACHE = new Map<string, Map<string, { revision: number; entry: CacheEntry<unknown> }>>();
 const HOOKED_DATABASES = new WeakSet<object>();
 const NEVER_ABORT_SIGNAL = new AbortController().signal;
+const MAX_L1_ENTRIES = 128;
 
 export class CachedResource<T> {
   constructor(
@@ -76,6 +77,27 @@ export class CachedResource<T> {
         DATABASE_L1_CACHE.get(db.file)?.delete(`${write.namespace}:${write.key}`);
         return expectedRevision === undefined ? originalPut(write) : originalPut(write, expectedRevision);
       }) as SebDatabase['putCache'];
+      if (typeof db.deleteCache === 'function') {
+        const originalDelete = db.deleteCache.bind(db);
+        db.deleteCache = ((namespace: string, key?: string) => {
+          DATABASE_L1_CACHE.delete(db.file);
+          return originalDelete(namespace, key);
+        }) as SebDatabase['deleteCache'];
+      }
+      if (typeof db.deleteCachePrefix === 'function') {
+        const originalDeletePrefix = db.deleteCachePrefix.bind(db);
+        db.deleteCachePrefix = ((namespace: string, keyPrefix: string) => {
+          DATABASE_L1_CACHE.delete(db.file);
+          return originalDeletePrefix(namespace, keyPrefix);
+        }) as SebDatabase['deleteCachePrefix'];
+      }
+      if (typeof db.close === 'function') {
+        const originalClose = db.close.bind(db);
+        db.close = (() => {
+          DATABASE_L1_CACHE.delete(db.file);
+          originalClose();
+        }) as SebDatabase['close'];
+      }
     }
   }
 
@@ -408,7 +430,13 @@ export class CachedResource<T> {
       map = new Map();
       DATABASE_L1_CACHE.set(this.database.file, map);
     }
-    map.set(this.l1Key(), { revision, entry });
+    const key = this.l1Key();
+    map.delete(key);
+    if (map.size >= MAX_L1_ENTRIES) {
+      const oldestKey = map.keys().next().value;
+      if (oldestKey !== undefined) map.delete(oldestKey);
+    }
+    map.set(key, { revision, entry });
   }
 
   private evictL1(): void {

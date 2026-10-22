@@ -128,7 +128,6 @@ const PLAYER_COLUMNS: ReadonlySet<string> = new Set([
 ]);
 
 interface PlayerStatsIndex {
-  byNormalizedName: Map<string, NflversePlayerWeek[]>;
   normalizedNames: WeakMap<NflversePlayerWeek, string>;
 }
 
@@ -708,18 +707,14 @@ function getPlayerStatsIndex(
 ): PlayerStatsIndex {
   const existing = PLAYER_STATS_INDEX.get(stats);
   if (existing) return existing;
-  const byNormalizedName = new Map<string, NflversePlayerWeek[]>();
   const normalizedNames = new WeakMap<NflversePlayerWeek, string>();
   for (const row of stats) {
     const normalized = normalizeText(row.playerDisplayName);
     if (normalized) {
       normalizedNames.set(row, normalized);
-      const group = byNormalizedName.get(normalized) ?? [];
-      group.push(row);
-      byNormalizedName.set(normalized, group);
     }
   }
-  const created: PlayerStatsIndex = { byNormalizedName, normalizedNames };
+  const created: PlayerStatsIndex = { normalizedNames };
   PLAYER_STATS_INDEX.set(stats, created);
   return created;
 }

@@ -98,11 +98,12 @@ export function createSleeperTools(client: SleeperClient) {
       ],
       execute: async ({ team, position, includeInactive, limit }) => {
         const players = Object.values(await client.getPlayers({
-          active: !includeInactive,
+          ...(includeInactive ? {} : { active: true }),
           ...(position ? { position } : {}),
         }))
           .filter((player) => player.team?.toUpperCase() === team)
           .filter((player) => includeInactive || player.active !== false)
+          .filter((player) => !position || player.position?.toUpperCase() === position.toUpperCase())
           .sort(compareTeamPlayers);
         return {
           team,
@@ -229,15 +230,6 @@ export function createSleeperTools(client: SleeperClient) {
         leagueId,
         week,
         matchups: await client.getLeagueMatchups(leagueId, week),
-      }),
-      toModelOutput: ({ output }) => ({
-        type: 'json',
-        value: {
-          ...output,
-          matchups: output.matchups.map(
-            ({ players: _players, players_points: _playersPoints, ...matchup }) => matchup,
-          ),
-        } as unknown as JSONValue,
       }),
     }),
 

@@ -88,7 +88,7 @@ describe('SleeperClient', () => {
       }),
     });
     const players = await client.findPlayers('Test Player', { active: false, position: 'wr' });
-    expect(players.map((player) => player.player_id)).toEqual(['1', '3']);
+    expect(players.map((player) => player.player_id)).toEqual(['1']);
   });
 
   it('retains citations for different player filters and trending windows', async () => {

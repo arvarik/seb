@@ -37,45 +37,6 @@ describe('Sleeper information tools', () => {
     ]);
   });
 
-  it('strips bench players and players_points from getLeagueMatchups model output', () => {
-    const tool = createSleeperTools({} as SleeperClient).getLeagueMatchups;
-    const projected = tool.toModelOutput!({
-      toolCallId: 'm1',
-      input: { leagueId: '123', week: 1 },
-      output: {
-        leagueId: '123',
-        week: 1,
-        matchups: [
-          {
-            roster_id: 1,
-            matchup_id: 2,
-            points: 112.4,
-            custom_points: null,
-            starters: ['4046'],
-            players: ['4046', '9999'],
-            players_points: { '4046': 24.2, '9999': 0 },
-          },
-        ],
-      },
-    });
-    expect(projected).toEqual({
-      type: 'json',
-      value: {
-        leagueId: '123',
-        week: 1,
-        matchups: [
-          {
-            roster_id: 1,
-            matchup_id: 2,
-            points: 112.4,
-            custom_points: null,
-            starters: ['4046'],
-          },
-        ],
-      },
-    });
-  });
-
   it('lists one team player set and states the source limit', async () => {
     const client = new SleeperClient({
       fetch: async () => Response.json({
@@ -100,11 +61,26 @@ describe('Sleeper information tools', () => {
           team: 'SF',
           active: true,
         },
+        '4': {
+          player_id: '4',
+          full_name: 'Seattle Inactive Receiver',
+          position: 'WR',
+          team: 'SEA',
+          active: false,
+        },
+        '5': {
+          player_id: '5',
+          full_name: 'Seattle Dual Running Back',
+          position: 'RB',
+          fantasy_positions: ['RB', 'WR'],
+          team: 'SEA',
+          active: true,
+        },
       }),
       playerCacheFile: false,
     });
     const execute = createSleeperTools(client).getTeamPlayers.execute as unknown as (
-      input: { includeInactive: boolean; limit: number; team: string },
+      input: { includeInactive: boolean; limit: number; position?: string; team: string },
     ) => Promise<{
       players: Array<{ name: string }>;
       sourceLimit: string;
@@ -113,11 +89,24 @@ describe('Sleeper information tools', () => {
 
     const result = await execute({ team: 'SEA', includeInactive: false, limit: 100 });
 
-    expect(result.totalPlayers).toBe(2);
+    expect(result.totalPlayers).toBe(3);
     expect(result.players.map((player) => player.name)).toEqual([
       'Seattle Quarterback',
+      'Seattle Dual Running Back',
       'Seattle Receiver',
     ]);
     expect(result.sourceLimit).toContain('not an official NFL roster');
+
+    const withInactive = await execute({
+      team: 'SEA',
+      position: 'WR',
+      includeInactive: true,
+      limit: 100,
+    });
+    expect(withInactive.totalPlayers).toBe(2);
+    expect(withInactive.players.map((player) => player.name)).toEqual([
+      'Seattle Inactive Receiver',
+      'Seattle Receiver',
+    ]);
   });
 });

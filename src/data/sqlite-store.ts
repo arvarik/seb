@@ -304,7 +304,7 @@ export class SebDatabase {
       schemaVersion: write.schemaVersion,
       sourceUrl: write.sourceUrl ?? null,
       staleUntil,
-      value: write.value,
+      value: JSON.parse(valueJson) as T,
     };
   }
 

@@ -126,17 +126,19 @@ describe('SebDatabase', () => {
     expect(
       database.getCache('schedule', '2026', new Date('2026-08-20T12:00:04.000Z')),
     ).toMatchObject({ freshness: 'expired' });
-    expect(
-      database.putCache({
-        cachedAt: '2026-08-20T12:00:00.000Z',
-        key: 'zero-ttl',
-        namespace: 'schedule',
-        schemaVersion: 'v1',
-        staleIfErrorMs: 2_000,
-        ttlMs: 0,
-        value: [{ gameId: 'game-2' }],
-      }).freshness,
-    ).toBe('stale');
+    const mutable = [{ gameId: 'game-2' }];
+    const saved = database.putCache({
+      cachedAt: '2026-08-20T12:00:00.000Z',
+      key: 'zero-ttl',
+      namespace: 'schedule',
+      schemaVersion: 'v1',
+      staleIfErrorMs: 2_000,
+      ttlMs: 0,
+      value: mutable,
+    });
+    mutable[0]!.gameId = 'mutated';
+    expect(saved.freshness).toBe('stale');
+    expect(saved.value).toEqual([{ gameId: 'game-2' }]);
   });
 
   it('does not apply an old policy update to a replacement cache row', () => {

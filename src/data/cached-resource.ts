@@ -91,6 +91,13 @@ export class CachedResource<T> {
           return originalDeletePrefix(namespace, keyPrefix);
         }) as SebDatabase['deleteCachePrefix'];
       }
+      if (typeof db.close === 'function') {
+        const originalClose = db.close.bind(db);
+        db.close = (() => {
+          DATABASE_L1_CACHE.delete(db.file);
+          originalClose();
+        }) as SebDatabase['close'];
+      }
     }
   }
 

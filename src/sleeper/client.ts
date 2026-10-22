@@ -189,6 +189,8 @@ export class SleeperClient {
 
     return Object.values(players)
       .filter((player) => playerMatches(player, normalizedQuery))
+      .filter((player) => !options.position ||
+        player.position?.toUpperCase() === options.position.trim().toUpperCase())
       .sort((left, right) => comparePlayerMatches(left, right, normalizedQuery))
       .slice(0, limit);
   }

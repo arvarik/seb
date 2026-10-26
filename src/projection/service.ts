@@ -35,6 +35,7 @@ export class PlayerProjectionService {
   private readonly teams = new TeamIdentityRegistry();
   private readonly priorCache = new Map<string, { sum: number; count: number; byPlayer: Map<string, { sum: number; count: number }> }>();
   private readonly residualCache = new Map<string, number[]>();
+  private readonly learningFlights = new Map<string, Promise<{ overrides: Awaited<ReturnType<LearningStore['overrides']>> | null; learned: Awaited<ReturnType<LearningStore['latest']>> | null }>>();
 
   constructor(
     private readonly sleeper: SleeperClient,
@@ -288,18 +289,29 @@ export class PlayerProjectionService {
     position: string,
     scoring: import('../sleeper/types.js').SleeperSettings,
   ) {
-    try {
-      const overrides = this.learning ? await this.learning.overrides() : null;
-      // Existing learned parameters and calibration describe offensive players only.
-      const learned = this.learning && overrides?.enabled !== false && position !== 'K'
-        ? await this.learning.latest(analysisSeason, analysisSeason === request.season ? Math.min(request.week, throughWeek + 1) : throughWeek + 1, scoring) ??
-          (analysisSeason === request.season ? await this.learning.latest(request.season - 1, 19, scoring) : null)
-        : null;
-      return { overrides, learned };
-    } catch {
-      throwIfRequestAborted();
-      throw new ResearchDataError('Seb cannot read valid local forecast settings. Run /doctor to inspect the saved learning data, then retry.');
-    }
+    const isKicker = position.toUpperCase() === 'K';
+    const targetWeek = analysisSeason === request.season ? Math.min(request.week, throughWeek + 1) : throughWeek + 1;
+    const key = `${analysisSeason}:${targetWeek}:${request.season}:${isKicker ? 'K' : 'OFF'}:${scoringKey(scoring)}`;
+    const existing = this.learningFlights.get(key);
+    if (existing) return existing;
+    const flight = (async () => {
+      try {
+        const overrides = this.learning ? await this.learning.overrides() : null;
+        // Existing learned parameters and calibration describe offensive players only.
+        const learned = this.learning && overrides?.enabled !== false && !isKicker
+          ? await this.learning.latest(analysisSeason, targetWeek, scoring) ??
+            (analysisSeason === request.season ? await this.learning.latest(request.season - 1, 19, scoring) : null)
+          : null;
+        return { overrides, learned };
+      } catch {
+        throwIfRequestAborted();
+        throw new ResearchDataError('Seb cannot read valid local forecast settings. Run /doctor to inspect the saved learning data, then retry.');
+      } finally {
+        this.learningFlights.delete(key);
+      }
+    })();
+    this.learningFlights.set(key, flight);
+    return flight;
   }
 }
 
@@ -334,11 +346,15 @@ function resolveSleeperPlayer(
   position: string,
 ): SleeperPlayer | null {
   const normalized = normalizeName(name);
-  const matches = players.filter((player) => player.position?.toUpperCase() === position.toUpperCase() &&
+  let matches = players.filter((player) => player.position?.toUpperCase() === position.toUpperCase() &&
     normalizeName(
       player.full_name ?? [player.first_name, player.last_name].filter(Boolean).join(' '),
     ) === normalized,
   );
+  if (matches.length > 1) {
+    const activeRostered = matches.filter((player) => player.active !== false && Boolean(player.team));
+    if (activeRostered.length === 1) matches = activeRostered;
+  }
   if (matches.length > 1) throw new ResearchDataError('The current player profile is ambiguous. Resolve a source identity first.');
   return matches[0] ?? null;
 }

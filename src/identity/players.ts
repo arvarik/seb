@@ -233,7 +233,7 @@ export function playerSeedFromSleeper(player: SleeperPlayer): PlayerIdentitySeed
     player.full_name?.trim() ||
     [player.first_name, player.last_name].filter(Boolean).join(' ').trim();
   return {
-    active: player.active === true,
+    active: player.active !== false,
     sourceProvider: 'sleeper',
     sourceId: player.player_id,
     displayName,

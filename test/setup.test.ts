@@ -287,6 +287,14 @@ describe('first-run setup wizard', () => {
     ]);
     expect(session.leagues[0]?.actionCenter?.playerStatusSignals).toEqual([]);
   });
+
+  it('hydrates ownedPlayers into each discovered league summary for automatic league selection', async () => {
+    const session = createSessionState();
+    await refreshAutomaticSession(new FakeSleeperDiscovery(), session, 'arvarik');
+
+    expect(session.leagues[0]?.ownedPlayers).toEqual(['Test Player']);
+    expect(session.leagues[1]?.ownedPlayers).toEqual(['Test Player']);
+  });
 });
 
 describe('file setup profile store', () => {

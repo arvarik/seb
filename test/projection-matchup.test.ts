@@ -305,5 +305,80 @@ describe('full-roster optimal lineup solver', () => {
     expect(result.complete).toBe(true);
     expect(result.optimalLineup.find((entry) => entry.slot === 'TE')?.playerId).toBe('dual');
   });
+
+  it('pins in-progress starters while keeping unlocked mid-week swaps recommendation-eligible and scores completed-week win probability', async () => {
+    const f = fixture();
+    // Make 'done' an in-progress starter (< 8h since kickoff) and 'a' an unlocked 4pm starter beat by 'bench'
+    f.schedule[1]!.gameDate = '2026-09-10';
+    f.schedule[1]!.gameTime = '16:00';
+    f.sides[0]!.starters = ['done', 'a'];
+    f.sides[0]!.players = ['done', 'a', 'bench'];
+    const rosters: SleeperRoster[] = [{
+      roster_id: 1,
+      league_id: '123',
+      starters: ['done', 'a'],
+      players: ['done', 'a', 'bench'],
+      settings: {},
+    }];
+    const sleeperWithRosters = {
+      ...f.sleeper,
+      getLeague: vi.fn(async () => league({ season: '2026', roster_positions: ['WR', 'FLEX', 'BN'] })),
+      getLeagueRosters: vi.fn(async () => rosters),
+    };
+    f.service.project.mockImplementation(async ({ playerName }: { playerName: string }) => ({
+      expectedPoints: playerName === 'Bench Player' ? 16.5 : 10.0,
+      floor: 6,
+      ceiling: 22,
+      scoreScope: 'weekly-estimate',
+      recommendationEligible: true,
+      limitations: [],
+      player: {
+        playerId: playerName === 'Bench Player' ? 'bench' : 'a',
+        name: playerName,
+        position: 'RB',
+        fantasy_positions: ['RB'],
+        team: 'BUF',
+      },
+      league: { leagueId: '123', name: 'Test League' },
+      scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+    } as unknown as ScoringAwarePlayerProjection));
+
+    const midWeek = await optimizeRosterLineup(sleeperWithRosters, f.nflverse, f.service, request, now);
+    expect(midWeek.complete).toBe(false);
+    expect(midWeek.recommendationEligible).toBe(true);
+    expect(midWeek.optimalLineup[0]?.playerId).toBe('done');
+    expect(midWeek.recommendedSwaps).toEqual([{
+      slot: 'FLEX',
+      startPlayer: { playerId: 'bench', name: 'Bench Player', position: 'RB', points: 16.5 },
+      sitPlayer: { playerId: 'a', name: 'Player A', position: 'RB', points: 10, injuryStatus: null },
+      pointsGain: 6.5,
+    }]);
+
+    // Infer FLEX automatically when rosterPositions are supplied to compareProjections
+    const rbProj = {
+      expectedPoints: 15, floor: 9, ceiling: 21, season: 2026, week: 1,
+      league: { leagueId: '123', name: 'Test' }, opponent: 'MIA', recommendationEligible: true,
+      player: { playerId: 'rb1', name: 'Runner', position: 'RB', team: 'BUF' },
+    } as unknown as ScoringAwarePlayerProjection;
+    const wrProj = {
+      ...rbProj, expectedPoints: 13,
+      player: { playerId: 'wr1', name: 'Receiver', position: 'WR', team: 'MIA' },
+    } as unknown as ScoringAwarePlayerProjection;
+    expect(compareProjections([rbProj, wrProj], undefined, ['QB', 'RB', 'WR', 'FLEX', 'BN'])).toMatchObject({
+      slot: 'FLEX',
+      recommendationEligible: true,
+      preferredPlayerId: 'rb1',
+    });
+
+    // Completed-week matchup deterministic winProbability
+    const completedFixture = fixture();
+    completedFixture.sides[0]!.starters = ['done'];
+    completedFixture.sides[1]!.starters = ['D'];
+    completedFixture.profiles.D!.team = 'NE';
+    completedFixture.sides[0]!.players_points = { done: 18.5 };
+    completedFixture.sides[1]!.players_points = { D: 9.0 };
+    const finalMatchup = await completedFixture.run();
+    expect(finalMatchup.winProbability).toBe(1);
+  });
 });
 

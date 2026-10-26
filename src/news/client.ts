@@ -49,6 +49,10 @@ const MAX_CRAWL_DELAY_MS = 30_000;
 const MAX_REDIRECTS = 5;
 const MAX_PUBLICATION_FUTURE_MS = DAY_MS;
 const SEARCH_BUDGET_MS = 20_000;
+const SOURCE_DISCOVERY_TIMEOUT_MS = 8_000;
+const DEFAULT_HTTP_TIMEOUT_MS = 12_000;
+const MAX_ACTIVE_FANTASYPROS_TEAM_LOADS = 2;
+const MAX_HOST_CONCURRENCY = 3;
 const SOURCE_SCHEMA_VERSION = 'news-v1';
 const USER_AGENT_TOKEN = 'seb';
 const ENRICHMENT_LIMIT_PER_SOURCE = 3;
@@ -241,6 +245,7 @@ export class NewsSourceError extends Error {
 }
 
 export class NewsClient {
+  private activeFantasyProsTeamLoads = 0;
   private readonly database: SebDatabase | false;
   private readonly hostScheduler: HostScheduler;
   private readonly httpByOrigin = new Map<string, ResilientFetch>();
@@ -263,7 +268,7 @@ export class NewsClient {
     this.requestOptions = {
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.policy ? { policy: options.policy } : {}),
-      timeoutMs: options.timeoutMs ?? 20_000,
+      timeoutMs: options.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
     };
     this.hostScheduler = new HostScheduler(() => this.now().getTime());
     this.sources = validateSourceRegistry(
@@ -298,7 +303,11 @@ export class NewsClient {
     const loaded = (await Promise.all(selected.map(async (source) => {
       try {
         const skipRawIndex = Boolean(source.enrichArticles) || (feedCounts.get(source.id) ?? 0) > 1;
-        return await this.loadSource(source, signal, skipRawIndex);
+        const sourceSignal = AbortSignal.any([
+          signal,
+          AbortSignal.timeout(SOURCE_DISCOVERY_TIMEOUT_MS),
+        ]);
+        return await this.loadSource(source, sourceSignal, skipRawIndex);
       } catch (error) {
         callerSignal?.throwIfAborted();
         failures.push(sourceFailure(source, error));
@@ -601,6 +610,21 @@ export class NewsClient {
       input.categories ?? ['official', 'independent', 'fantasy'],
     );
     const normalizedQuery = normalizeSearchText(query);
+    const baseFantasyProsTeam = this.sources.find(
+      (candidate) => candidate.id === 'fantasypros-team-news',
+    );
+    const singleTeam = teams.size === 1 ? [...teams][0] : undefined;
+    const singleFantasyProsTeamSource =
+      singleTeam && baseFantasyProsTeam
+        ? withFantasyProsTeam(baseFantasyProsTeam, singleTeam)
+        : null;
+    // Multi-team queries or concurrent uncached team scrapes fall back to the
+    // single coalesced FantasyPros player feed instead of serial per-team scrapes.
+    const useAutomaticFantasyProsTeam = Boolean(
+      singleFantasyProsTeamSource &&
+      (this.hasFreshDiscoveryCache(singleFantasyProsTeamSource) ||
+        this.activeFantasyProsTeamLoads < MAX_ACTIVE_FANTASYPROS_TEAM_LOADS),
+    );
     return this.sources.flatMap((source): NewsSourceDefinition[] => {
       if (requestedIds && !requestedIds.has(source.id)) return [];
       if (!requestedIds && !categories.has(source.category)) return [];
@@ -615,16 +639,36 @@ export class NewsClient {
         !source.activationTerms.some((term) => normalizedQuery.includes(term))
       ) return [];
       if (source.id === 'fantasypros-team-news') {
-        if (teams.size === 0) return requestedIds?.has(source.id) ? [source] : [];
-        return [...teams].map((team) => withFantasyProsTeam(source, team));
+        if (requestedIds?.has(source.id)) {
+          return teams.size === 0
+            ? [source]
+            : [...teams].map((team) => withFantasyProsTeam(source, team));
+        }
+        return useAutomaticFantasyProsTeam && singleFantasyProsTeamSource
+          ? [singleFantasyProsTeamSource]
+          : [];
       }
       if (
         source.id === 'fantasypros-player-news' &&
-        teams.size > 0 &&
+        useAutomaticFantasyProsTeam &&
         !requestedIds?.has(source.id)
       ) return [];
       return [source];
     });
+  }
+
+  private hasFreshDiscoveryCache(source: NewsSourceDefinition): boolean {
+    if (!this.database) return false;
+    try {
+      const cached = this.database.getCache(
+        'news',
+        `discovery:${source.id}:${source.discoveryUrl}`,
+        this.now(),
+      );
+      return cached?.freshness === 'fresh';
+    } catch {
+      return false;
+    }
   }
 
   private async loadSource(
@@ -632,66 +676,75 @@ export class NewsClient {
     signal?: AbortSignal,
     skipRawIndex = false,
   ): Promise<LoadedNewsSource> {
-    const resource = new CachedResource<DiscoveredNewsArticle[]>(
-      this.database,
-      'news',
-      `discovery:${source.id}:${source.discoveryUrl}`,
-      source.discoveryUrl,
-      {
-        schemaVersion: SOURCE_SCHEMA_VERSION,
-        staleIfErrorMs: sourceStaleIfError(source),
-        ttlMs: sourceTtl(source),
-        validate: (value) => discoveredArticlesSchema.parse(value),
-      },
-      this,
-    );
-    const result = await resource.read(async (conditional) => {
-      const fetched = await this.fetchText(
+    const trackFantasyProsTeam =
+      source.id === 'fantasypros-team-news' &&
+      Boolean(source.team) &&
+      !this.hasFreshDiscoveryCache(source);
+    if (trackFantasyProsTeam) this.activeFantasyProsTeamLoads += 1;
+    try {
+      const resource = new CachedResource<DiscoveredNewsArticle[]>(
+        this.database,
+        'news',
+        `discovery:${source.id}:${source.discoveryUrl}`,
         source.discoveryUrl,
-        conditional,
-        MAX_DISCOVERY_BYTES,
-        source.discoveryKind === 'html' ? 'html' : 'xml',
+        {
+          schemaVersion: SOURCE_SCHEMA_VERSION,
+          staleIfErrorMs: sourceStaleIfError(source),
+          ttlMs: sourceTtl(source),
+          validate: (value) => discoveredArticlesSchema.parse(value),
+        },
+        this,
       );
-      if ('notModified' in fetched) return fetched;
-      const parsed = parseSourceBody(source, fetched.body, this.now())
-        .filter((article) => sourceAllowsArticle(source, article))
-        .sort(compareDiscoveredDates)
-        .slice(0, 500);
-      if (parsed.length === 0) {
-        throw new NewsSourceError(
-          'The news source returned no valid articles.',
-          fetched.status,
+      const result = await resource.read(async (conditional) => {
+        const fetched = await this.fetchText(
           source.discoveryUrl,
+          conditional,
+          MAX_DISCOVERY_BYTES,
+          source.discoveryKind === 'html' ? 'html' : 'xml',
         );
+        if ('notModified' in fetched) return fetched;
+        const parsed = parseSourceBody(source, fetched.body, this.now())
+          .filter((article) => sourceAllowsArticle(source, article))
+          .sort(compareDiscoveredDates)
+          .slice(0, 500);
+        if (parsed.length === 0) {
+          throw new NewsSourceError(
+            'The news source returned no valid articles.',
+            fetched.status,
+            source.discoveryUrl,
+          );
+        }
+        const sourceTimestamp = parsed.find(
+          (article) => article.publishedAt,
+        )?.publishedAt;
+        return {
+          etag: fetched.etag,
+          lastModified: fetched.lastModified,
+          ...(sourceTimestamp ? { sourceTimestamp } : {}),
+          value: parsed,
+        };
+      }, signal ? { signal } : {});
+      if (
+        !skipRawIndex &&
+        this.database &&
+        typeof this.database.indexNewsArticles === 'function' &&
+        (result.outcome === 'source-updated' || this.indexedSources.get(source.id) !== source.discoveryUrl)
+      ) {
+        this.database.indexNewsArticles(source.id, result.value);
+        this.indexedSources.set(source.id, source.discoveryUrl);
       }
-      const sourceTimestamp = parsed.find(
-        (article) => article.publishedAt,
-      )?.publishedAt;
+      this.recordSource(source, result);
       return {
-        etag: fetched.etag,
-        lastModified: fetched.lastModified,
-        ...(sourceTimestamp ? { sourceTimestamp } : {}),
-        value: parsed,
+        articles: result.value,
+        fetchedAt: result.cache.cachedAt,
+        outcome: result.outcome,
+        source,
+        ...(result.error ? { error: result.error } : {}),
+        ...(result.warnings ? { warnings: result.warnings } : {}),
       };
-    }, signal ? { signal } : {});
-    if (
-      !skipRawIndex &&
-      this.database &&
-      typeof this.database.indexNewsArticles === 'function' &&
-      (result.outcome === 'source-updated' || this.indexedSources.get(source.id) !== source.discoveryUrl)
-    ) {
-      this.database.indexNewsArticles(source.id, result.value);
-      this.indexedSources.set(source.id, source.discoveryUrl);
+    } finally {
+      if (trackFantasyProsTeam) this.activeFantasyProsTeamLoads -= 1;
     }
-    this.recordSource(source, result);
-    return {
-      articles: result.value,
-      fetchedAt: result.cache.cachedAt,
-      outcome: result.outcome,
-      source,
-      ...(result.error ? { error: result.error } : {}),
-      ...(result.warnings ? { warnings: result.warnings } : {}),
-    };
   }
 
   private async loadArticleMetadata(
@@ -981,7 +1034,7 @@ export class NewsClient {
         ...(this.requestOptions.fetch ? { fetch: this.requestOptions.fetch } : {}),
         now: () => this.now().getTime(),
         policy: {
-          timeoutMs: this.requestOptions.timeoutMs ?? 20_000,
+          timeoutMs: this.requestOptions.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
           ...this.requestOptions.policy,
           maxAttempts: 1,
         },
@@ -995,10 +1048,14 @@ export class NewsClient {
     source: NewsSourceDefinition,
     result: ResourceResult<DiscoveredNewsArticle[]>,
   ): void {
+    const sourceKey =
+      source.id === 'fantasypros-team-news' && source.team
+        ? `${source.id}:${source.team}`
+        : source.id;
     this.onSource?.({
       cacheOutcome: result.outcome,
       ...(result.error ? { error: result.error } : {}),
-      id: `news-source:${source.id}`,
+      id: `news-source:${sourceKey}`,
       label: source.label,
       retrievedAt: result.cache.cachedAt,
       url: source.discoveryUrl,
@@ -1009,6 +1066,7 @@ export class NewsClient {
 
 class HostScheduler {
   private readonly lastStartedAt = new Map<string, number>();
+  private readonly pools = new Map<string, { active: number; queue: Array<() => void> }>();
   private readonly tails = new Map<string, Promise<void>>();
 
   constructor(private readonly now: () => number) {}
@@ -1019,6 +1077,9 @@ class HostScheduler {
     signal: AbortSignal,
     task: () => Promise<T>,
   ): Promise<T> {
+    if (delayMs <= 0) {
+      return this.runConcurrent(key, signal, task);
+    }
     const prior = this.tails.get(key) ?? Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>((resolveGate) => {
@@ -1036,6 +1097,51 @@ class HostScheduler {
     } finally {
       release();
       if (this.tails.get(key) === tail) this.tails.delete(key);
+    }
+  }
+
+  private async runConcurrent<T>(
+    key: string,
+    signal: AbortSignal,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    signal.throwIfAborted();
+    let pool = this.pools.get(key);
+    if (!pool) {
+      pool = { active: 0, queue: [] };
+      this.pools.set(key, pool);
+    }
+    const activePool = pool;
+    if (activePool.active >= MAX_HOST_CONCURRENCY) {
+      await new Promise<void>((resolveSlot, rejectSlot) => {
+        const grant = () => {
+          signal.removeEventListener('abort', onAbort);
+          resolveSlot();
+        };
+        const onAbort = () => {
+          const index = activePool.queue.indexOf(grant);
+          if (index >= 0) activePool.queue.splice(index, 1);
+          rejectSlot(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+        };
+        activePool.queue.push(grant);
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      });
+    } else {
+      activePool.active += 1;
+    }
+    try {
+      signal.throwIfAborted();
+      return await task();
+    } finally {
+      const next = activePool.queue.shift();
+      if (next) next();
+      else {
+        activePool.active -= 1;
+        if (activePool.active === 0 && this.pools.get(key) === activePool) {
+          this.pools.delete(key);
+        }
+      }
     }
   }
 }

@@ -220,6 +220,7 @@ export async function connectSleeperSession(
       deadlines: leagueDeadlines(league),
       leagueId: league.league_id,
       name: league.name,
+      ownedPlayers: ownedLeaguePlayerNames(rosters, playerResult.players),
       rosterIds: rosters.map((roster) => roster.roster_id),
       status: league.status,
       warning,
@@ -332,6 +333,24 @@ function settingInteger(
   return Number.isInteger(number) && number >= minimum && number <= maximum
     ? number
     : null;
+}
+
+function ownedLeaguePlayerNames(
+  rosters: readonly SleeperRoster[],
+  players: SleeperPlayerMap,
+): string[] {
+  const names = new Set<string>();
+  for (const roster of rosters) {
+    for (const playerId of roster.players ?? []) {
+      const player = players[playerId];
+      if (!player) continue;
+      const fullName = player.full_name?.trim() ||
+        [player.first_name?.trim(), player.last_name?.trim()].filter(Boolean).join(' ') ||
+        (player.position === 'DEF' && player.team ? `${player.team} D/ST` : '');
+      if (fullName) names.add(fullName);
+    }
+  }
+  return [...names].slice(0, 40);
 }
 
 function selectAutomaticLeague(session: SessionState): void {

@@ -16,6 +16,7 @@ export interface SessionLeagueContext {
   deadlines: string[];
   leagueId: string;
   name: string;
+  ownedPlayers?: string[];
   rosterIds: number[];
   status: string;
   warning: string | null;
@@ -219,13 +220,15 @@ export function formatSessionInstructions(state: SessionState): string {
     'Disclose the Sleeper refresh error when it prevents a requested fantasy answer.',
     'Do not ask the user to set a season or week unless the user requests another period.',
     'Use discovered league and roster values before asking for an ID.',
-    'Ask which league only when several discovered leagues make the request ambiguous.',
+    'When a request names players and no league is focused, match ownedPlayers in discovered leagues to select the unambiguous league automatically.',
+    'When no league is focused and 2 to 4 active owned leagues apply to an open lineup, matchup, or waiver question, evaluate all active owned leagues in parallel and group the answer by league name instead of asking which league.',
+    'Ask which league only when more than 4 active leagues apply or a single-league trade/action remains genuinely ambiguous across leagues.',
     'Use these values when the request does not give a different value.',
     'Use the active NFL player for a follow-up request that omits the player name.',
-    'Treat an ambiguous or unset field as unresolved.',
-    'Resolve each field that affects a recommendation before you recommend an action.',
-    'Ask one concise clarification question when a required field remains unresolved.',
-    'Do not select a league, roster, player, season, or week only to avoid that question.',
+    'Treat an ambiguous or unset field as unresolved unless owned rosters or discovered active leagues disambiguate it.',
+    'Resolve each field that affects a recommendation using session context and tools before asking the user.',
+    'Ask one concise clarification question only when a required input cannot be resolved automatically.',
+    'Do not invent a league, roster, player, season, or week.',
   ].join('\n');
 }
 
@@ -255,6 +258,7 @@ export function formatSessionData(state: SessionState): string {
         leagueId: league.leagueId,
         status: league.status,
         rosterIds: league.rosterIds,
+        ...(league.ownedPlayers?.length ? { ownedPlayers: league.ownedPlayers } : {}),
         deadlines: league.deadlines,
         warning: league.warning,
       })),

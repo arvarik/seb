@@ -154,4 +154,43 @@ describe('identity tools', () => {
       resolution: { status: 'resolved', identity: { displayName: 'Nick Folk' } },
     });
   });
+
+  it('disambiguates active fantasy skill players over IDP/retired namesakes and falls back on 404 season stats', async () => {
+    const { NflverseApiError } = await import('../src/nflverse/client.js');
+    const sleeper = {
+      findPlayers: async () => [
+        { player_id: 'josh-qb', full_name: 'Josh Allen', position: 'QB', team: 'BUF', active: true, gsis_id: '00-0034857' },
+        { player_id: 'josh-dl', full_name: 'Josh Allen', position: 'DL', team: 'JAX', active: true },
+        { player_id: 'josh-old', full_name: 'Josh Allen', position: 'WR', team: null, active: false },
+      ],
+    } as unknown as SleeperClient;
+    const nflverse = {
+      getPlayerWeeklyStats: async ({ season }: { season: number }) => {
+        if (season === 2026) throw new NflverseApiError('Not published yet', 404, 'https://example.test/2026');
+        return [{
+          playerId: '00-0034857',
+          playerDisplayName: 'Josh Allen',
+          position: 'QB',
+          team: 'BUF',
+        }];
+      },
+    } as unknown as NflverseClient;
+    const tools = createIdentityTools(sleeper, nflverse, { repository: false });
+
+    const result = await tools.resolvePlayerIdentity.execute?.(
+      { name: 'Josh Allen', season: 2026 },
+      { context: {}, messages: [], toolCallId: 'test-josh' },
+    );
+
+    expect(result).toMatchObject({
+      resolution: {
+        status: 'resolved',
+        identity: {
+          canonicalId: 'nfl-player:nflverse:00-0034857',
+          position: 'QB',
+          teamId: 'nfl-team:BUF',
+        },
+      },
+    });
+  });
 });

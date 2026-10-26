@@ -1,8 +1,10 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 
-import { NflverseClient } from '../nflverse/client.js';
+import { NflverseApiError, NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
+import type { SleeperPlayer } from '../sleeper/types.js';
+import { normalizePlayerName } from './normalize.js';
 import {
   buildPlayerIdentityRegistry,
   playerSeedFromNflverse,
@@ -13,6 +15,7 @@ import { IdentityRepository } from './repository.js';
 import type { PlayerIdentityLink } from './types.js';
 
 const seasonSchema = z.number().int().min(1999).max(2100);
+const FANTASY_SKILL_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE', 'K']);
 
 export function createIdentityTools(
   sleeper: SleeperClient,
@@ -72,31 +75,42 @@ export function createIdentityTools(
           return teamResolution;
         }
         const teamCode = teamResolution?.identity.code;
-        const [sleeperPlayers, initialNflverseRows] = await Promise.all([
+        const loadNflverseStats = (queryName: string, targetSeason: number) =>
+          nflverse.getPlayerWeeklyStats({
+            playerName: queryName,
+            season: targetSeason,
+            seasonType: 'REG',
+            ...(position ? { position } : {}),
+            ...(teamCode ? { team: teamCode } : {}),
+          }).catch((error: unknown) => {
+            if (error instanceof NflverseApiError && error.status === 404) return [];
+            throw error;
+          });
+        const [rawSleeperPlayers, initialNflverseRows] = await Promise.all([
           sleeper.findPlayers(name, {
             active: false,
             ...(position ? { position } : {}),
             limit: 25,
           }),
-          nflverse.getPlayerWeeklyStats({
-            playerName: name,
-            season,
-            seasonType: 'REG',
-            ...(position ? { position } : {}),
-            ...(teamCode ? { team: teamCode } : {}),
-          }),
+          loadNflverseStats(name, season),
         ]);
         let nflverseRows = initialNflverseRows;
+        if (nflverseRows.length === 0) {
+          nflverseRows = await loadNflverseStats(name, season - 1);
+        }
+        const sleeperPlayers = disambiguateSleeperCandidates(
+          rawSleeperPlayers,
+          name,
+          position,
+          nflverseRows,
+        );
         const exactSleeper = sleeperPlayers.find((p) => p.player_id === name.trim()) ??
           (sleeperPlayers.length === 1 ? sleeperPlayers[0] : undefined);
         if (nflverseRows.length === 0 && exactSleeper?.full_name && exactSleeper.full_name !== name.trim()) {
-          nflverseRows = await nflverse.getPlayerWeeklyStats({
-            playerName: exactSleeper.full_name,
-            season,
-            seasonType: 'REG',
-            ...(position ? { position } : {}),
-            ...(teamCode ? { team: teamCode } : {}),
-          });
+          nflverseRows = await loadNflverseStats(exactSleeper.full_name, season);
+          if (nflverseRows.length === 0) {
+            nflverseRows = await loadNflverseStats(exactSleeper.full_name, season - 1);
+          }
         }
         const links: PlayerIdentityLink[] = [];
         for (const p of sleeperPlayers) {
@@ -132,10 +146,57 @@ export function createIdentityTools(
           issues: build.issues,
           sourceCounts: {
             nflverseRows: nflverseRows.length,
-            sleeperPlayers: sleeperPlayers.length,
+            sleeperPlayers: rawSleeperPlayers.length,
           },
         };
       },
     }),
   };
+}
+
+function disambiguateSleeperCandidates(
+  players: readonly SleeperPlayer[],
+  queryName: string,
+  requestedPosition: string | undefined,
+  nflverseRows: ReadonlyArray<{ playerId: string; position: string }>,
+): SleeperPlayer[] {
+  if (players.length <= 1 || players.some((player) => player.player_id === queryName.trim())) {
+    return [...players];
+  }
+  const normalizedQuery = normalizePlayerName(queryName);
+  const gsisIds = new Set(nflverseRows.map((row) => row.playerId));
+  const exactMatches = players.filter((player) => {
+    const candidateName = player.full_name ?? [player.first_name, player.last_name].filter(Boolean).join(' ');
+    return normalizePlayerName(candidateName) === normalizedQuery;
+  });
+  let narrowed = [...players];
+  if (exactMatches.length > 1) {
+    const activeExact = exactMatches.filter(
+      (player) => player.active !== false || (player.gsis_id ? gsisIds.has(player.gsis_id.trim()) : false),
+    );
+    if (activeExact.length >= 1 && activeExact.length < exactMatches.length) {
+      const keepIds = new Set(activeExact.map((player) => player.player_id));
+      narrowed = narrowed.filter(
+        (player) => !exactMatches.includes(player) || keepIds.has(player.player_id),
+      );
+    }
+  }
+  if (!requestedPosition) {
+    const remainingExact = narrowed.filter((player) => {
+      const candidateName = player.full_name ?? [player.first_name, player.last_name].filter(Boolean).join(' ');
+      return normalizePlayerName(candidateName) === normalizedQuery;
+    });
+    if (remainingExact.length > 1) {
+      const skillExact = remainingExact.filter((player) =>
+        FANTASY_SKILL_POSITIONS.has(player.position?.toUpperCase() ?? ''),
+      );
+      if (skillExact.length === 1) {
+        const keepId = skillExact[0]!.player_id;
+        narrowed = narrowed.filter(
+          (player) => !remainingExact.includes(player) || player.player_id === keepId,
+        );
+      }
+    }
+  }
+  return narrowed;
 }

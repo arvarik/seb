@@ -80,14 +80,14 @@ export class CachedResource<T> {
       if (typeof db.deleteCache === 'function') {
         const originalDelete = db.deleteCache.bind(db);
         db.deleteCache = ((namespace: string, key?: string) => {
-          DATABASE_L1_CACHE.delete(db.file);
+          evictNamespaceL1(db.file, namespace, key);
           return originalDelete(namespace, key);
         }) as SebDatabase['deleteCache'];
       }
       if (typeof db.deleteCachePrefix === 'function') {
         const originalDeletePrefix = db.deleteCachePrefix.bind(db);
         db.deleteCachePrefix = ((namespace: string, keyPrefix: string) => {
-          DATABASE_L1_CACHE.delete(db.file);
+          evictNamespaceL1(db.file, namespace, undefined, keyPrefix);
           return originalDeletePrefix(namespace, keyPrefix);
         }) as SebDatabase['deleteCachePrefix'];
       }
@@ -522,6 +522,24 @@ export class CachedResource<T> {
       this.policy.snapshotRetention ?? null,
       cacheRevision,
     ]);
+  }
+}
+
+function evictNamespaceL1(
+  file: string,
+  namespace: string,
+  key?: string,
+  keyPrefix?: string,
+): void {
+  const map = DATABASE_L1_CACHE.get(file);
+  if (!map) return;
+  if (key !== undefined) {
+    map.delete(`${namespace}:${key}`);
+    return;
+  }
+  const prefix = `${namespace}:${keyPrefix ?? ''}`;
+  for (const candidate of map.keys()) {
+    if (candidate.startsWith(prefix)) map.delete(candidate);
   }
 }
 

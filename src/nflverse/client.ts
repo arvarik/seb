@@ -14,6 +14,7 @@ import {
 } from '../data/cached-resource.js';
 import { currentRequestSignal } from '../ai/request-signal.js';
 import { normalizePlayerName } from '../identity/normalize.js';
+import { easternKickoff } from '../time.js';
 import {
   readResponseBytes,
   readResponseErrorDetail,
@@ -44,6 +45,8 @@ const MAX_ERROR_BYTES = 4 * 1024;
 const CACHE_SCHEMA_VERSION = 'v3';
 const STATS_SCHEMA_VERSION = 'v6';
 const SCHEDULE_TTL_MS = 6 * 60 * 60 * 1_000;
+const SCHEDULE_SCORE_REVALIDATE_MS = 15 * 60 * 1_000;
+const COMPLETED_GAME_WINDOW_MS = 4 * 60 * 60 * 1_000;
 const STATS_TTL_MS = 6 * 60 * 60 * 1_000;
 const STALE_IF_ERROR_MS = 7 * 24 * 60 * 60 * 1_000;
 
@@ -215,19 +218,34 @@ export class NflverseClient {
     filters: NflverseScheduleFilters = {},
   ): Promise<NflverseGame[]> {
     const sourceUrl = `${this.baseUrl}/schedules/games.csv.gz`;
-    const loaded = await this.loadSchedule(sourceUrl);
-    const games = loaded.value;
-    this.recordSource('nflverse-schedules', 'nflverse schedules', sourceUrl, loaded);
-
+    let loaded = await this.loadSchedule(sourceUrl);
     const team = filters.team === undefined ? undefined : normalizeNflverseTeam(filters.team);
     const gameType = filters.gameType?.trim().toUpperCase();
-    return games.filter(
-      (game) =>
-        (filters.season === undefined || game.season === filters.season) &&
-        (filters.week === undefined || game.week === filters.week) &&
-        (gameType === undefined || matchesGameType(game.gameType, gameType)) &&
-        (team === undefined || game.homeTeam === team || game.awayTeam === team),
-    );
+    const filterGames = (games: readonly NflverseGame[]) =>
+      games.filter(
+        (game) =>
+          (filters.season === undefined || game.season === filters.season) &&
+          (filters.week === undefined || game.week === filters.week) &&
+          (gameType === undefined || matchesGameType(game.gameType, gameType)) &&
+          (team === undefined || game.homeTeam === team || game.awayTeam === team),
+      );
+    let matched = filterGames(loaded.value);
+    const nowMs = Date.now();
+    if (
+      this.database &&
+      loaded.outcome === 'cache-fresh' &&
+      nowMs - Date.parse(loaded.cache.cachedAt) >= SCHEDULE_SCORE_REVALIDATE_MS &&
+      matched.some((game) => {
+        if (game.homeScore !== null && game.awayScore !== null) return false;
+        const kickoffMs = easternKickoff(game.gameDate, game.gameTime)?.getTime();
+        return kickoffMs !== undefined && nowMs - kickoffMs >= COMPLETED_GAME_WINDOW_MS;
+      })
+    ) {
+      loaded = await this.loadSchedule(sourceUrl, SCHEDULE_SCORE_REVALIDATE_MS);
+      matched = filterGames(loaded.value);
+    }
+    this.recordSource('nflverse-schedules', 'nflverse schedules', sourceUrl, loaded);
+    return matched;
   }
 
   async getPlayerWeeklyStats(
@@ -344,7 +362,10 @@ export class NflverseClient {
     }
   }
 
-  private loadSchedule(sourceUrl: string): Promise<ResourceResult<NflverseGame[]>> {
+  private loadSchedule(
+    sourceUrl: string,
+    ttlMs = SCHEDULE_TTL_MS,
+  ): Promise<ResourceResult<NflverseGame[]>> {
     const resource = new CachedResource<NflverseGame[]>(
       this.database,
       'nflverse',
@@ -355,7 +376,7 @@ export class NflverseClient {
         snapshotKind: 'nflverse-schedule',
         snapshotRetention: 8,
         staleIfErrorMs: STALE_IF_ERROR_MS,
-        ttlMs: SCHEDULE_TTL_MS,
+        ttlMs,
         validate: (value) => nflverseScheduleSchema.parse(value),
       },
       this,

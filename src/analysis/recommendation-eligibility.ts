@@ -51,19 +51,31 @@ const LEAGUE_REQUEST =
   /\b(?:faab|fantasy|league|lineup|matchup|roster|scoring|sit|start|trade|waiver)\b/iu;
 const PLAYER_DECISION =
   /\b(?:add|bench|claim|drop|faab|lineup|pick\s*up|player|rest of season|ros|sit|start|trade|waiver)\b/iu;
+const NON_DECISION_RETROSPECTIVE_OR_SYSTEM =
+  /\b(?:should|would|could)\s+(?:i|we|you)\s+have\b|\bdid\s+(?:i|we)\s+(?:start|sit|bench|add|drop|claim|trade)\b|\b(?:learn|learning|calibrate|calibration)\b|\b(?:can|could|do|may|should|let'?s)\s+(?:i|we)\s+start\s+(?:a\s+|the\s+|this\s+|that\s+|our\s+)?(?:process|proicess|update|session|workflow|over)\b/iu;
 const EXPLICIT_DECISION_REQUEST =
-  /\b(?:should\s+(?:i|we)|would\s+you|recommend(?:ation|ations)?|what\s+(?:do|would)\s+(?:i|we|you)|start\s+or\s+sit)\b/iu;
+  /\b(?:should\s+(?:i|we)|would\s+you|recommend(?:ation|ations)?|what\s+(?:do|would)\s+(?:i|we|you)\s+(?:do|start|sit|bench|add|drop|claim|pick\s*up|trade|bid|offer|target|flex|play|stream|make|take)\b|start\s+or\s+sit)\b/iu;
 const DIRECT_DECISION_QUESTION =
   /\b(?:can|could|do|may)\s+(?:i|we)\s+(?:add|bench|claim|drop|pick\s*up|sit|start|trade)\b|\bis\b[^?\n]{0,100}\bworth\s+(?:adding|claiming|dropping|starting|trading)\b|\bwhich\b[^?\n]{0,100}\b(?:add|bench|claim|drop|sit|start)\b/iu;
 const LEADING_FANTASY_ACTION =
-  /^(?:please\s+)?(?:add|bench|claim|drop|sit|start)\b/iu;
+  /^(?:please\s+)?(?:add|bench(?!\s+(?:points|spots?|slots?|scoring)\b)|claim|drop(?!\s+(?:rate|rates|off)\b)|sit|start(?!\s+times?\b))\b/iu;
 const CONTEXTUAL_FANTASY_ACTION =
-  /\b(?:accept|decline)\s+(?:a\s+|the\s+|this\s+)?trade\b|\btrade\b[^?\n]{0,120}\bfor\b|\b(?:rank|prioritize)\s+(?:my\s+)?(?:faab|waiver)\b|\b(?:faab|waiver)\s+(?:bid|claim|range|target|targets)\b|\b(?:build|fix|optimize|set)\b[^?\n]{0,40}\b(?:lineup|starters?)\b/iu;
+  /\b(?:accept|decline)\s+(?:a\s+|the\s+|this\s+)?trade\b|\btrade\b[^?\n]{0,120}\bfor\b|\b(?:rank|prioritize)\s+(?:my\s+)?(?:faab|waiver)\b|\b(?:faab|waiver)\s+(?:bid|claim|range|target|targets)\b|\b(?:build|fix|optimize|set)\s+(?!their\b|his\b|her\b|(?:my|our)\s+opponent(?:'?s)?\b|opponent(?:'?s)?\b)[^?\n]{0,40}\b(?:lineup|starters?)\b/iu;
+const THIRD_PARTY_LINEUP_CONTEXT =
+  /\bopponent(?:'?s)?\b[^?\n]{0,40}\b(?:build|built|fix|fixed|optimize|optimized|set)\b[^?\n]{0,40}\b(?:lineup|starters?)\b/iu;
 const TIMEBOXED_PLAYER_COMPARISON =
   /\b(?:or|versus|vs\.?)\b[^?\n]{0,120}\b(?:at\s+flex|in\s+(?:my|the)\s+lineup|rest\s+of\s+season|ros|this\s+week)\b/iu;
 const START_SIT_REQUEST = /\b(?:bench|lineup|sit|start)\b/iu;
 const DECISION_FOLLOW_UP =
   /^(?:and\b|or\b|what\s+about\b|how\s+about\b|which\s+one\b|compare\b|versus\b|vs\.?\b)|\binstead\??$/iu;
+const FACTUAL_FOLLOW_UP =
+  /^(?:and\s+|or\s+)?(?:when|where|why|how\s+(?:many|much|did|does|do)|what\s+(?:time|is|are|was|were))\b/iu;
+const ANAPHORIC_DECISION_REFERENCE =
+  /\b(?:him|her|them|both|either|neither|which\s+one|that\s+trade|this\s+trade|instead)\b/iu;
+const HAS_RECOMMENDATION_VERDICT =
+  /(?:^|\n)\s*(?:#+\s*decision\b|\*{0,2}recommendation\*{0,2}\s*:|(?:start|sit|bench|add|drop|claim|pick\s*up|accept|decline)\s+[A-Z])|\b(?:i|we)\s+(?:would\s+)?(?:recommend|suggest|advise)\s+(?:starting|sitting|benching|adding|dropping|claiming|trading|accepting|declining)\b|\byou\s+should\s+(?:start|sit|bench|add|drop|claim|pick\s*up|trade|accept|decline)\b/imu;
+const EXPLICIT_UNAVAILABLE_STATEMENT =
+  /\b(?:decision\s+is\s+unavailable|cannot\s+(?:make|give|provide)\s+a\s+(?:final\s+)?(?:recommendation|decision)|cannot\s+verify\s+current\s+reporting|withholding\s+(?:a\s+|the\s+)?recommendation)\b/iu;
 const MAX_EVIDENCE_TRAVERSAL_DEPTH = 24;
 const MAX_EVIDENCE_TRAVERSAL_NODES = 10_000;
 
@@ -101,30 +113,69 @@ const SCORING_TOOLS = new Set([
   'projectPlayer',
   'rankWaiverTargets',
   'analyzeTradeImpact',
+  'simulatePlayoffOdds',
 ]);
 
 export function questionRequestsRecommendation(question: string): boolean {
-  return EXPLICIT_DECISION_REQUEST.test(question) ||
+  if (NON_DECISION_RETROSPECTIVE_OR_SYSTEM.test(question)) return false;
+  if (
+    EXPLICIT_DECISION_REQUEST.test(question) ||
     DIRECT_DECISION_QUESTION.test(question) ||
     LEADING_FANTASY_ACTION.test(question.trim()) ||
-    CONTEXTUAL_FANTASY_ACTION.test(question) ||
-    TIMEBOXED_PLAYER_COMPARISON.test(question);
+    TIMEBOXED_PLAYER_COMPARISON.test(question)
+  ) {
+    return true;
+  }
+  return CONTEXTUAL_FANTASY_ACTION.test(question) &&
+    !THIRD_PARTY_LINEUP_CONTEXT.test(question);
 }
 
 export function recommendationContextQuestion(
   question: string,
   previousQuestion?: string,
+  sessionPlayer?: string | null,
 ): string {
   if (previousQuestion && isRetryPrompt(question)) return previousQuestion;
+  if (questionRequestsRecommendation(question)) {
+    if (ANAPHORIC_DECISION_REFERENCE.test(question)) {
+      const additions = [previousQuestion, sessionPlayer].filter(
+        (value): value is string => Boolean(value?.trim()),
+      );
+      return additions.length > 0 ? `${question}\n${additions.join('\n')}` : question;
+    }
+    if (sessionPlayer && mentionsSessionPlayerFirstNameOnly(question, sessionPlayer)) {
+      return `${question}\n${sessionPlayer}`;
+    }
+    return question;
+  }
   if (
-    questionRequestsRecommendation(question) ||
     !previousQuestion ||
     !questionRequestsRecommendation(previousQuestion) ||
-    !DECISION_FOLLOW_UP.test(question.trim())
+    !DECISION_FOLLOW_UP.test(question.trim()) ||
+    FACTUAL_FOLLOW_UP.test(question.trim())
   ) {
     return question;
   }
   return `${previousQuestion}\n${question}`;
+}
+
+function mentionsSessionPlayerFirstNameOnly(
+  question: string,
+  sessionPlayer: string,
+): boolean {
+  const normalizedPlayer = normalizePlayerName(sessionPlayer);
+  const normalizedQuestion = normalizeEvidenceText(question);
+  if (!normalizedPlayer || !normalizedQuestion) return false;
+  if (` ${normalizedQuestion} `.includes(` ${normalizedPlayer} `)) return false;
+  const tokens = normalizedPlayer.split(' ').filter(Boolean);
+  const firstName = tokens[0];
+  if (!firstName || firstName.length < 4 || tokens.length < 2) return false;
+  if (!` ${normalizedQuestion} `.includes(` ${firstName} `)) return false;
+  const capitalizedSurnamePattern = new RegExp(
+    `\\b${firstName.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\s+[A-Z][a-z]{2,}`,
+    'u',
+  );
+  return !capitalizedSurnamePattern.test(question);
 }
 
 export function isRetryPrompt(question: string): boolean {
@@ -144,10 +195,39 @@ export function buildFreeformRecommendationEvidence(input: {
   });
 }
 
+export function answerWithholdsOrClarifies(answer: string): boolean {
+  const trimmed = answer.trim();
+  if (!trimmed || HAS_RECOMMENDATION_VERDICT.test(trimmed)) return false;
+  if (EXPLICIT_UNAVAILABLE_STATEMENT.test(trimmed)) return true;
+  return trimmed.includes('?') && trimmed.length <= 1_200;
+}
+
+export function buildRecommendationRecoveryPrompt(input: {
+  blockedAnswer: string;
+  question: string;
+  reasons: readonly string[];
+}): string {
+  const draft = input.blockedAnswer.trim().slice(0, 1_200);
+  return [
+    'Internal verification check: your draft recommendation could not be shown yet because required live tool evidence is incomplete:',
+    ...input.reasons.map((reason) => `- ${reason}`),
+    '',
+    'Automatically gather the missing evidence now using the available tools (for example: Sleeper league/roster tools, scoring-aware projections via projectPlayer / compareStartSit / optimizeRosterLineup / rankWaiverTargets / analyzeTradeImpact, and current reporting via searchFirstClassNews) and then write the complete grounded answer.',
+    'Do not mention this internal verification step to the user. If a required user choice genuinely cannot be resolved from session context or tools, ask one concise clarifying question without recommending a player yet.',
+    ...(draft ? ['', `Original request: ${input.question.trim().slice(0, 500)}`, `Draft summary to verify:\n${draft}`] : []),
+  ].join('\n');
+}
+
 export function enforceFreeformRecommendation(
   answer: string,
   evidence: RecommendationEvidence,
 ): EnforcedFreeformRecommendation {
+  if (answerWithholdsOrClarifies(answer)) {
+    return {
+      answer,
+      eligibility: { outcome: 'not-applicable', reasons: [] },
+    };
+  }
   const eligibility = enforceRecommendationEligibility(
     eligibilityAnalysis(),
     evidence,
@@ -403,9 +483,10 @@ function identityEvidenceState(
     PLAYER_IDENTITY_TOOLS.has(result.toolName)
   );
   if (identityResults.length === 0) return 'missing';
+  const rosterSubjects = rosterDiscoveredSubjects(toolResults, question);
 
-  const explicitResolutions = identityResults.filter(
-    (result) => result.toolName === 'resolvePlayerIdentity',
+  const explicitResolutions = deduplicateExplicitResolutions(
+    identityResults.filter((result) => result.toolName === 'resolvePlayerIdentity'),
   );
   if (explicitResolutions.length > 0) {
     const statuses = explicitResolutions.map((result) =>
@@ -415,17 +496,35 @@ function identityEvidenceState(
       return 'ambiguous';
     }
     return statuses.every((status) => status === 'resolved') &&
-        explicitResolutions.every((result) => individualPlayerResultMatchesQuestion(result, question))
+        explicitResolutions.every((result) =>
+          individualPlayerResultMatchesQuestion(result, question, rosterSubjects))
       ? 'resolved'
       : 'missing';
   }
+
+  const hasResolvedProjections = identityResults.some((result) => {
+    if (result.toolName !== 'projectPlayer') return false;
+    const player = asRecord(asRecord(result.output)?.player);
+    return Boolean(
+      player &&
+      typeof player.playerId === 'string' &&
+      player.playerId &&
+      individualPlayerResultMatchesQuestion(result, question, rosterSubjects),
+    );
+  });
 
   let resolved = 0;
   for (const result of identityResults) {
     if (result.toolName === 'findPlayers') {
       if (!Array.isArray(result.output) || result.output.length === 0) return 'missing';
-      if (result.output.length > 1) return 'ambiguous';
-      if (!individualPlayerResultMatchesQuestion(result, question)) return 'missing';
+      if (result.output.length > 1) {
+        if (hasResolvedProjections) {
+          resolved += 1;
+          continue;
+        }
+        return 'ambiguous';
+      }
+      if (!individualPlayerResultMatchesQuestion(result, question, rosterSubjects)) return 'missing';
       resolved += 1;
       continue;
     }
@@ -451,7 +550,7 @@ function identityEvidenceState(
       if (!player || typeof player.playerId !== 'string' || !player.playerId) {
         return 'missing';
       }
-      if (!individualPlayerResultMatchesQuestion(result, question)) return 'missing';
+      if (!individualPlayerResultMatchesQuestion(result, question, rosterSubjects)) return 'missing';
       resolved += 1;
       continue;
     }
@@ -467,6 +566,21 @@ function identityEvidenceState(
   return resolved === identityResults.length ? 'resolved' : 'missing';
 }
 
+function deduplicateExplicitResolutions(
+  resolutions: readonly RecommendationToolResult[],
+): RecommendationToolResult[] {
+  if (resolutions.length <= 1) return [...resolutions];
+  const latestByName = new Map<string, RecommendationToolResult>();
+  const unnamed: RecommendationToolResult[] = [];
+  for (const result of resolutions) {
+    const rawName = asRecord(result.input)?.name;
+    const key = typeof rawName === 'string' ? normalizePlayerName(rawName) : '';
+    if (!key) unnamed.push(result);
+    else latestByName.set(key, result);
+  }
+  return [...unnamed, ...latestByName.values()];
+}
+
 function playerStatusEvidenceState(
   toolResults: readonly RecommendationToolResult[],
   sources: readonly DataSourceRecord[],
@@ -474,6 +588,12 @@ function playerStatusEvidenceState(
 ): RequiredEvidenceState {
   const subjects = relevantPlayerSubjects(toolResults, question);
   if (subjects.length === 0) return 'missing';
+  const hasFreshNewsArticleSource = sources.some((source) =>
+    source.id.startsWith('news-article:') && source.cacheOutcome !== 'stale-if-error'
+  );
+  const hasFreshNewsSource = hasFreshNewsArticleSource || sources.some((source) =>
+    source.id.startsWith('news-source:') && source.cacheOutcome !== 'stale-if-error'
+  );
   const supported = subjects.every((subject) => {
     const hasPlayerStatus = toolResults.some((result) =>
       PLAYER_STATUS_TOOLS.has(result.toolName) &&
@@ -481,9 +601,11 @@ function playerStatusEvidenceState(
       (result.toolName === 'projectPlayer' ? hasProjectionPlayerStatus(result.output) : hasPlayerStatusFields(result.output)));
     const hasGroundedWebNews = toolResults.some((result) => result.toolName === 'searchCurrentNews' &&
       evidenceMatchesSubjects([result.output], [subject])) && sources.some((source) => source.id.startsWith('web:'));
-    const hasFirstClassNews = toolResults.some((result) => result.toolName === 'searchFirstClassNews' &&
-      hasUsableFirstClassNews(result.output, [subject])) && sources.some((source) =>
-        source.id.startsWith('news-article:') && source.cacheOutcome !== 'stale-if-error');
+    const hasFirstClassNews = (hasFreshNewsArticleSource && toolResults.some((result) =>
+      result.toolName === 'searchFirstClassNews' && hasUsableFirstClassNews(result.output, [subject])
+    )) || (hasFreshNewsSource && toolResults.some((result) =>
+      result.toolName === 'searchFirstClassNews' && hasCleanZeroHeadlineNewsCheck(result, subject)
+    ));
     return hasPlayerStatus && (hasGroundedWebNews || hasFirstClassNews);
   });
   return supported ? 'present' : 'missing';
@@ -500,6 +622,27 @@ function hasUsableFirstClassNews(
       typeof record.publishedAt === 'string' &&
       evidenceMatchesSubjects([record], subjects);
   });
+}
+
+function hasCleanZeroHeadlineNewsCheck(
+  result: RecommendationToolResult,
+  subject: string,
+): boolean {
+  const output = asRecord(result.output);
+  if (Number(asRecord(output?.coverage)?.successfulSourceCount) <= 0) return false;
+  const articles = output?.articles;
+  if (
+    Array.isArray(articles) &&
+    articles.some((article) => evidenceMatchesSubjects([article], [subject]))
+  ) {
+    return false;
+  }
+  const inputQuery = asRecord(result.input)?.query;
+  const outputQuery = output?.query;
+  return evidenceMatchesSubjects(
+    [typeof inputQuery === 'string' ? inputQuery : '', typeof outputQuery === 'string' ? outputQuery : ''],
+    [subject],
+  );
 }
 
 function leagueScoringEvidenceState(
@@ -530,9 +673,10 @@ function projectionEligibilityState(
   }
   const comparesPlayers = /\b(?:versus|vs\.?)\b|\bor\s+(?!sit\b|start\b|bench\b|not\b|leave\b|keep\b|him\b|them\b)\p{L}+/iu.test(question);
   if (START_SIT_REQUEST.test(question) && comparesPlayers && projections.length < 2) return 'ineligible';
+  const rosterSubjects = rosterDiscoveredSubjects(toolResults, question);
   return projections.every(
       (result) => asRecord(result.output)?.recommendationEligible === true &&
-        individualPlayerResultMatchesQuestion(result, question),
+        individualPlayerResultMatchesQuestion(result, question, rosterSubjects),
     )
     ? 'eligible'
     : 'ineligible';
@@ -648,16 +792,38 @@ function isIndividualPlayerTool(toolName: string, hasQuestionMatch = false): boo
     ));
 }
 
+function rosterDiscoveredSubjects(
+  toolResults: readonly RecommendationToolResult[],
+  question: string,
+): ReadonlySet<string> {
+  const hasExplicitMatch = toolResults.some((result) =>
+    PLAYER_IDENTITY_TOOLS.has(result.toolName) &&
+    [...toolInputPlayerSubjects(result), ...playerSubjects([result.output])]
+      .some((subject) => textMentionsSubject(question, subject)),
+  );
+  if (hasExplicitMatch) return new Set();
+  const names = toolResults
+    .filter((result) => result.toolName === 'getRosterPlayers')
+    .flatMap((result) => playerSubjects([result.output]))
+    .map(normalizePlayerName)
+    .filter(Boolean);
+  return new Set(names);
+}
+
 function individualPlayerResultMatchesQuestion(
   result: RecommendationToolResult,
   question: string,
+  rosterSubjects: ReadonlySet<string> = new Set(),
 ): boolean {
   if (asRecord(result.input)?.fromLineupOptimization === true) return true;
   const subjects = [
     ...toolInputPlayerSubjects(result),
     ...playerSubjects([result.output]),
   ];
-  return subjects.some((subject) => textMentionsSubject(question, subject));
+  return subjects.some((subject) =>
+    textMentionsSubject(question, subject) ||
+    (rosterSubjects.size > 0 && rosterSubjects.has(normalizePlayerName(subject)))
+  );
 }
 
 function relevantPlayerSubjects(
@@ -672,15 +838,26 @@ function relevantPlayerSubjects(
   const hasLineupOptimization = toolResults.some(
     (result) => asRecord(result.input)?.fromLineupOptimization === true,
   );
+  const rosterSubjects = rosterDiscoveredSubjects(toolResults, question);
+  const hasProjectedRosterSubset = !hasQuestionMatch &&
+    rosterSubjects.size > 0 &&
+    toolResults.some((result) =>
+      result.toolName === 'projectPlayer' &&
+      individualPlayerResultMatchesQuestion(result, question, rosterSubjects));
   const subjects = toolResults.flatMap((result) => {
     if (!PLAYER_IDENTITY_TOOLS.has(result.toolName)) return [];
+    if (result.toolName === 'getRosterPlayers' && hasProjectedRosterSubset) {
+      return [];
+    }
     const candidates = [
       ...toolInputPlayerSubjects(result),
       ...playerSubjects([result.output]),
     ];
     return isIndividualPlayerTool(result.toolName, hasQuestionMatch || hasLineupOptimization) &&
         asRecord(result.input)?.fromLineupOptimization !== true
-      ? candidates.filter((subject) => textMentionsSubject(question, subject))
+      ? candidates.filter((subject) =>
+          textMentionsSubject(question, subject) ||
+          (rosterSubjects.size > 0 && rosterSubjects.has(normalizePlayerName(subject))))
       : candidates;
   });
   return [...new Set(subjects.map(normalizePlayerName).filter(Boolean))];
@@ -752,13 +929,24 @@ function collectPlayerSubjects(
   }
 }
 
+function subjectMatchForms(subject: string): string[] {
+  const normalized = normalizeEvidenceText(subject);
+  if (!normalized) return [];
+  const strippedDst = normalized.replace(/\s+(?:d\s*st|dst|def|defense)$/iu, '').trim();
+  return strippedDst && strippedDst !== normalized
+    ? [normalized, strippedDst]
+    : [normalized];
+}
+
 function evidenceMatchesSubjects(
   values: readonly unknown[],
   subjects: readonly string[],
 ): boolean {
   if (subjects.length === 0) return false;
   const evidence = values.map(normalizedEvidenceForValue).join(' ');
-  return subjects.some((subject) => ` ${evidence} `.includes(` ${normalizeEvidenceText(subject)} `));
+  return subjects.some((subject) =>
+    subjectMatchForms(subject).some((form) => ` ${evidence} `.includes(` ${form} `)),
+  );
 }
 
 function normalizedEvidenceForValue(value: unknown): string {
@@ -783,12 +971,15 @@ function stringifyEvidence(value: unknown): string {
 
 function textMentionsSubject(text: string, subject: string): boolean {
   const normalizedText = normalizeEvidenceText(text);
-  const normalizedSubject = normalizePlayerName(subject);
-  if (!normalizedText || !normalizedSubject) return false;
-  if (` ${normalizedText} `.includes(` ${normalizedSubject} `)) return true;
-  const tokens = normalizedSubject.split(' ').filter((token) => token.length >= 3);
-  const lastName = tokens.length >= 2 ? tokens.at(-1) : null;
-  return Boolean(lastName && ` ${normalizedText} `.includes(` ${lastName} `));
+  const forms = subjectMatchForms(normalizePlayerName(subject));
+  if (!normalizedText || forms.length === 0) return false;
+  for (const form of forms) {
+    if (` ${normalizedText} `.includes(` ${form} `)) return true;
+    const tokens = form.split(' ').filter((token) => token.length >= 3);
+    const lastName = tokens.length >= 2 ? tokens.at(-1) : null;
+    if (lastName && ` ${normalizedText} `.includes(` ${lastName} `)) return true;
+  }
+  return false;
 }
 
 function normalizeEvidenceText(value: string): string {
@@ -801,9 +992,8 @@ function leagueIdsAreConsistent(
 ): boolean {
   const ids = new Set(results.flatMap((result) => leagueIds([result.input, result.output])));
   const questionIds: string[] = question.match(/\b\d{6,}\b/gu) ?? [];
-  if (ids.size > 1) return false;
   return questionIds.length === 0 ||
-    (ids.size === 1 && [...ids].every((id) => questionIds.includes(id)));
+    (ids.size > 0 && [...ids].every((id) => questionIds.includes(id)));
 }
 
 function leagueIds(values: readonly unknown[]): string[] {

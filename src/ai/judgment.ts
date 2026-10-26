@@ -64,6 +64,19 @@ async function initialize(environment: NodeJS.ProcessEnv): Promise<void> {
         return state ? { 'judgment.session_id': state.sessionId } : undefined;
       },
     });
+    const onStepEnd = telemetry.onStepEnd.bind(telemetry);
+    telemetry.onStepEnd = (event) => {
+      // Child chat spans report LLM usage; step wrappers lack model/IO and would be misread as LLM spans.
+      onStepEnd(Object.assign(Object.create(Object.getPrototypeOf(event)) as typeof event, event, {
+        usage: {
+          inputTokens: undefined,
+          inputTokenDetails: { noCacheTokens: undefined, cacheReadTokens: undefined, cacheWriteTokens: undefined },
+          outputTokens: undefined,
+          outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+          totalTokens: undefined,
+        },
+      }));
+    };
     const onToolEnd = telemetry.onToolExecutionEnd.bind(telemetry);
     telemetry.onToolExecutionEnd = (event) => {
       const output = event.toolOutput;

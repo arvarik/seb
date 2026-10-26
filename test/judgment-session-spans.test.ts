@@ -73,7 +73,20 @@ function expectSessionOnEverySpan(rootName: string, sessionId: string): void {
   // Root, operation, two steps, two model calls, and a tool execution.
   expect(spans.length).toBeGreaterThanOrEqual(7);
   expect(spans.some((span) => span.name.includes('lookup'))).toBe(true);
-  expect(spans.some((span) => span.attributes['ai.usage.inputTokenDetails.noCacheTokens'] === 3)).toBe(true);
+  const chatSpans = spans.filter((span) => span.attributes['gen_ai.operation.name'] === 'chat');
+  const stepSpans = spans.filter((span) => span.attributes['gen_ai.operation.name'] === 'agent_step');
+  expect(chatSpans.length).toBeGreaterThanOrEqual(2);
+  expect(stepSpans).toHaveLength(chatSpans.length);
+  for (const span of chatSpans) {
+    expect(span.attributes['ai.usage.inputTokenDetails.noCacheTokens']).toBe(3);
+    expect(span.attributes['ai.usage.outputTokenDetails.textTokens']).toBe(4);
+    expect(span.attributes['gen_ai.request.model']).toBeDefined();
+    expect(span.attributes['gen_ai.input.messages']).toBeDefined();
+    expect(span.attributes['gen_ai.output.messages']).toBeDefined();
+  }
+  for (const span of stepSpans) {
+    expect(Object.keys(span.attributes).filter((key) => key.includes('.usage.'))).toEqual([]);
+  }
   for (const span of spans) {
     expect(span.attributes['judgment.session_id'], span.name).toBe(sessionId);
   }

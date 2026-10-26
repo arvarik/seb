@@ -14,6 +14,7 @@ const fake = vi.hoisted(() => ({
   forceFlush: vi.fn(),
   shutdown: vi.fn(),
   otelOptions: vi.fn(),
+  stepEnd: vi.fn(),
   toolEnd: vi.fn(),
 }));
 
@@ -41,6 +42,7 @@ vi.mock('judgeval', () => {
 vi.mock('@ai-sdk/otel', () => ({
   OpenTelemetry: class {
     constructor(options: unknown) { fake.otelOptions(options); }
+    onStepEnd(event: unknown) { fake.stepEnd(event); }
     onToolExecutionEnd(event: unknown) { fake.toolEnd(event); }
     onEnd() {}
   },
@@ -226,5 +228,27 @@ describe('optional Judgment tracing', () => {
     expect(fake.toolEnd).toHaveBeenCalledWith(expect.objectContaining({
       toolOutput: expect.objectContaining({ type: 'tool-error', error: expect.any(Error) }),
     }));
+  });
+
+  it('strips step wrapper usage details without changing the application event', async () => {
+    const module = await import('../src/ai/judgment.js');
+    await module.configureJudgmentTracing(enabled);
+    const proto = { get text() { return 'Done'; } };
+    const event = Object.assign(Object.create(proto), {
+      finishReason: 'stop',
+      usage: {
+        inputTokens: 10,
+        inputTokenDetails: { noCacheTokens: 3, cacheReadTokens: 5, cacheWriteTokens: 2 },
+        outputTokens: 4,
+        outputTokenDetails: { textTokens: 4, reasoningTokens: undefined },
+        totalTokens: 14,
+      },
+    }) as Parameters<NonNullable<Telemetry['onStepEnd']>>[0];
+    await module.judgmentTelemetry()[0]!.onStepEnd!(event);
+    expect(event.usage.inputTokenDetails.noCacheTokens).toBe(3);
+    const forwarded = fake.stepEnd.mock.calls[0]![0] as typeof event;
+    expect(forwarded.text).toBe('Done');
+    expect(forwarded.usage.inputTokenDetails.noCacheTokens).toBeUndefined();
+    expect(forwarded.usage.outputTokenDetails.textTokens).toBeUndefined();
   });
 });

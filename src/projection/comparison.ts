@@ -7,6 +7,20 @@ const SKILL = new Set(['RB', 'WR', 'TE']);
 const OFFENSE = new Set(['QB', 'RB', 'WR', 'TE']);
 const SCORING_OFFENSE = new Set(['QB', 'RB', 'WR', 'TE', 'K']);
 const PASS_GAME = new Set(['QB', 'WR', 'TE']);
+const INFERRED_SLOT_PRIORITY = [
+  'QB',
+  'RB',
+  'WR',
+  'TE',
+  'K',
+  'DEF',
+  'WRRB_FLEX',
+  'REC_FLEX',
+  'WRTE_FLEX',
+  'FLEX',
+  'WRRBTE_FLEX',
+  'SUPER_FLEX',
+] as const;
 
 export function sameGameCorrelation(
   a: { position: string | null; team: string | null; opponent?: string | null },
@@ -33,7 +47,11 @@ export function sameGameCorrelation(
   return 0;
 }
 
-export function compareProjections(projections: readonly ScoringAwarePlayerProjection[], requestedSlot?: string) {
+export function compareProjections(
+  projections: readonly ScoringAwarePlayerProjection[],
+  requestedSlot?: string,
+  rosterPositions?: readonly string[],
+) {
   if (projections.length < 2 || projections.length > 6) throw new ResearchDataError('Compare from two through six player projections.');
   if (projections.some((projection) => ![projection.expectedPoints, projection.floor, projection.ceiling].every(Number.isFinite) ||
     projection.floor > projection.expectedPoints || projection.ceiling < projection.expectedPoints)) {
@@ -58,7 +76,26 @@ export function compareProjections(projections: readonly ScoringAwarePlayerProje
   const standardError = Math.sqrt(Math.max(1, sA * sA + sB * sB - 2 * rho * sA * sB));
   const probability = normalCdf(difference / standardError);
   const positions = new Set(projections.map((projection) => projection.player.position));
-  const slot = requestedSlot?.toUpperCase() ?? (positions.size === 1 ? first.player.position : null);
+  const leagueSlots = rosterPositions?.length
+    ? new Set(rosterPositions.map((candidate) => candidate.toUpperCase()))
+    : null;
+  const inferredLeagueSlot = leagueSlots
+    ? INFERRED_SLOT_PRIORITY.find(
+        (candidate) =>
+          leagueSlots.has(candidate) &&
+          projections.every((projection) =>
+            eligibleForSlot(
+              projection.player.fantasy_positions?.length
+                ? projection.player.fantasy_positions
+                : [projection.player.position],
+              candidate,
+            ),
+          ),
+      ) ?? null
+    : null;
+  const slot =
+    requestedSlot?.toUpperCase() ??
+    (positions.size === 1 ? first.player.position : inferredLeagueSlot);
   const eligible = Boolean(slot) && projections.every((projection) => projection.recommendationEligible && eligibleForSlot(projection.player.fantasy_positions?.length ? projection.player.fantasy_positions : [projection.player.position], slot!));
   return { slot, projections: ordered, recommendationEligible: eligible,
     preferredPlayerId: eligible ? leader.player.playerId : null,

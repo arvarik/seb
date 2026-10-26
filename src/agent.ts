@@ -51,6 +51,7 @@ const RUNTIME_CONTEXT_KEY_PRIORITY = [
   'leagueId',
   'rosterId',
   'leagues',
+  'ownedPlayers',
   'user',
   'userId',
   'subject',
@@ -277,7 +278,7 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
     ...createPlayoffTools(sleeperClient),
     ...createNflverseTools(nflverseClient),
     ...createWeatherTools(weatherClient, nflverseClient),
-    ...createLearningTools(sleeperClient),
+    ...createLearningTools(sleeperClient, undefined, undefined, nflverseClient),
     ...createProjectionTools(sleeperClient, nflverseClient, weatherClient),
     ...createWaiverTools(sleeperClient, nflverseClient),
     ...createTradeTools(sleeperClient, nflverseClient),
@@ -612,6 +613,7 @@ Use projectLeagueMatchup for matchup scores, once per league. It resolves starte
 Use projectPlayers for several individual players or roster analysis outside a matchup. Batch relevant players in one call per league.
 Read the selected week's starters from getLeagueMatchups. Do not include bench players in a starting-lineup score.
 Reuse successful tool results from this turn. Do not repeat the same request unless it failed or the user asks for a refresh.
+Earlier assistant messages in the conversation may carry a "[Verified tool calls in this turn (outputs compacted): ...]" note because older raw tool JSON was compacted to save context. Treat those prior turns as tool-grounded and never retract or disclaim them for missing raw tool output.
 For Week 1, use player projections from the prior season. predictMatchup needs at least two completed scores per roster and cannot predict Week 1.
 Keep missing player projections explicit. Do not count an unavailable projection as zero or present a subtotal as a complete final score.
 Check scoreScope and scoring.ignoredSettings. A partial-scoring result omits active rules. Exclude historical-baseline results from weekly subtotals and list them separately. Explain missing active scoring rules with the subtotal.
@@ -637,7 +639,7 @@ Use the prior completed season as a baseline when the current regular season has
 Never invent an ID, score, injury, schedule, news item, or projection.
 State which evidence remains incomplete when the final step cannot run another tool.
 Do not turn a projection into an action when recommendationEligible is false.
-Ask for a league ID or roster ID only when the question and automatic session context identify none.
+Ask for a league ID or roster ID only when the question and automatic session context identify none. When multiple active owned leagues apply (up to 4) and no single league is focused or disambiguated by ownedPlayers, evaluate all active owned leagues in parallel and group the response by league name instead of stalling to ask which league.
 Distinguish an NFL team from a fantasy roster.
 Use the active player from the session for a follow-up request that omits the player name.
 Ask for a player only when the session and the recent conversation identify no player.

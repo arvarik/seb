@@ -214,6 +214,60 @@ describe('AI SDK feature integration', () => {
     expect(JSON.stringify(pruned)).toContain('Follow-up 7');
   });
 
+  it('annotates older prose-bearing assistant turns when their tool outputs are compacted', () => {
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'Check Week 7 projections.' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'pruned-proj-call',
+            toolName: 'projectPlayer',
+            input: { playerName: 'Bijan Robinson' },
+          },
+          {
+            type: 'tool-call',
+            toolCallId: 'pruned-news-call',
+            toolName: 'searchFirstClassNews',
+            input: { query: 'Bijan Robinson' },
+          },
+          {
+            type: 'text',
+            text: 'Bijan Robinson projects for 18.4 points with no injury designation.',
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'pruned-proj-call',
+            toolName: 'projectPlayer',
+            output: { type: 'json', value: { expectedPoints: 18.4 } },
+          },
+          {
+            type: 'tool-result',
+            toolCallId: 'pruned-news-call',
+            toolName: 'searchFirstClassNews',
+            output: { type: 'json', value: { articles: [] } },
+          },
+        ],
+      },
+      ...Array.from({ length: 7 }, (_, index): ModelMessage => ({
+        role: 'user',
+        content: `Follow-up ${index + 1}`,
+      })),
+    ];
+
+    const serialized = JSON.stringify(pruneFantasyMessages(messages));
+    expect(serialized).not.toContain('pruned-proj-call');
+    expect(serialized).toContain(
+      '[Verified tool calls in this turn (outputs compacted): projectPlayer, searchFirstClassNews]',
+    );
+  });
+
   it('retains early tool results throughout the active turn', async () => {
     const toolSteps = Array.from({ length: 4 }, (_, index) => ({
       content: [{

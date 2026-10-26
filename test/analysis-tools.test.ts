@@ -65,4 +65,44 @@ describe('analysis tool integration', () => {
       expect(await execute(request, options)).toMatchObject({ recommendationEligible: false, preferredPlayerId: null });
     } finally { vi.useRealTimers(); }
   });
+
+  it('auto-detects throughWeek on simulatePlayoffOdds and serializes concurrent learnCompletedWeek updates', async () => {
+    const autoOdds = await createPlayoffTools(client()).simulatePlayoffOdds.execute!(
+      { leagueId: '123456', simulations: 100 },
+      options,
+    );
+    expect(autoOdds).toMatchObject({ remainingWeeks: [3], playoffTeams: 1, simulations: 100 });
+
+    const directory = await mkdtemp(join(tmpdir(), 'seb-learning-serial-'));
+    try {
+      const store = new LearningStore(directory);
+      const nfl = { getSchedule: async () => [game()], getPlayerWeeklyStats: async () => [stat()] } as unknown as NflverseClient;
+      const realService = new LearningService(nfl, store, () => new Date('2025-09-10T00:00:00Z'));
+      let activeUpdates = 0;
+      let maxConcurrentUpdates = 0;
+      const originalUpdate = realService.update.bind(realService);
+      vi.spyOn(realService, 'update').mockImplementation(async (input) => {
+        activeUpdates += 1;
+        maxConcurrentUpdates = Math.max(maxConcurrentUpdates, activeUpdates);
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 15));
+        try {
+          return await originalUpdate(input);
+        } finally {
+          activeUpdates -= 1;
+        }
+      });
+      const tools = createLearningTools(client(), store, realService);
+      const [first, second] = await Promise.all([
+        tools.learnCompletedWeek.execute!({ season: 2025, throughWeek: 1 }, options),
+        tools.learnCompletedWeek.execute!({ season: 2025, throughWeek: 1 }, options),
+      ]);
+      expect(maxConcurrentUpdates).toBe(1);
+      expect([first, second]).toMatchObject([
+        { changed: true, throughWeek: 1 },
+        { changed: false, throughWeek: 1 },
+      ]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

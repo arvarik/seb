@@ -4,9 +4,16 @@ import { LearningService } from './service.js';
 import { LearningStore } from './store.js';
 import { DEFAULT_PROJECTION_PARAMETERS } from '../projection/statistics.js';
 import { PPR_SCORING } from './engine.js';
+import type { NflverseClient } from '../nflverse/client.js';
 import type { SleeperClient } from '../sleeper/client.js';
 
-export function createLearningTools(sleeper: SleeperClient, store = new LearningStore(), service?: LearningService) {
+export function createLearningTools(
+  sleeper: SleeperClient,
+  store = new LearningStore(),
+  service?: LearningService,
+  nflverse?: NflverseClient,
+) {
+  let pendingUpdate: Promise<unknown> = Promise.resolve();
   return {
     inspectLearning: tool({
       description: 'Inspect local forecast learning, validation errors, and player or team trends. State the scoring profile and learned week.',
@@ -33,12 +40,17 @@ export function createLearningTools(sleeper: SleeperClient, store = new Learning
       inputSchema: z.object({ season: z.number().int().min(1999).max(2100),
         throughWeek: z.number().int().min(1).max(18).optional(), leagueId: z.string().regex(/^\d+$/).optional() }),
       execute: async ({ season, throughWeek, leagueId }) => {
-        const scoring = leagueId ? (await sleeper.getLeague(leagueId)).scoring_settings : PPR_SCORING;
-        const result = await (service ?? new LearningService(undefined, store)).update({ season, scoring,
-          ...(throughWeek === undefined ? {} : { throughWeek }) });
-        return { changed: result.changed, file: result.file, season, throughWeek: result.revision.throughWeek,
-          reason: result.revision.reason, parameters: result.revision.parameters,
-          baseline: result.revision.baseline, candidateMetrics: result.revision.candidateMetrics };
+        const runUpdate = async () => {
+          const scoring = leagueId ? (await sleeper.getLeague(leagueId)).scoring_settings : PPR_SCORING;
+          const result = await (service ?? new LearningService(nflverse, store)).update({ season, scoring,
+            ...(throughWeek === undefined ? {} : { throughWeek }) });
+          return { changed: result.changed, file: result.file, season, throughWeek: result.revision.throughWeek,
+            reason: result.revision.reason, parameters: result.revision.parameters,
+            baseline: result.revision.baseline, candidateMetrics: result.revision.candidateMetrics };
+        };
+        const current = pendingUpdate.then(runUpdate, runUpdate);
+        pendingUpdate = current.then(() => undefined, () => undefined);
+        return current;
       },
     }),
   };

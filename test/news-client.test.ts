@@ -915,6 +915,58 @@ describe('NewsClient cache', () => {
     expect(indexCalls).toBe(1);
     expect(calls.filter((call) => new URL(call.url).pathname === '/robots.txt')).toHaveLength(1);
   });
+
+  it('falls back from fantasypros-team-news to fantasypros-player-news on multi-team searches and runs same-host requests concurrently without crawl-delay', async () => {
+    const fpTeam = newsSource('fantasypros-team-news', 'fantasy', {
+      discoveryKind: 'html',
+      discoveryUrl: 'https://fp.example/nfl/team-news.php',
+      homepageUrl: 'https://fp.example/nfl/team-news.php',
+      htmlFlavor: 'fantasypros-team',
+      urlPathPrefix: '/nfl/news/',
+    });
+    const fpPlayer = newsSource('fantasypros-player-news', 'fantasy', {
+      discoveryKind: 'rss',
+      discoveryUrl: 'https://fp.example/nfl/player-news.rss',
+      homepageUrl: 'https://fp.example/nfl/',
+    });
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const calls: FetchCall[] = [];
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      calls.push({ headers: new Headers(init?.headers), url });
+      if (new URL(url).pathname === '/robots.txt') {
+        return textResponse('User-agent: *\nAllow: /');
+      }
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 15));
+      inFlight -= 1;
+      return rssResponse([
+        article('Josh Allen and Patrick Mahomes full participants', 'https://fp.example/nfl/qb-update'),
+      ]);
+    };
+    const sameHostA = newsSource('host-a', 'independent', {
+      discoveryUrl: 'https://fp.example/feed-a.xml',
+      homepageUrl: 'https://fp.example/nfl/',
+    });
+    const sameHostB = newsSource('host-b', 'independent', {
+      discoveryUrl: 'https://fp.example/feed-b.xml',
+      homepageUrl: 'https://fp.example/nfl/',
+    });
+    const client = createClient([fpTeam, fpPlayer, sameHostA, sameHostB], fetch);
+
+    const multiTeam = await client.search({
+      limit: 5,
+      query: 'Josh Allen Patrick Mahomes practice',
+      teams: ['BUF', 'KC'],
+    });
+
+    expect(calls.some((call) => call.url.includes('team-news.php'))).toBe(false);
+    expect(calls.some((call) => call.url.includes('player-news.rss'))).toBe(true);
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
+    expect(multiTeam.articles).toHaveLength(1);
+  });
 });
 
 interface FetchCall {

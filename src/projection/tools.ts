@@ -70,9 +70,13 @@ export function createProjectionTools(
         slot: z.enum(['QB', 'RB', 'WR', 'TE', 'FLEX', 'WRRBTE_FLEX', 'SUPER_FLEX', 'REC_FLEX', 'WRTE_FLEX', 'WRRB_FLEX', 'DEF', 'K']).optional(),
         season: seasonSchema, week: z.number().int().min(1).max(18),
       }),
-      execute: async ({ playerNames, slot, ...request }) => compareProjections(await Promise.all(
-        playerNames.map((playerName) => service.project({ ...request, playerName })),
-      ), slot),
+      execute: async ({ playerNames, slot, ...request }) => {
+        const [projections, league] = await Promise.all([
+          Promise.all(playerNames.map((playerName) => service.project({ ...request, playerName }))),
+          slot ? Promise.resolve(null) : sleeper.getLeague(request.leagueId).catch(() => null),
+        ]);
+        return compareProjections(projections, slot, league?.roster_positions);
+      },
     }),
     projectPlayer: tool({
       description:

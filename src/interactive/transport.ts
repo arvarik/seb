@@ -21,10 +21,12 @@ import {
 } from '../ai/request-signal.js';
 import {
   buildFreeformRecommendationEvidence,
+  buildRecommendationRecoveryPrompt,
   enforceFreeformRecommendation,
   questionRequestsRecommendation,
   isRetryPrompt,
   recommendationContextQuestion,
+  type RecommendationEvidence,
   type RecommendationToolResult,
 } from '../analysis/recommendation-eligibility.js';
 import {
@@ -112,6 +114,22 @@ const INTERACTIVE_PROMPT_CHARACTER_LIMIT = 32_000;
 const MODEL_CONTEXT_CHARACTER_LIMIT = 120_000;
 const MODEL_MESSAGE_LIMIT = 24;
 const TRACKED_MESSAGE_LIMIT = 96;
+const FRESH_EVIDENCE_REUSE_TTL_MS = 5 * 60_000;
+const UNCOMPACTED_RECENT_TURN_COUNT = 3;
+
+export interface PriorTurnRecommendationEvidence {
+  sources: readonly DataSourceRecord[];
+  toolResults: readonly RecommendationToolResult[];
+}
+
+export interface DecorateResponseStreamOptions {
+  priorEvidence?: PriorTurnRecommendationEvidence;
+  recoverBlockedDecision?: (context: {
+    blockedAnswer: string;
+    evidence: RecommendationEvidence;
+    reasons: readonly string[];
+  }) => Promise<ReadableStream<UIMessageChunk> | null>;
+}
 
 type RecommendationStreamToolState = {
   input: unknown;
@@ -127,6 +145,7 @@ export interface SebInteractiveTransportOptions {
   doctor?: (offline: boolean) => Promise<DoctorReport>;
   environment: NodeJS.ProcessEnv;
   model: string;
+  news?: { clearCache(): void };
   provider?: string;
   providerLabel?: string;
   nflverse: NflverseClient;
@@ -172,6 +191,7 @@ function cloneSessionState(state: SessionState): SessionState {
 export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   private readonly localOnlyMessageIds = new Set<string>();
   private delegate: ChatTransport<UIMessage>;
+  private lastRefreshedAt = 0;
   private readonly options: SebInteractiveTransportOptions;
   private readonly profileStore: SetupProfileStore;
   private readonly skillPromptByMessageId = new Map<string, string>();
@@ -261,19 +281,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         this.uiState.latestPrompt = invocation.prompt;
         this.uiState.recordCommand('skill');
         this.skillPromptByMessageId.set(lastMessage.id, invocation.prompt);
-        return this.sendTracedMessages(options, (stream) => decorateResponseStream(
-          stream,
-          this.options.session,
-          this.options.sources,
-          this.uiState,
-          invocation.prompt,
-          recommendationContextQuestion(
-            invocation.prompt,
-            previousUserPrompt(this.modelMessages(options.messages)),
-          ),
-          (error) => usageTelemetry?.closeUnfinished(error),
-          (reason) => usageTelemetry?.abortUnfinished(reason),
-        ));
+        return this.sendInteractivePrompt(options, invocation.prompt, usageTelemetry);
       }
     }
     const selectedMode = parsed?.command ? experienceModeForCommand(parsed.command.name) : null;
@@ -284,19 +292,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       this.uiState.latestPrompt = parsed.argumentText;
       this.uiState.recordCommand(parsed.command?.name ?? selectedMode);
       this.skillPromptByMessageId.set(lastMessage.id, parsed.argumentText);
-      return this.sendTracedMessages(options, (stream) => decorateResponseStream(
-        stream,
-        this.options.session,
-        this.options.sources,
-        this.uiState,
-        parsed.argumentText,
-        recommendationContextQuestion(
-          parsed.argumentText,
-          previousUserPrompt(this.modelMessages(options.messages)),
-        ),
-        (error) => usageTelemetry?.closeUnfinished(error),
-        (reason) => usageTelemetry?.abortUnfinished(reason),
-      ));
+      return this.sendInteractivePrompt(options, parsed.argumentText, usageTelemetry);
     }
     if (lastMessage?.role === 'user' && parsed) {
       this.markLocalOnlyMessage(lastMessage.id);
@@ -313,29 +309,141 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     }
 
     if (!approvalContinuation) this.options.sources.clear();
-    return this.sendTracedMessages(options, (stream) => decorateResponseStream(
-      stream,
+    return this.sendInteractivePrompt(
+      options,
+      text,
+      usageTelemetry,
+      approvalContinuation ? recommendationToolState(options.messages) : [],
+    );
+  }
+
+  private sendInteractivePrompt(
+    options: Parameters<ChatTransport<UIMessage>['sendMessages']>[0],
+    userPrompt: string,
+    usageTelemetry: SebInteractiveTransportOptions['usageTelemetry'],
+    initialToolState: readonly RecommendationStreamToolState[] = [],
+  ): Promise<ReadableStream<UIMessageChunk>> {
+    const messages = this.modelMessages(options.messages);
+    const recommendationQuestion = recommendationContextQuestion(
+      userPrompt,
+      previousUserPrompt(messages),
+      this.options.session.player,
+    );
+    const priorEvidence = this.recentVerifiedEvidence(messages);
+    return traceJudgmentStream({
+      name: 'seb.interactive.turn', sessionId: options.chatId, input: messages,
+    }, async () => decorateResponseStream(
+      await this.delegate.sendMessages({ ...options, messages }),
       this.options.session,
       this.options.sources,
       this.uiState,
-      text,
-      recommendationContextQuestion(text, previousUserPrompt(this.modelMessages(options.messages))),
+      userPrompt,
+      recommendationQuestion,
       (error) => usageTelemetry?.closeUnfinished(error),
       (reason) => usageTelemetry?.abortUnfinished(reason),
-      approvalContinuation
-        ? recommendationToolState(options.messages)
-        : [],
+      initialToolState,
+      {
+        priorEvidence,
+        recoverBlockedDecision: (context) =>
+          this.recoverBlockedDecision(options, messages, recommendationQuestion, context),
+      },
     ));
   }
 
-  private sendTracedMessages(
+  private async recoverBlockedDecision(
     options: Parameters<ChatTransport<UIMessage>['sendMessages']>[0],
-    decorate: (stream: ReadableStream<UIMessageChunk>) => ReadableStream<UIMessageChunk>,
-  ): Promise<ReadableStream<UIMessageChunk>> {
-    const messages = this.modelMessages(options.messages);
-    return traceJudgmentStream({
-      name: 'seb.interactive.turn', sessionId: options.chatId, input: messages,
-    }, async () => decorate(await this.delegate.sendMessages({ ...options, messages })));
+    activeMessages: readonly UIMessage[],
+    question: string,
+    context: {
+      blockedAnswer: string;
+      evidence: RecommendationEvidence;
+      reasons: readonly string[];
+    },
+  ): Promise<ReadableStream<UIMessageChunk> | null> {
+    if (options.abortSignal?.aborted) return null;
+    if (context.evidence.currentEvidence === 'stale') {
+      this.options.news?.clearCache();
+      getSharedSebDatabase().deleteCache('news');
+      await Promise.all([
+        this.options.sleeper.clearCache(),
+        this.options.nflverse.clearCache(),
+        this.options.weather.clearCache(),
+      ]);
+      this.lastRefreshedAt = Date.now();
+      this.options.sources.clear();
+    }
+    const draft = context.blockedAnswer.trim().slice(0, 1_200);
+    const recoveryMessages: UIMessage[] = [
+      ...activeMessages,
+      ...(draft
+        ? [{
+            id: `draft-${randomUUID()}`,
+            role: 'assistant' as const,
+            parts: [{ type: 'text' as const, text: draft }],
+          }]
+        : []),
+      {
+        id: `verify-${randomUUID()}`,
+        role: 'user' as const,
+        parts: [{
+          type: 'text' as const,
+          text: buildRecommendationRecoveryPrompt({
+            blockedAnswer: context.blockedAnswer,
+            question,
+            reasons: context.reasons,
+          }),
+        }],
+      },
+    ];
+    return this.delegate.sendMessages({ ...options, messages: recoveryMessages });
+  }
+
+  private recentVerifiedEvidence(
+    activeMessages: readonly UIMessage[],
+  ): PriorTurnRecommendationEvidence {
+    const latestUserIndex = activeMessages.findLastIndex((message) => message.role === 'user');
+    if (latestUserIndex <= 0) return { sources: [], toolResults: [] };
+    const priorTurns: UIMessage[][] = [];
+    for (const message of activeMessages.slice(0, latestUserIndex)) {
+      if (message.role === 'user' || priorTurns.length === 0) priorTurns.push([message]);
+      else priorTurns.at(-1)?.push(message);
+    }
+    const now = Date.now();
+    const sources: DataSourceRecord[] = [];
+    const seenSourceIds = new Set<string>();
+    const toolResults: RecommendationToolResult[] = [];
+    for (const turn of priorTurns.slice(-UNCOMPACTED_RECENT_TURN_COUNT)) {
+      for (const message of turn) {
+        if (message.role !== 'assistant') continue;
+        const snapshot = this.uiState.evidenceForAnswer(message.id);
+        if (!snapshot) continue;
+        const capturedMs = Date.parse(snapshot.capturedAt);
+        if (
+          !Number.isFinite(capturedMs) ||
+          capturedMs < this.lastRefreshedAt ||
+          now - capturedMs > FRESH_EVIDENCE_REUSE_TTL_MS ||
+          snapshot.sources.some((source) => source.cacheOutcome === 'stale-if-error')
+        ) {
+          continue;
+        }
+        for (const source of snapshot.sources) {
+          if (!seenSourceIds.has(source.id)) {
+            seenSourceIds.add(source.id);
+            sources.push(source);
+          }
+        }
+        for (const part of message.parts) {
+          if (isToolUIPart(part) && 'input' in part && part.state === 'output-available') {
+            toolResults.push({
+              input: part.input,
+              output: part.output,
+              toolName: getToolName(part),
+            });
+          }
+        }
+      }
+    }
+    return { sources, toolResults };
   }
 
   reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {
@@ -398,7 +506,10 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     const selected: UIMessage[][] = [];
     let remaining = MODEL_CONTEXT_CHARACTER_LIMIT;
     for (let index = turns.length - 1; index >= 0; index -= 1) {
-      const turn = turns[index] ?? [];
+      const rawTurn = turns[index] ?? [];
+      const turn = index < turns.length - UNCOMPACTED_RECENT_TURN_COUNT
+        ? compactOlderTurnToolParts(rawTurn)
+        : rawTurn;
       const size = estimateMessages(turn, remaining + 1);
       if (size > remaining) break;
       selected.unshift(turn);
@@ -790,6 +901,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           throw new Error('Use /refresh all, /refresh sleeper, /refresh nflverse, /refresh weather, or /refresh news.');
         }
         if (target === 'all' || target === 'news') {
+          this.options.news?.clearCache();
           getSharedSebDatabase().deleteCache('news');
         }
         await Promise.all([
@@ -803,6 +915,18 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
             ? this.options.weather.clearCache()
             : Promise.resolve(),
         ]);
+        if (
+          (target === 'all' || target === 'sleeper') &&
+          (state.user !== null || state.accountError !== null)
+        ) {
+          try {
+            await refreshAutomaticSession(this.options.sleeper, state);
+          } catch (error) {
+            state.accountError = errorMessage(error);
+            if (state.user) state.accountStatus = 'error';
+          }
+        }
+        this.lastRefreshedAt = Date.now();
         this.options.sources.clear();
         return `Seb cleared the ${target} cache. The next request downloads fresh data.`;
       }
@@ -813,6 +937,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         state.player = null;
         state.skillId = 'general';
         state.team = null;
+        this.lastRefreshedAt = Date.now();
         this.options.sources.clear();
         this.uiState.clearAnswerEvidence();
         this.uiState.showSuggestions = true;
@@ -1094,6 +1219,7 @@ export function decorateResponseStream(
   onStreamError?: (error: unknown) => void,
   onConsumerCancel?: (reason: unknown) => void,
   initialToolState: readonly RecommendationStreamToolState[] = [],
+  extraOptions?: DecorateResponseStreamOptions,
 ): ReadableStream<UIMessageChunk> {
   const decisionRequested = questionRequestsRecommendation(recommendationQuestion);
   const pendingApprovals = new Map<string, string>();
@@ -1144,9 +1270,11 @@ export function decorateResponseStream(
   let streamFailed = false;
   let streamFinished = false;
   let streamErrorRecorded = false;
+  let activeRecoveryReader: ReadableStreamDefaultReader<UIMessageChunk> | null = null;
   const recordConsumerCancel = (reason: unknown): void => {
     if (consumerCancelRecorded) return;
     consumerCancelRecorded = true;
+    void activeRecoveryReader?.cancel(reason).catch(() => undefined);
     try {
       onConsumerCancel?.(reason);
     } catch {
@@ -1162,189 +1290,256 @@ export function decorateResponseStream(
       // Preserve the model stream error when telemetry fails.
     }
   };
-  const decorated = stream.pipeThrough(
-    new TransformStream<UIMessageChunk, UIMessageChunk>({
-      transform(chunk, controller) {
-        if (chunk.type === 'text-delta' && chunk.delta.trim()) hasAnswerText = true;
-        if (chunk.type === 'abort') {
-          streamFailed = true;
-          const errorText = 'The request stopped before the model completed the answer.';
-          recordStreamError(new DOMException(errorText, 'AbortError'));
-          controller.enqueue({ type: 'error', errorText });
-        }
-        if (chunk.type === 'error') {
-          streamFailed = true;
-          recordStreamError(new Error(chunk.errorText));
-        }
-        if (chunk.type === 'start' && chunk.messageId) answerId = chunk.messageId;
-        if (chunk.type === 'tool-input-available') {
-          if (!completedToolCallIds.has(chunk.toolCallId)) {
-            toolCalls.set(chunk.toolCallId, {
-              input: chunk.input,
-              toolName: chunk.toolName,
-            });
-          }
-          const requested = resolveUserRequestedToolContext(
-            chunk.toolName,
-            chunk.input,
-            userPrompt,
-          );
-          addStreamSubject(requested.player, requestedPlayers);
-          addStreamSubject(requested.team, requestedTeams);
-        }
-        if (chunk.type === 'tool-approval-request') {
-          pendingApprovals.set(chunk.approvalId, chunk.toolCallId);
-        }
-        if (chunk.type === 'tool-approval-response') {
-          pendingApprovals.delete(chunk.approvalId);
-        }
-        if (chunk.type === 'tool-output-available') {
-          deletePendingApproval(pendingApprovals, chunk.toolCallId);
-          const toolCall = completedToolCallIds.has(chunk.toolCallId)
-            ? undefined
-            : toolCalls.get(chunk.toolCallId);
-          if (toolCall) {
-            completedToolCallIds.add(chunk.toolCallId);
-            toolResults.push({
-              input: toolCall.input,
-              output: chunk.output,
-              toolName: toolCall.toolName,
-            });
-            const confirmed = resolveUserConfirmedToolContext(
-              toolCall.toolName,
-              toolCall.input,
-              chunk.output,
-              userPrompt,
-            );
-            addStreamSubject(confirmed.player, playerCandidates);
-            addStreamSubject(confirmed.team, teamCandidates);
-            toolCalls.delete(chunk.toolCallId);
-          }
-        }
-        if (chunk.type === 'tool-output-error' || chunk.type === 'tool-output-denied') {
-          deletePendingApproval(pendingApprovals, chunk.toolCallId);
-          toolCalls.delete(chunk.toolCallId);
-        }
-        if (chunk.type === 'source-url') {
-          const url = normalizeWebUrl(chunk.url);
-          const source = {
-            id: chunk.sourceId,
-            ...(chunk.title ? { title: chunk.title } : {}),
-            url: chunk.url,
-          };
-          if (url) sources.recordUrlSource(source);
-        }
-        if (chunk.type === 'finish') {
-          streamFinished = true;
-          const awaitsApproval = chunk.finishReason === 'tool-calls' &&
-            pendingApprovals.size > 0;
-          if (!streamFailed && chunk.finishReason !== 'stop' && !awaitsApproval) {
-            streamFailed = true;
-            recordStreamError(new Error(incompleteFinishMessage(chunk.finishReason)));
-            controller.enqueue({
-              type: 'error',
-              errorText: incompleteFinishMessage(chunk.finishReason),
-            });
-          }
-          if (!streamFailed && chunk.finishReason === 'stop' && !hasAnswerText) {
-            streamFailed = true;
-            const errorText = 'The model returned no answer. Your question is still in this conversation. Use /retry to try again.';
-            recordStreamError(new Error(errorText));
-            controller.enqueue({ type: 'error', errorText });
-          }
-          const completed = !streamFailed && chunk.finishReason === 'stop';
-          const evidence = completed ? sources.snapshot(answerId) : undefined;
-          if (completed && evidence) {
-            commitStreamSubject(
-              state,
-              playerCandidates,
-              requestedPlayers,
-              initialPlayer,
-              'player',
-            );
-            commitStreamSubject(
-              state,
-              teamCandidates,
-              requestedTeams,
-              initialTeam,
-              'team',
-            );
-            uiState.recordAnswerEvidence(evidence);
-          }
-          if (
-            decisionRequested &&
-            !streamedDecision &&
-            (completed || chunk.finishReason !== 'tool-calls')
-          ) {
-            const answer = completed
-              ? enforceFreeformRecommendation(
-                bufferedText,
-                buildFreeformRecommendationEvidence({
-                  question: recommendationQuestion,
-                  sources: evidence?.sources ?? [],
-                  toolResults,
-                }),
-              ).answer
-              : incompleteRecommendationMessage();
-            const decisionId = `decision-${crypto.randomUUID()}`;
-            controller.enqueue({ type: 'start-step' });
-            controller.enqueue({ type: 'text-start', id: decisionId });
-            controller.enqueue({
-              type: 'text-delta',
-              id: decisionId,
-              delta: answer,
-            });
-            controller.enqueue({ type: 'text-end', id: decisionId });
-            controller.enqueue({ type: 'finish-step' });
-          }
-          const evidenceText = evidence
-            ? formatEvidenceMarkdown(evidence.sources, {
-              limit: VISIBLE_WEB_SOURCE_LIMIT,
-            })
-            : '';
-          if (evidenceText) {
-            const sourceId = `sources-${crypto.randomUUID()}`;
-            controller.enqueue({ type: 'start-step' });
-            controller.enqueue({ type: 'text-start', id: sourceId });
-            controller.enqueue({
-              type: 'text-delta',
-              id: sourceId,
-              delta: `\n\n${evidenceText}`,
-            });
-            controller.enqueue({ type: 'text-end', id: sourceId });
-            controller.enqueue({ type: 'finish-step' });
-          }
-          if (completed) {
-            const suggestions = getContextualSuggestions(state).slice(0, 3);
-            uiState.suggestions = suggestions;
-          }
-        }
+  const processChunk = async (
+    chunk: UIMessageChunk,
+    controller: TransformStreamDefaultController<UIMessageChunk>,
+    allowRecovery: boolean,
+  ): Promise<void> => {
+    if (chunk.type === 'text-delta' && chunk.delta.trim()) hasAnswerText = true;
+    if (chunk.type === 'abort') {
+      streamFailed = true;
+      const errorText = 'The request stopped before the model completed the answer.';
+      recordStreamError(new DOMException(errorText, 'AbortError'));
+      controller.enqueue({ type: 'error', errorText });
+    }
+    if (chunk.type === 'error') {
+      streamFailed = true;
+      recordStreamError(new Error(chunk.errorText));
+    }
+    if (chunk.type === 'start' && chunk.messageId) answerId = chunk.messageId;
+    if (chunk.type === 'tool-input-available') {
+      if (!completedToolCallIds.has(chunk.toolCallId)) {
+        toolCalls.set(chunk.toolCallId, {
+          input: chunk.input,
+          toolName: chunk.toolName,
+        });
+      }
+      const requested = resolveUserRequestedToolContext(
+        chunk.toolName,
+        chunk.input,
+        userPrompt,
+      );
+      addStreamSubject(requested.player, requestedPlayers);
+      addStreamSubject(requested.team, requestedTeams);
+    }
+    if (chunk.type === 'tool-approval-request') {
+      pendingApprovals.set(chunk.approvalId, chunk.toolCallId);
+    }
+    if (chunk.type === 'tool-approval-response') {
+      pendingApprovals.delete(chunk.approvalId);
+    }
+    if (chunk.type === 'tool-output-available') {
+      deletePendingApproval(pendingApprovals, chunk.toolCallId);
+      const toolCall = completedToolCallIds.has(chunk.toolCallId)
+        ? undefined
+        : toolCalls.get(chunk.toolCallId);
+      if (toolCall) {
+        completedToolCallIds.add(chunk.toolCallId);
+        toolResults.push({
+          input: toolCall.input,
+          output: chunk.output,
+          toolName: toolCall.toolName,
+        });
+        const confirmed = resolveUserConfirmedToolContext(
+          toolCall.toolName,
+          toolCall.input,
+          chunk.output,
+          userPrompt,
+        );
+        addStreamSubject(confirmed.player, playerCandidates);
+        addStreamSubject(confirmed.team, teamCandidates);
+        toolCalls.delete(chunk.toolCallId);
+      }
+    }
+    if (chunk.type === 'tool-output-error' || chunk.type === 'tool-output-denied') {
+      deletePendingApproval(pendingApprovals, chunk.toolCallId);
+      toolCalls.delete(chunk.toolCallId);
+    }
+    if (chunk.type === 'source-url') {
+      const url = normalizeWebUrl(chunk.url);
+      const source = {
+        id: chunk.sourceId,
+        ...(chunk.title ? { title: chunk.title } : {}),
+        url: chunk.url,
+      };
+      if (url) sources.recordUrlSource(source);
+    }
+    if (chunk.type === 'finish') {
+      streamFinished = true;
+      const awaitsApproval = chunk.finishReason === 'tool-calls' &&
+        pendingApprovals.size > 0;
+      if (!streamFailed && chunk.finishReason !== 'stop' && !awaitsApproval) {
+        streamFailed = true;
+        recordStreamError(new Error(incompleteFinishMessage(chunk.finishReason)));
+        controller.enqueue({
+          type: 'error',
+          errorText: incompleteFinishMessage(chunk.finishReason),
+        });
+      }
+      if (!streamFailed && chunk.finishReason === 'stop' && !hasAnswerText) {
+        streamFailed = true;
+        const errorText = 'The model returned no answer. Your question is still in this conversation. Use /retry to try again.';
+        recordStreamError(new Error(errorText));
+        controller.enqueue({ type: 'error', errorText });
+      }
+      const completed = !streamFailed && chunk.finishReason === 'stop';
+      let evaluatedDecision: ReturnType<typeof evaluateDecisionWithPriorFallback> | undefined;
+      if (completed && decisionRequested && !streamedDecision) {
+        evaluatedDecision = evaluateDecisionWithPriorFallback(
+          bufferedText,
+          recommendationQuestion,
+          sources.list(),
+          toolResults,
+          extraOptions?.priorEvidence,
+        );
         if (
-          decisionRequested &&
-          (chunk.type === 'text-start' || chunk.type === 'text-delta' || chunk.type === 'text-end')
+          allowRecovery &&
+          evaluatedDecision.enforced.eligibility.outcome === 'blocked' &&
+          extraOptions?.recoverBlockedDecision
         ) {
-          const evidence = streamedDecision ? undefined : buildFreeformRecommendationEvidence({
-            question: recommendationQuestion,
-            sources: sources.list(),
-            toolResults,
-          });
-          if (
-            streamedDecision ||
-            (evidence !== undefined &&
-              (evidence.identity === 'resolved' || evidence.leagueScoring === 'present' || evidence.projection === 'eligible') &&
-              enforceFreeformRecommendation('', evidence).eligibility.outcome === 'allowed')
-          ) {
-            streamedDecision = true;
-            if (chunk.type === 'text-delta' && bufferedText) {
-              chunk = { ...chunk, delta: `${bufferedText}${chunk.delta}` };
-              bufferedText = '';
+          let recoveryStream: ReadableStream<UIMessageChunk> | null = null;
+          try {
+            recoveryStream = await extraOptions.recoverBlockedDecision({
+              blockedAnswer: bufferedText,
+              evidence: evaluatedDecision.evidence,
+              reasons: evaluatedDecision.enforced.eligibility.reasons,
+            });
+          } catch {
+            recoveryStream = null;
+          }
+          if (recoveryStream) {
+            if (evaluatedDecision.evidence.currentEvidence === 'stale') {
+              toolResults.length = 0;
+              completedToolCallIds.clear();
             }
-          } else {
-            if (chunk.type === 'text-delta') bufferedText += chunk.delta;
+            bufferedText = '';
+            hasAnswerText = false;
+            streamFinished = false;
+            const reader = recoveryStream.getReader();
+            activeRecoveryReader = reader;
+            try {
+              while (true) {
+                const next = await reader.read();
+                if (next.done) break;
+                if (next.value.type === 'start') continue;
+                await processChunk(
+                  prefixRecoveryChunkId(next.value),
+                  controller,
+                  false,
+                );
+              }
+            } finally {
+              activeRecoveryReader = null;
+            }
             return;
           }
         }
-        controller.enqueue(chunk);
+        if (
+          evaluatedDecision.reusedSources.length > 0 &&
+          sources.list().length === 0
+        ) {
+          for (const reused of evaluatedDecision.reusedSources) {
+            sources.record(reused);
+          }
+        }
+      }
+      const evidence = completed ? sources.snapshot(answerId) : undefined;
+      if (completed && evidence) {
+        commitStreamSubject(
+          state,
+          playerCandidates,
+          requestedPlayers,
+          initialPlayer,
+          'player',
+        );
+        commitStreamSubject(
+          state,
+          teamCandidates,
+          requestedTeams,
+          initialTeam,
+          'team',
+        );
+        uiState.recordAnswerEvidence(evidence);
+      }
+      if (
+        decisionRequested &&
+        !streamedDecision &&
+        (completed || chunk.finishReason !== 'tool-calls')
+      ) {
+        const answer = completed
+          ? (evaluatedDecision?.enforced.answer ?? enforceFreeformRecommendation(
+              bufferedText,
+              buildFreeformRecommendationEvidence({
+                question: recommendationQuestion,
+                sources: evidence?.sources ?? [],
+                toolResults,
+              }),
+            ).answer)
+          : incompleteRecommendationMessage();
+        const decisionId = `decision-${crypto.randomUUID()}`;
+        controller.enqueue({ type: 'start-step' });
+        controller.enqueue({ type: 'text-start', id: decisionId });
+        controller.enqueue({
+          type: 'text-delta',
+          id: decisionId,
+          delta: answer,
+        });
+        controller.enqueue({ type: 'text-end', id: decisionId });
+        controller.enqueue({ type: 'finish-step' });
+      }
+      const evidenceText = evidence
+        ? formatEvidenceMarkdown(evidence.sources, {
+          limit: VISIBLE_WEB_SOURCE_LIMIT,
+        })
+        : '';
+      if (evidenceText) {
+        const sourceId = `sources-${crypto.randomUUID()}`;
+        controller.enqueue({ type: 'start-step' });
+        controller.enqueue({ type: 'text-start', id: sourceId });
+        controller.enqueue({
+          type: 'text-delta',
+          id: sourceId,
+          delta: `\n\n${evidenceText}`,
+        });
+        controller.enqueue({ type: 'text-end', id: sourceId });
+        controller.enqueue({ type: 'finish-step' });
+      }
+      if (completed) {
+        const suggestions = getContextualSuggestions(state).slice(0, 3);
+        uiState.suggestions = suggestions;
+      }
+    }
+    if (
+      decisionRequested &&
+      (chunk.type === 'text-start' || chunk.type === 'text-delta' || chunk.type === 'text-end')
+    ) {
+      const evidence = streamedDecision ? undefined : buildFreeformRecommendationEvidence({
+        question: recommendationQuestion,
+        sources: sources.list(),
+        toolResults,
+      });
+      if (
+        streamedDecision ||
+        (evidence !== undefined &&
+          (evidence.identity === 'resolved' || evidence.leagueScoring === 'present' || evidence.projection === 'eligible') &&
+          enforceFreeformRecommendation('', evidence).eligibility.outcome === 'allowed')
+      ) {
+        streamedDecision = true;
+        if (chunk.type === 'text-delta' && bufferedText) {
+          chunk = { ...chunk, delta: `${bufferedText}${chunk.delta}` };
+          bufferedText = '';
+        }
+      } else {
+        if (chunk.type === 'text-delta') bufferedText += chunk.delta;
+        return;
+      }
+    }
+    controller.enqueue(chunk);
+  };
+  const decorated = stream.pipeThrough(
+    new TransformStream<UIMessageChunk, UIMessageChunk>({
+      async transform(chunk, controller) {
+        await processChunk(chunk, controller, true);
       },
       flush(controller) {
         if (!streamFinished && !streamFailed) {
@@ -1360,6 +1555,99 @@ export function decorateResponseStream(
     recordStreamError,
     recordConsumerCancel,
   );
+}
+
+function evaluateDecisionWithPriorFallback(
+  bufferedText: string,
+  recommendationQuestion: string,
+  liveSources: readonly DataSourceRecord[],
+  toolResults: readonly RecommendationToolResult[],
+  priorEvidence?: PriorTurnRecommendationEvidence,
+): {
+  enforced: ReturnType<typeof enforceFreeformRecommendation>;
+  evidence: RecommendationEvidence;
+  reusedSources: readonly DataSourceRecord[];
+} {
+  const liveEvidence = buildFreeformRecommendationEvidence({
+    question: recommendationQuestion,
+    sources: liveSources,
+    toolResults,
+  });
+  const liveEnforced = enforceFreeformRecommendation(bufferedText, liveEvidence);
+  if (
+    liveEnforced.eligibility.outcome !== 'blocked' ||
+    !priorEvidence ||
+    (priorEvidence.sources.length === 0 && priorEvidence.toolResults.length === 0)
+  ) {
+    return { enforced: liveEnforced, evidence: liveEvidence, reusedSources: [] };
+  }
+  const mergedSources = mergeDataSourceRecords(liveSources, priorEvidence.sources);
+  const combinedEvidence = buildFreeformRecommendationEvidence({
+    question: recommendationQuestion,
+    sources: mergedSources,
+    toolResults: [...priorEvidence.toolResults, ...toolResults],
+  });
+  const combinedEnforced = enforceFreeformRecommendation(bufferedText, combinedEvidence);
+  if (combinedEnforced.eligibility.outcome !== 'blocked') {
+    return {
+      enforced: combinedEnforced,
+      evidence: combinedEvidence,
+      reusedSources: priorEvidence.sources,
+    };
+  }
+  return { enforced: liveEnforced, evidence: liveEvidence, reusedSources: [] };
+}
+
+function mergeDataSourceRecords(
+  first: readonly DataSourceRecord[],
+  second: readonly DataSourceRecord[],
+): DataSourceRecord[] {
+  const merged: DataSourceRecord[] = [];
+  const seen = new Set<string>();
+  for (const source of [...first, ...second]) {
+    if (!seen.has(source.id)) {
+      seen.add(source.id);
+      merged.push(source);
+    }
+  }
+  return merged;
+}
+
+function prefixRecoveryChunkId(chunk: UIMessageChunk): UIMessageChunk {
+  if ('toolCallId' in chunk && typeof chunk.toolCallId === 'string') {
+    return { ...chunk, toolCallId: `recovery-${chunk.toolCallId}` };
+  }
+  return chunk;
+}
+
+function compactOlderTurnToolParts(turn: readonly UIMessage[]): UIMessage[] {
+  return turn.map((message) => {
+    if (message.role !== 'assistant') return message;
+    const toolNames: string[] = [];
+    const nonToolParts = message.parts.filter((part) => {
+      if (!isToolUIPart(part)) return true;
+      const name = getToolName(part);
+      if (name && !toolNames.includes(name)) toolNames.push(name);
+      return false;
+    });
+    if (toolNames.length === 0 || nonToolParts.length === 0) return message;
+    const receipt = `\n\n[Verified tool calls in this turn (outputs compacted): ${toolNames.join(', ')}]`;
+    let attached = false;
+    const compactedParts = nonToolParts.map((part, index) => {
+      if (
+        !attached &&
+        part.type === 'text' &&
+        index === nonToolParts.findLastIndex((candidate) => candidate.type === 'text')
+      ) {
+        attached = true;
+        return part.text.includes('[Verified tool calls in this turn')
+          ? part
+          : { ...part, text: `${part.text.trimEnd()}${receipt}` };
+      }
+      return part;
+    });
+    return { ...message, parts: compactedParts };
+  });
 }
 
 function observeReadableStreamLifecycle<T>(

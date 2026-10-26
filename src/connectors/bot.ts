@@ -26,9 +26,11 @@ import {
 } from '../ai/model-provider.js';
 import {
   buildFreeformRecommendationEvidence,
+  buildRecommendationRecoveryPrompt,
   enforceFreeformRecommendation,
   questionRequestsRecommendation,
   recommendationContextQuestion,
+  type RecommendationEvidence,
   type RecommendationToolResult,
 } from '../analysis/recommendation-eligibility.js';
 import { getSharedSebDatabase } from '../data/sqlite-store.js';
@@ -375,6 +377,15 @@ function createAgentReply(environment: Environment): ConnectorReply {
       await traceJudgmentOperation({
         name: 'seb.connector.reply', sessionId: thread.id, input: prompt,
       }, async () => {
+        const clearStaleCaches = async () => {
+          clients.newsClient.clearCache();
+          database.deleteCache('news');
+          await Promise.all([
+            clients.sleeperClient.clearCache(),
+            clients.nflverseClient.clearCache(),
+            clients.weatherClient.clearCache(),
+          ]);
+        };
         try {
           await postAgentResponse(
             thread,
@@ -384,6 +395,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
             requestSignal,
             primaryUsageTelemetry,
             modelErrorContext,
+            clearStaleCaches,
           );
         } catch (error) {
           if (
@@ -404,6 +416,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
             requestSignal,
             fallbackUsageTelemetry,
             modelErrorContext,
+            clearStaleCaches,
           );
         }
       });
@@ -419,6 +432,7 @@ async function postAgentResponse(
   signal: AbortSignal,
   usageTelemetry: SebUsageTelemetry,
   modelErrorContext: ModelErrorContext,
+  clearStaleCaches?: () => Promise<void>,
 ): Promise<void> {
   let result: Awaited<ReturnType<typeof agent.stream>>;
   try {
@@ -426,11 +440,12 @@ async function postAgentResponse(
   } catch (error) {
     throw new ModelResponseError(error, false, modelErrorContext);
   }
+  const question = latestRecommendationQuestion(prompt);
   await waitForSignal(
     postConnectorResponse(thread, withWebSources(
       result.fullStream,
       directSources,
-      latestRecommendationQuestion(prompt),
+      question,
       signal,
       () => usageTelemetry.abortUnfinished(
         signal.reason ??
@@ -438,10 +453,41 @@ async function postAgentResponse(
       ),
       (error) => usageTelemetry.closeUnfinished(error),
       modelErrorContext,
+      async (recoveryContext) => {
+        if (signal.aborted) return null;
+        if (recoveryContext.evidence.currentEvidence === 'stale') {
+          await clearStaleCaches?.();
+          directSources.clear();
+        }
+        const draft = recoveryContext.blockedAnswer.trim().slice(0, 1_200);
+        const recoveryPrompt = [
+          ...prompt,
+          ...(draft ? [{ role: 'assistant' as const, content: draft }] : []),
+          {
+            role: 'user' as const,
+            content: buildRecommendationRecoveryPrompt({
+              blockedAnswer: recoveryContext.blockedAnswer,
+              question,
+              reasons: recoveryContext.reasons,
+            }),
+          },
+        ];
+        const recovered = await agent.stream({
+          abortSignal: signal,
+          prompt: recoveryPrompt,
+        });
+        return recovered.fullStream;
+      },
     ), signal),
     signal,
   );
 }
+
+type ConnectorDecisionRecovery = (context: {
+  blockedAnswer: string;
+  evidence: RecommendationEvidence;
+  reasons: readonly string[];
+}) => Promise<AsyncIterable<unknown> | null>;
 
 export function withWebSources(
   stream: AsyncIterable<unknown>,
@@ -451,6 +497,7 @@ export function withWebSources(
   onConsumerCancel?: () => void,
   onStreamError?: (error: unknown) => void,
   modelErrorContext?: ModelErrorContext,
+  recoverBlockedDecision?: ConnectorDecisionRecovery,
 ) {
   if (questionRequestsRecommendation(question)) {
     return observeConsumerCancellation(
@@ -460,6 +507,7 @@ export function withWebSources(
         question,
         abortSignal,
         modelErrorContext,
+        recoverBlockedDecision,
       ),
       onConsumerCancel,
       onStreamError,
@@ -527,14 +575,15 @@ function guardedRecommendationStream(
   question: string,
   abortSignal?: AbortSignal,
   modelErrorContext?: ModelErrorContext,
+  recoverBlockedDecision?: ConnectorDecisionRecovery,
 ) {
   return (async function* () {
-    let answer = '';
-    const toolCalls = new Map<string, { input: unknown; toolName: string }>();
     const toolResults: RecommendationToolResult[] = [];
-    try {
-      for await (const part of observeCompletedModelStream(stream, abortSignal)) {
-        if (isTextDeltaPart(part)) answer += part.text;
+    const consumePass = async (passStream: AsyncIterable<unknown>): Promise<string> => {
+      let passAnswer = '';
+      const toolCalls = new Map<string, { input: unknown; toolName: string }>();
+      for await (const part of observeCompletedModelStream(passStream, abortSignal)) {
+        if (isTextDeltaPart(part)) passAnswer += part.text;
         recordRecommendationToolCall(part, toolCalls);
         if (isUrlSourcePart(part)) {
           const url = normalizeWebUrl(part.url);
@@ -549,18 +598,50 @@ function guardedRecommendationStream(
         const toolResult = recommendationToolResult(part, toolCalls);
         if (toolResult) toolResults.push(toolResult);
       }
+      return passAnswer;
+    };
+
+    let answer: string;
+    try {
+      answer = await consumePass(stream);
     } catch (error) {
       if (error instanceof ModelResponseError) throw error;
       throw new ModelResponseError(error, false, modelErrorContext);
     }
-    const guarded = enforceFreeformRecommendation(
-      answer,
-      buildFreeformRecommendationEvidence({
-        question,
-        sources: directSources.list(),
-        toolResults,
-      }),
-    );
+    const initialEvidence = buildFreeformRecommendationEvidence({
+      question,
+      sources: directSources.list(),
+      toolResults,
+    });
+    let guarded = enforceFreeformRecommendation(answer, initialEvidence);
+    if (guarded.eligibility.outcome === 'blocked' && recoverBlockedDecision) {
+      try {
+        if (initialEvidence.currentEvidence === 'stale') toolResults.length = 0;
+        const recoveryStream = await recoverBlockedDecision({
+          blockedAnswer: answer,
+          evidence: initialEvidence,
+          reasons: guarded.eligibility.reasons,
+        });
+        if (recoveryStream) {
+          const recoveredAnswer = await consumePass(recoveryStream);
+          if (recoveredAnswer.trim()) {
+            guarded = enforceFreeformRecommendation(
+              recoveredAnswer,
+              buildFreeformRecommendationEvidence({
+                question,
+                sources: directSources.list(),
+                toolResults,
+              }),
+            );
+          }
+        }
+      } catch (recoveryError) {
+        if (abortSignal?.aborted) {
+          if (recoveryError instanceof ModelResponseError) throw recoveryError;
+          throw new ModelResponseError(recoveryError, false, modelErrorContext);
+        }
+      }
+    }
     yield guarded.answer;
     yield sourceAppendix(directSources);
   })();

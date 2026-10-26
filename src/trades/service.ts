@@ -1,7 +1,7 @@
 import { normalizePlayerName } from '../identity/normalize.js';
 import { LearningStore } from '../learning/store.js';
 import { resolveCompletedAnalysisWindow } from '../analysis/window.js';
-import { NflverseClient } from '../nflverse/client.js';
+import { NflverseApiError, NflverseClient } from '../nflverse/client.js';
 import { enrichSpecialTeams, PLAYER_SPECIAL_TEAMS_SETTINGS } from '../nflverse/defense.js';
 import { SleeperClient } from '../sleeper/client.js';
 import type {
@@ -36,26 +36,28 @@ export class TradeImpactService {
       this.sleeper.getPlayers(),
       this.sleeper.getNflState(),
     ]);
+    const automaticWindow =
+      request.analysisSeason === undefined && request.throughWeek === undefined;
     let window = resolveCompletedAnalysisWindow(league.season, state, request);
-    let rows = await this.readStats(window.analysisSeason, window.throughWeek);
+    let rows = await this.readStats(window.analysisSeason, window.throughWeek, automaticWindow);
     if (
       rows.length === 0 &&
-      request.analysisSeason === undefined &&
-      request.throughWeek === undefined
+      automaticWindow
     ) {
       window = { analysisSeason: window.analysisSeason - 1, throughWeek: 18 };
-      rows = await this.readStats(window.analysisSeason, window.throughWeek);
+      rows = await this.readStats(window.analysisSeason, window.throughWeek, false);
     }
     if (PLAYER_SPECIAL_TEAMS_SETTINGS.some((k) => Number(league.scoring_settings[k] ?? 0) !== 0) && typeof this.nflverse.getDefenseData === 'function') {
       rows = enrichSpecialTeams(rows, await this.nflverse.getDefenseData(window.analysisSeason));
     }
     const roster = rosters.find((candidate) => candidate.roster_id === request.rosterId);
     if (!roster) throw new Error(`Roster ${request.rosterId} does not exist in this league.`);
-    const givePlayers = resolvePlayers(players, request.givePlayerNames);
-    const receivePlayers = resolvePlayers(players, request.receivePlayerNames);
+    const rosteredIds = new Set(rosters.flatMap((candidate) => candidate.players ?? []));
+    const ownPlayerIds = new Set(roster.players ?? []);
+    const givePlayers = resolvePlayers(players, request.givePlayerNames, ownPlayerIds, rosteredIds);
+    const receivePlayers = resolvePlayers(players, request.receivePlayerNames, rosteredIds, rosteredIds);
     assertUniquePlayers(givePlayers, 'give');
     assertUniquePlayers(receivePlayers, 'receive');
-    const ownPlayerIds = new Set(roster.players ?? []);
     const invalidGive = givePlayers.find((player) => !ownPlayerIds.has(player.player_id));
     if (invalidGive) {
       throw new Error(`${playerName(invalidGive)} is not on roster ${request.rosterId}.`);
@@ -64,7 +66,6 @@ export class TradeImpactService {
     if (invalidReceive) {
       throw new Error(`${playerName(invalidReceive)} is already on roster ${request.rosterId}.`);
     }
-    const rosteredIds = new Set(rosters.flatMap((candidate) => candidate.players ?? []));
     const freeAgent = receivePlayers.find((player) => !rosteredIds.has(player.player_id));
     if (freeAgent) {
       throw new Error(`${playerName(freeAgent)} is not rostered in this league. Use the waiver assistant.`);
@@ -95,11 +96,16 @@ export class TradeImpactService {
     });
   }
 
-  private readStats(season: number, throughWeek: number) {
+  private readStats(season: number, throughWeek: number, allowMissingSeason: boolean) {
     return this.nflverse.getPlayerWeeklyStats({
       season,
       seasonType: 'REG',
       throughWeek,
+    }).catch((error: unknown) => {
+      if (allowMissingSeason && error instanceof NflverseApiError && error.status === 404) {
+        return [];
+      }
+      throw error;
     });
   }
 }
@@ -117,6 +123,8 @@ function assertUniquePlayers(
 function resolvePlayers(
   players: SleeperPlayerMap,
   names: readonly string[],
+  preferredIds: ReadonlySet<string>,
+  rosteredIds: ReadonlySet<string>,
 ): SleeperPlayer[] {
   return names.map((name) => {
     const trimmed = name.trim();
@@ -126,8 +134,23 @@ function resolvePlayers(
       normalizeName(playerName(player)) === normalized,
     );
     if (matches.length > 1) {
+      const preferred = matches.filter((player) => preferredIds.has(player.player_id));
+      if (preferred.length === 1) matches = preferred;
+    }
+    if (matches.length > 1) {
+      const rostered = matches.filter((player) => rosteredIds.has(player.player_id));
+      if (rostered.length === 1) matches = rostered;
+    }
+    if (matches.length > 1) {
       const active = matches.filter((player) => player.active !== false);
       if (active.length === 1) matches = active;
+      else if (active.length > 1) matches = active;
+    }
+    if (matches.length > 1) {
+      const fantasy = matches.filter((player) =>
+        ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'].includes(player.position?.toUpperCase() ?? ''),
+      );
+      if (fantasy.length === 1) matches = fantasy;
     }
     if (matches.length === 0) throw new Error(`Sleeper found no player named ${name}.`);
     if (matches.length > 1) throw new Error(`The player name ${name} is ambiguous.`);

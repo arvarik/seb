@@ -22,6 +22,7 @@ import {
 import {
   buildFreeformRecommendationEvidence,
   buildRecommendationEvidence,
+  buildRecommendationRecoveryPrompt,
   enforceFreeformRecommendation,
   enforceRecommendationEligibility,
   questionRequestsRecommendation,
@@ -527,6 +528,7 @@ async function startInteractiveChat(
       }),
       environment,
       model: selection.modelProvider.model,
+      news: clients.newsClient,
       provider,
       providerLabel,
       nflverse: clients.nflverseClient,
@@ -996,33 +998,16 @@ async function streamAnswer(
     surface: 'cli',
   });
 
-  const run = async (model: string): Promise<void> => {
+  const consumeStream = async (
+    agent: ReturnType<typeof createFantasyFootballAgent>,
+    streamPrompt: string,
+  ): Promise<void> => {
     const terminalText = new TerminalTextSanitizer();
     completionWarning = undefined;
     bufferedText = '';
-    decisionToolResults = [];
     decisionToolInputs = new Map();
-    directSources.clear();
-    webSources.clear();
-    const clients = createDataClients(
-      selection.nwsUserAgent,
-      directSources,
-    );
-    const automaticContext = await loadAutomaticContext(
-      environment,
-      clients.sleeperClient,
-    );
-    currentRequestSignal()?.throwIfAborted();
-    const agent = createFantasyFootballAgent({
-      modelProvider: modelProviderForModel(selection.modelProvider, model),
-      ...clients,
-      getRuntimeContext: () => automaticContext.data,
-      getRuntimeInstructions: () => automaticContext.instructions,
-      telemetryFunctionId: 'seb.cli.research',
-      telemetryIntegrations: [usageTelemetry],
-    });
     const signal = currentRequestSignal();
-    const result = await waitForModelOperation(agent.stream({ prompt, ...(signal ? { abortSignal: signal } : {}) }), signal);
+    const result = await waitForModelOperation(agent.stream({ prompt: streamPrompt, ...(signal ? { abortSignal: signal } : {}) }), signal);
 
     for await (const part of observeUsageStreamErrors(observeCompletedModelStream(result.fullStream, signal, { onPartial: (warning) => { completionWarning = warning.message; } }), usageTelemetry)) {
         if (part.type === 'text-delta') {
@@ -1072,6 +1057,77 @@ async function streamAnswer(
           });
           decisionToolInputs.delete(part.toolCallId);
         }
+    }
+  };
+
+  const run = async (model: string): Promise<void> => {
+    decisionToolResults = [];
+    directSources.clear();
+    webSources.clear();
+    const clients = createDataClients(
+      selection.nwsUserAgent,
+      directSources,
+    );
+    const automaticContext = await loadAutomaticContext(
+      environment,
+      clients.sleeperClient,
+    );
+    directSources.clear();
+    currentRequestSignal()?.throwIfAborted();
+    const agent = createFantasyFootballAgent({
+      modelProvider: modelProviderForModel(selection.modelProvider, model),
+      ...clients,
+      getRuntimeContext: () => automaticContext.data,
+      getRuntimeInstructions: () => automaticContext.instructions,
+      telemetryFunctionId: 'seb.cli.research',
+      telemetryIntegrations: [usageTelemetry],
+    });
+    await consumeStream(agent, prompt);
+    if (
+      decisionRequested &&
+      !completionWarning &&
+      !wroteText &&
+      bufferedText.trim() &&
+      !currentRequestSignal()?.aborted
+    ) {
+      const initialEvidence = buildFreeformRecommendationEvidence({
+        question: prompt,
+        sources: directSources.list(),
+        toolResults: decisionToolResults,
+      });
+      const initialGuarded = enforceFreeformRecommendation(
+        bufferedText,
+        initialEvidence,
+      );
+      if (initialGuarded.eligibility.outcome === 'blocked') {
+        if (initialEvidence.currentEvidence === 'stale') {
+          clients.newsClient.clearCache();
+          getSharedSebDatabase().deleteCache('news');
+          await Promise.all([
+            clients.sleeperClient.clearCache(),
+            clients.nflverseClient.clearCache(),
+            clients.weatherClient.clearCache(),
+          ]);
+          directSources.clear();
+          webSources.clear();
+          decisionToolResults = [];
+        }
+        const savedBufferedText = bufferedText;
+        const recoveryPrompt = `${prompt}\n\n${buildRecommendationRecoveryPrompt({
+          blockedAnswer: bufferedText,
+          question: prompt,
+          reasons: initialGuarded.eligibility.reasons,
+        })}`;
+        try {
+          await consumeStream(agent, recoveryPrompt);
+        } catch (recoveryError) {
+          if (currentRequestSignal()?.aborted) throw recoveryError;
+          bufferedText = savedBufferedText;
+        }
+        if (!wroteText && !bufferedText.trim() && !completionWarning) {
+          bufferedText = savedBufferedText;
+        }
+      }
     }
   };
 

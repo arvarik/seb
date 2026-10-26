@@ -1,6 +1,6 @@
 import { LearningStore } from '../learning/store.js';
 import { resolveCompletedAnalysisWindow } from '../analysis/window.js';
-import { NflverseClient } from '../nflverse/client.js';
+import { NflverseApiError, NflverseClient } from '../nflverse/client.js';
 import { enrichSpecialTeams, PLAYER_SPECIAL_TEAMS_SETTINGS } from '../nflverse/defense.js';
 import type { NflversePlayerWeek } from '../nflverse/types.js';
 import { SleeperClient } from '../sleeper/client.js';
@@ -45,18 +45,19 @@ export class WaiverAssistantService {
         `Sleeper league ${request.leagueId} has no roster ${request.rosterId}.`,
       );
     }
+    const automaticWindow =
+      request.analysisSeason === undefined && request.throughWeek === undefined;
     const window = resolveCompletedAnalysisWindow(league.season, state, request);
-    let rows = await this.readStats(window.analysisSeason, window.throughWeek);
+    let rows = await this.readStats(window.analysisSeason, window.throughWeek, automaticWindow);
     let analysisSeason = window.analysisSeason;
     let throughWeek = window.throughWeek;
     if (
       rows.length === 0 &&
-      request.analysisSeason === undefined &&
-      request.throughWeek === undefined
+      automaticWindow
     ) {
       analysisSeason -= 1;
       throughWeek = 18;
-      rows = await this.readStats(analysisSeason, throughWeek);
+      rows = await this.readStats(analysisSeason, throughWeek, false);
     }
     if (PLAYER_SPECIAL_TEAMS_SETTINGS.some((k) => Number(league.scoring_settings[k] ?? 0) !== 0) && typeof this.nflverse.getDefenseData === 'function') {
       rows = enrichSpecialTeams(rows, await this.nflverse.getDefenseData(analysisSeason));
@@ -80,11 +81,17 @@ export class WaiverAssistantService {
   private readStats(
     season: number,
     throughWeek: number,
+    allowMissingSeason: boolean,
   ): Promise<NflversePlayerWeek[]> {
     return this.nflverse.getPlayerWeeklyStats({
       season,
       seasonType: 'REG',
       throughWeek,
+    }).catch((error: unknown) => {
+      if (allowMissingSeason && error instanceof NflverseApiError && error.status === 404) {
+        return [];
+      }
+      throw error;
     });
   }
 }

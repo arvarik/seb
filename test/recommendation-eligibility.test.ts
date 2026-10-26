@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFreeformRecommendationEvidence,
   buildRecommendationEvidence,
+  buildRecommendationRecoveryPrompt,
   enforceFreeformRecommendation,
   enforceRecommendationEligibility,
   questionRequestsRecommendation,
@@ -629,4 +630,86 @@ it('requires news coverage for all listed candidates on open-ended waiver questi
   });
   expect(fullNews).toMatchObject({ identity: 'resolved', injury: 'present', leagueScoring: 'present' });
 });
+
+it('passes clarifying questions through, skips opponent/process/hindsight prompts, and handles zero-headline first-class news + D/ST matching', () => {
+  expect(questionRequestsRecommendation('ok my opponent in judgment labs set their lineup, how am I looking?')).toBe(false);
+  expect(questionRequestsRecommendation('I guess can we start this proicess?')).toBe(false);
+  expect(questionRequestsRecommendation('Should I have started Aaron Smith last week?')).toBe(false);
+  expect(recommendationContextQuestion('When does he play?', 'Should I start Aaron Smith?', 'Aaron Smith')).toBe('When does he play?');
+  expect(recommendationContextQuestion('Should I start him?', 'How is Aaron Smith looking?', 'Aaron Smith')).toContain('Aaron Smith');
+
+  const clarification = enforceFreeformRecommendation(
+    'You have two active Sleeper leagues right now — which league would you like Week 8 lineup recommendations for?',
+    {
+      currentEvidence: 'missing',
+      identity: 'missing',
+      injury: 'missing',
+      leagueScoring: 'missing',
+      projection: 'not-required',
+    },
+  );
+  expect(clarification.eligibility.outcome).toBe('not-applicable');
+  expect(clarification.answer).toContain('which league would you like');
+  expect(clarification.answer).not.toContain('Decision unavailable');
+
+  const quietNews = buildRecommendationEvidence({
+    analysis: exampleAnalysis(),
+    question: 'Should I start Seattle D/ST in league 111 or league 222?',
+    sources: [
+      directSource(),
+      {
+        accessedAt: '2026-08-29T18:00:00.000Z',
+        cacheOutcome: 'source-updated',
+        id: 'news-source:espn-nfl',
+        label: 'ESPN NFL',
+        url: 'https://www.espn.com/espn/rss/nfl/news',
+      },
+    ],
+    toolResults: [
+      {
+        input: { leagueId: '111', playerName: 'Seattle D/ST' },
+        toolName: 'projectPlayer',
+        output: {
+          league: { leagueId: '111', name: 'League One' },
+          limitations: [],
+          player: { name: 'Seattle Seahawks', playerId: 'SEA' },
+          recommendationEligible: true,
+          scoring: { ignoredSettings: [], usedSettings: ['sack'] },
+        },
+      },
+      {
+        input: { leagueId: '222', playerName: 'Seattle D/ST' },
+        toolName: 'projectPlayer',
+        output: {
+          league: { leagueId: '222', name: 'League Two' },
+          limitations: [],
+          player: { name: 'Seattle Seahawks', playerId: 'SEA' },
+          recommendationEligible: true,
+          scoring: { ignoredSettings: [], usedSettings: ['sack'] },
+        },
+      },
+      {
+        input: { query: 'Seattle Seahawks defense injury status' },
+        toolName: 'searchFirstClassNews',
+        output: {
+          articles: [],
+          coverage: { successfulSourceCount: 4 },
+        },
+      },
+    ],
+  });
+  expect(quietNews).toEqual({
+    currentEvidence: 'fresh',
+    identity: 'resolved',
+    injury: 'present',
+    leagueScoring: 'present',
+    projection: 'eligible',
+  });
+  expect(buildRecommendationRecoveryPrompt({
+    blockedAnswer: 'Start Aaron Smith.',
+    question: 'Should I start Aaron Smith?',
+    reasons: ['No current source supports this action.'],
+  })).toContain('Automatically gather the missing evidence now');
+});
+
 

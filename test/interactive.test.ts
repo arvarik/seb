@@ -1192,6 +1192,166 @@ describe('SebInteractiveTransport', () => {
     expect(output).not.toContain('Start Example Player with high confidence');
   });
 
+  it('auto-recovers in one pass when an initial decision turn omits required tools, and clears news cache on /refresh', async () => {
+    let passCount = 0;
+    const sources = new SourceTracker();
+    const clearNewsCache = vi.fn();
+    const clients = dataClients();
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        passCount += 1;
+        if (passCount === 1) {
+          return {
+            stream: simulateReadableStream({
+              chunks: [
+                { type: 'stream-start', warnings: [] },
+                { type: 'text-start', id: 'pass-1' },
+                { type: 'text-delta', id: 'pass-1', delta: 'Start Aaron Smith with confidence.' },
+                { type: 'text-end', id: 'pass-1' },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'stop', raw: undefined },
+                  usage: {
+                    inputTokens: { total: 4, noCache: 4, cacheRead: undefined, cacheWrite: undefined },
+                    outputTokens: { total: 4, text: 4, reasoning: undefined },
+                  },
+                },
+              ],
+            }),
+          };
+        }
+        sources.record({
+          cacheOutcome: 'source-updated',
+          id: 'sleeper:proj',
+          label: 'Sleeper projection data',
+          url: 'https://api.sleeper.app/v1/league/123',
+        });
+        sources.record({
+          cacheOutcome: 'source-updated',
+          id: 'news-source:espn-nfl',
+          label: 'ESPN NFL',
+          url: 'https://www.espn.com/espn/rss/nfl/news',
+        });
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              {
+                type: 'tool-call',
+                toolCallId: 'rec-news',
+                toolName: 'searchFirstClassNews',
+                input: JSON.stringify({ query: 'Aaron Smith injury status' }),
+              },
+              {
+                type: 'finish',
+                finishReason: { unified: 'tool-calls', raw: undefined },
+                usage: {
+                  inputTokens: { total: 4, noCache: 4, cacheRead: undefined, cacheWrite: undefined },
+                  outputTokens: { total: 4, text: 4, reasoning: undefined },
+                },
+              },
+            ],
+          }),
+        };
+      },
+    });
+    // Use decorateResponseStream recovery callback to verify 1-pass stream recovery directly
+    const uiState = new InteractiveUiState();
+    const initialStream = new ReadableStream<UIMessageChunk>({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'msg-1' });
+        controller.enqueue({ type: 'text-start', id: 't1' });
+        controller.enqueue({ type: 'text-delta', id: 't1', delta: 'Start Aaron Smith.' });
+        controller.enqueue({ type: 'text-end', id: 't1' });
+        controller.enqueue({ type: 'finish', finishReason: 'stop' });
+        controller.close();
+      },
+    });
+    const recovered = await streamText(decorateResponseStream(
+      initialStream,
+      createSessionState(),
+      sources,
+      uiState,
+      'Should I start Aaron Smith?',
+      'Should I start Aaron Smith?',
+      undefined,
+      undefined,
+      [],
+      {
+        recoverBlockedDecision: async () => {
+          sources.record({
+            cacheOutcome: 'source-updated',
+            id: 'sleeper:123',
+            label: 'Sleeper league',
+            url: 'https://api.sleeper.app/v1/league/123',
+          });
+          sources.record({
+            cacheOutcome: 'source-updated',
+            id: 'news-source:espn-nfl',
+            label: 'ESPN NFL',
+            url: 'https://www.espn.com/espn/rss/nfl/news',
+          });
+          return new ReadableStream<UIMessageChunk>({
+            start(controller) {
+              controller.enqueue({ type: 'start', messageId: 'msg-1-recovered' });
+              controller.enqueue({
+                type: 'tool-input-available',
+                toolCallId: 'p1',
+                toolName: 'projectPlayer',
+                input: { leagueId: '123', playerName: 'Aaron Smith', season: 2026, week: 8 },
+              });
+              controller.enqueue({
+                type: 'tool-output-available',
+                toolCallId: 'p1',
+                output: {
+                  league: { leagueId: '123', name: 'League' },
+                  limitations: [],
+                  player: { name: 'Aaron Smith', playerId: 'p1' },
+                  recommendationEligible: true,
+                  scoring: { ignoredSettings: [], usedSettings: ['rec'] },
+                },
+              });
+              controller.enqueue({
+                type: 'tool-input-available',
+                toolCallId: 'n1',
+                toolName: 'searchFirstClassNews',
+                input: { query: 'Aaron Smith injury' },
+              });
+              controller.enqueue({
+                type: 'tool-output-available',
+                toolCallId: 'n1',
+                output: { articles: [], coverage: { successfulSourceCount: 3 } },
+              });
+              controller.enqueue({ type: 'text-start', id: 't2' });
+              controller.enqueue({ type: 'text-delta', id: 't2', delta: 'Start Aaron Smith (16.2 projected pts).' });
+              controller.enqueue({ type: 'text-end', id: 't2' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop' });
+              controller.close();
+            },
+          });
+        },
+      },
+    ));
+    expect(recovered).toContain('Start Aaron Smith (16.2 projected pts).');
+    expect(recovered).not.toContain('Decision unavailable');
+
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
+      environment: {},
+      model: 'test-model',
+      news: { clearCache: clearNewsCache },
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources,
+      version: '0.0.1',
+      weather: clients.weatherClient,
+    });
+    const refreshOutput = await sendCommand(transport, '/refresh', 'refresh-1');
+    expect(clearNewsCache).toHaveBeenCalledOnce();
+    expect(refreshOutput).toContain('Seb cleared the all cache.');
+  });
+
   it.each([false, true])('marks an unfinished interactive stream as failed when aborted=%s', async (aborted) => {
     const uiState = new InteractiveUiState();
     uiState.latestAnswer = 'Previous complete answer';

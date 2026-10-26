@@ -174,6 +174,46 @@ describe('NflverseClient', () => {
 
     await expect(client.getSchedule()).rejects.toThrow('exceeds');
   });
+
+  it('revalidates a fresh schedule cache when a past-kickoff game still lacks final scores', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { resolve } = await import('node:path');
+    const { SebDatabase } = await import('../src/data/sqlite-store.js');
+    const dir = mkdtempSync(resolve(tmpdir(), 'seb-nflverse-sched-'));
+    const database = new SebDatabase(resolve(dir, 'seb.sqlite'));
+    try {
+      let fetchCalls = 0;
+      const scoredCsv = scheduleCsv.replace('BUF,,KC,,', 'BUF,24,KC,27,');
+      const client = new NflverseClient({
+        database,
+        fetch: async () => {
+          fetchCalls += 1;
+          return csvResponse(fetchCalls === 1 ? scheduleCsv : scoredCsv);
+        },
+      });
+      const initial = await client.getSchedule({ season: 2026, week: 1, team: 'KC' });
+      expect(initial[0]?.homeScore).toBeNull();
+      // Backdate cachedAt by 20 minutes while keeping TTL fresh (6 hours)
+      const cached = database.getCache('nflverse', 'schedule-v3');
+      database.putCache({
+        cachedAt: new Date(Date.now() - 20 * 60 * 1_000).toISOString(),
+        key: 'schedule-v3',
+        namespace: 'nflverse',
+        schemaVersion: 'v3',
+        sourceUrl: cached?.sourceUrl ?? 'https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv.gz',
+        staleIfErrorMs: 7 * 24 * 60 * 60 * 1_000,
+        ttlMs: 6 * 60 * 60 * 1_000,
+        value: cached?.value,
+      });
+
+      const refreshed = await client.getSchedule({ season: 2026, week: 1, team: 'KC' });
+      expect(fetchCalls).toBe(2);
+      expect(refreshed[0]).toMatchObject({ awayScore: 24, homeScore: 27 });
+    } finally {
+      database.close();
+    }
+  });
 });
 
 function csvResponse(value: string): Response {

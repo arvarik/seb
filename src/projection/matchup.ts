@@ -159,6 +159,9 @@ export async function projectLeagueMatchup(
     }
     const sigmaDiff = Math.sqrt(Math.max(1, varA + varB - 2 * covAB));
     winProbability = Math.round(normalCdf((rosters[0]!.projectedSubtotal - rosters[1]!.projectedSubtotal) / sigmaDiff) * 1000) / 1000;
+  } else if (rosters[0]!.complete && rosters[1]!.complete && projA.length + projB.length === 0) {
+    const finalDiff = rosters[0]!.projectedSubtotal - rosters[1]!.projectedSubtotal;
+    winProbability = finalDiff > 0 ? 1 : finalDiff < 0 ? 0 : 0.5;
   }
   return { league: { id: league.league_id, name: league.name }, season: request.season, week: request.week,
     rosters, projections: batch.results, winProbability, stackCorrelations,
@@ -276,18 +279,34 @@ export async function optimizeRosterLineup(
       }
     }
   }
+  const pinnedStarterIndices = new Map<number, RosterCandidate>();
+  starterSlots.forEach((_slot, index) => {
+    const playerId = currentStarterIds[index];
+    const resolved = playerId && playerId !== '0' ? byId.get(playerId) : undefined;
+    if (resolved && (resolved.status === 'completed' || resolved.lockedInProgress)) {
+      pinnedStarterIndices.set(index, resolved);
+    }
+  });
+  const pinnedPlayerIds = new Set([...pinnedStarterIndices.values()].map((player) => player.playerId));
+  const unlockedSlots = starterSlots
+    .map((slot, origIndex) => ({ slot, origIndex }))
+    .filter(({ origIndex }) => !pinnedStarterIndices.has(origIndex));
   const eligiblePlayers: LineupPlayer[] = [...byId.values()]
-    .filter((player) => (player.status === 'completed' || player.status === 'projected') &&
+    .filter((player) => !pinnedPlayerIds.has(player.playerId) &&
+      player.status === 'projected' &&
       player.points !== null && Number.isFinite(player.points) &&
-      (player.status === 'completed' || !player.injuryStatus || !UNAVAILABLE_INJURY.test(player.injuryStatus)))
+      (!player.injuryStatus || !UNAVAILABLE_INJURY.test(player.injuryStatus)))
     .map((player) => ({ id: player.playerId, name: player.name, positions: player.positions, points: player.points! }));
-  const optimal = optimizeLineup(eligiblePlayers, starterSlots);
-  const assignments = optimal.assignments.map((entry) => ({ ...entry }));
-  for (const entryA of assignments) {
+  const optimalUnlocked = optimizeLineup(eligiblePlayers, unlockedSlots.map((entry) => entry.slot));
+  const unlockedAssignments = optimalUnlocked.assignments.map((entry) => ({
+    ...entry,
+    slotIndex: unlockedSlots[entry.slotIndex]!.origIndex,
+  }));
+  for (const entryA of unlockedAssignments) {
     if (!starterSet.has(entryA.player.id)) continue;
     const origIndex = currentStarterIds.indexOf(entryA.player.id);
-    if (origIndex < 0 || origIndex >= starterSlots.length || entryA.slotIndex === origIndex) continue;
-    const entryB = assignments.find((candidate) => candidate.slotIndex === origIndex);
+    if (origIndex < 0 || origIndex >= starterSlots.length || pinnedStarterIndices.has(origIndex) || entryA.slotIndex === origIndex) continue;
+    const entryB = unlockedAssignments.find((candidate) => candidate.slotIndex === origIndex);
     const origSlot = starterSlots[origIndex]!;
     if (entryB && eligibleForSlot(entryA.player.positions, origSlot) && eligibleForSlot(entryB.player.positions, entryA.slot)) {
       entryB.slot = entryA.slot;
@@ -296,7 +315,12 @@ export async function optimizeRosterLineup(
       entryA.slotIndex = origIndex;
     }
   }
-  assignments.sort((a, b) => a.slotIndex - b.slotIndex);
+  const pinnedAssignments = [...pinnedStarterIndices.entries()].map(([slotIndex, resolved]) => ({
+    slot: starterSlots[slotIndex]!,
+    slotIndex,
+    player: { id: resolved.playerId, name: resolved.name, positions: resolved.positions, points: resolved.points ?? 0 },
+  }));
+  const assignments = [...pinnedAssignments, ...unlockedAssignments].sort((a, b) => a.slotIndex - b.slotIndex);
   const currentLineup = starterSlots.map((slot, index) => {
     const playerId = currentStarterIds[index] ?? '0';
     const resolved = playerId !== '0' ? byId.get(playerId) : undefined;
@@ -307,10 +331,13 @@ export async function optimizeRosterLineup(
       points: resolved.points, status: resolved.status, injuryStatus: resolved.injuryStatus, reason: resolved.reason };
   });
   const currentProjectedPoints = Math.round(currentLineup.reduce((sum, entry) => sum + Math.round((entry.points ?? 0) * 100), 0)) / 100;
+  const pinnedCompletedCents = [...pinnedStarterIndices.values()]
+    .reduce((sum, player) => sum + Math.round((player.points ?? 0) * 100), 0);
+  const optimalProjectedPoints = Math.round(pinnedCompletedCents + Math.round(optimalUnlocked.expectedPoints * 100)) / 100;
   const optimalLineup = assignments.map(({ slot, slotIndex, player }) => {
     const resolved = byId.get(player.id)!;
     return { slot, slotIndex, playerId: player.id, name: player.name, position: resolved.position,
-      points: player.points, status: resolved.status, injuryStatus: resolved.injuryStatus, wasStarter: starterSet.has(player.id) };
+      points: resolved.points, status: resolved.status, injuryStatus: resolved.injuryStatus, wasStarter: starterSet.has(player.id) };
   });
   const optimalPlayerIds = new Set(assignments.map((entry) => entry.player.id));
   const displacedIndices = new Set(
@@ -348,16 +375,22 @@ export async function optimizeRosterLineup(
   const warnings: string[] = [];
   for (const entry of currentLineup) {
     if (entry.playerId === '0') warnings.push(`Starter slot ${entry.slot} is currently empty.`);
-    else if (entry.status === 'unavailable') warnings.push(`Current starter ${entry.name} (${entry.slot}) is unavailable: ${entry.reason ?? 'no projection'}`);
+    else if (byId.get(entry.playerId)?.lockedInProgress) {
+      warnings.push(`Current starter ${entry.name} (${entry.slot}) is locked in an in-progress game and remains pinned to ${entry.slot}.`);
+    } else if (entry.status === 'unavailable') warnings.push(`Current starter ${entry.name} (${entry.slot}) is unavailable: ${entry.reason ?? 'no projection'}`);
     else if (entry.injuryStatus) warnings.push(`Current starter ${entry.name} (${entry.slot}) carries injury designation: ${entry.injuryStatus}.`);
   }
-  for (const missingSlot of optimal.missingSlots) {
+  for (const missingSlot of optimalUnlocked.missingSlots) {
     warnings.push(`No eligible active player available to fill starter slot ${missingSlot}.`);
   }
   const ignoredSettings = [...new Set([...byId.values()].flatMap((player) => player.ignoredSettings))].sort();
   const hasLockedInProgressStarter = activeStarterIds.some((id) => byId.get(id)?.lockedInProgress === true);
-  const complete = optimal.complete && ignoredSettings.length === 0 && !hasLockedInProgressStarter;
-  const recommendationEligible = complete && assignments.every((entry) => byId.get(entry.player.id)?.recommendationEligible === true);
+  const complete = optimalUnlocked.complete && ignoredSettings.length === 0 && !hasLockedInProgressStarter;
+  const recommendationEligible =
+    unlockedSlots.length > 0 &&
+    optimalUnlocked.complete &&
+    ignoredSettings.length === 0 &&
+    unlockedAssignments.every((entry) => byId.get(entry.player.id)?.recommendationEligible === true);
   return {
     league: { id: league.league_id, name: league.name },
     rosterId: request.rosterId,
@@ -367,10 +400,10 @@ export async function optimizeRosterLineup(
     currentLineup,
     currentProjectedPoints,
     optimalLineup,
-    optimalProjectedPoints: optimal.expectedPoints,
-    pointsDelta: Math.round(Math.max(0, optimal.expectedPoints - currentProjectedPoints) * 100) / 100,
+    optimalProjectedPoints,
+    pointsDelta: Math.round(Math.max(0, optimalProjectedPoints - currentProjectedPoints) * 100) / 100,
     recommendedSwaps,
-    missingSlots: optimal.missingSlots,
+    missingSlots: optimalUnlocked.missingSlots,
     complete,
     recommendationEligible,
     ignoredSettings,

@@ -6,23 +6,27 @@ import { simulatePlayoffOdds, type RemainingMatchup } from './playoffs.js';
 
 export function createPlayoffTools(client: SleeperClient) {
   return { simulatePlayoffOdds: tool({
-    description: 'Estimate league playoff qualification odds from completed scores and an available future schedule. Reject unsupported divisions or missing matchups.',
+    description: 'Estimate league playoff qualification odds from completed scores and an available future schedule. Automatically uses the latest completed week when throughWeek is omitted. Reject unsupported divisions or missing matchups.',
     inputSchema: z.object({ leagueId: z.string().regex(/^\d+$/),
-      throughWeek: z.number().int().min(2).max(17), simulations: z.number().int().min(100).max(50_000).default(10_000) }),
+      throughWeek: z.number().int().min(2).max(17).optional(), simulations: z.number().int().min(100).max(50_000).default(10_000) }),
     execute: async ({ leagueId, throughWeek, simulations }) => {
       const league = await client.getLeague(leagueId);
       if (Number(league.settings.divisions ?? 0) > 1) throw new Error('Division playoff seeding is not supported by this simulation.');
       const start = Number(league.settings.playoff_week_start);
       const spots = Number(league.settings.playoff_teams);
-      if (!Number.isInteger(start) || start <= throughWeek || start > 18 || !Number.isInteger(spots) || spots < 1) {
+      if (!Number.isInteger(start) || start > 18 || !Number.isInteger(spots) || spots < 1 || (throughWeek !== undefined && start <= throughWeek)) {
         throw new Error('The league needs a valid future playoff start and playoff team count.');
       }
       const analysis = await new SleeperAnalysisService(client).analyzeLeague(leagueId, throughWeek);
+      const resolvedThroughWeek = analysis.throughWeek;
+      if (resolvedThroughWeek < 2 || start <= resolvedThroughWeek) {
+        throw new Error('The league needs at least two completed weeks before a valid future playoff start.');
+      }
       if (spots > analysis.teams.length) {
         throw new Error('Playoff spots cannot exceed the total number of league teams.');
       }
-      const weeks = await Promise.all(Array.from({ length: start - throughWeek - 1 }, async (_, index) => {
-        const week = throughWeek + index + 1;
+      const weeks = await Promise.all(Array.from({ length: start - resolvedThroughWeek - 1 }, async (_, index) => {
+        const week = resolvedThroughWeek + index + 1;
         return { week, games: await client.getLeagueMatchups(leagueId, week) };
       }));
       const matchups: RemainingMatchup[] = [];

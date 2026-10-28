@@ -254,7 +254,7 @@ describe('model provider configuration', () => {
       selection.model,
     )).toEqual({
       ...selection,
-      fallbackModel: selection.model,
+      fallbackModel: selection.fallbackModel,
       model: selection.model,
     });
     expect(() => resolveVerifiedModelProvider(

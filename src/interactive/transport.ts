@@ -323,15 +323,18 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     usageTelemetry: SebInteractiveTransportOptions['usageTelemetry'],
     initialToolState: readonly RecommendationStreamToolState[] = [],
   ): Promise<ReadableStream<UIMessageChunk>> {
-    const messages = this.modelMessages(options.messages);
+    const activeFiltered = this.activeFilteredMessages(options.messages);
+    const messages = this.modelMessagesFromFiltered(activeFiltered);
     const recommendationQuestion = recommendationContextQuestion(
       userPrompt,
       previousUserPrompt(messages),
       this.options.session.player,
     );
-    const priorEvidence = this.recentVerifiedEvidence(messages);
+    const priorEvidence = this.recentVerifiedEvidence(activeFiltered);
     return traceJudgmentStream({
-      name: 'seb.interactive.turn', sessionId: options.chatId, input: messages,
+      name: 'seb.interactive.turn',
+      sessionId: options.chatId,
+      input: [{ role: 'user', content: userPrompt }],
     }, async () => decorateResponseStream(
       await this.delegate.sendMessages({ ...options, messages }),
       this.options.session,
@@ -460,7 +463,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     }
   }
 
-  private modelMessages(messages: UIMessage[]): UIMessage[] {
+  private activeFilteredMessages(messages: UIMessage[]): UIMessage[] {
     const marker = this.options.session.contextAfterMessageId;
     const markerIndex = marker
       ? messages.findIndex((message) => message.id === marker)
@@ -491,6 +494,10 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     for (const messageId of this.skillPromptByMessageId.keys()) {
       if (!retainedIds.has(messageId)) this.skillPromptByMessageId.delete(messageId);
     }
+    return filtered;
+  }
+
+  private modelMessagesFromFiltered(filtered: readonly UIMessage[]): UIMessage[] {
     const countBounded = filtered.slice(-MODEL_MESSAGE_LIMIT);
     const firstUserIndex = countBounded.findIndex(
       (message) => message.role === 'user',
@@ -503,17 +510,29 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       if (message.role === 'user' || turns.length === 0) turns.push([message]);
       else turns.at(-1)?.push(message);
     }
-    const selected: UIMessage[][] = [];
+    const compactedTurns = turns.map((turn, index) =>
+      index === turns.length - 1 ? turn : compactOlderTurnToolParts(turn),
+    );
+    const selectedIndices: number[] = [];
     let remaining = MODEL_CONTEXT_CHARACTER_LIMIT;
     for (let index = turns.length - 1; index >= 0; index -= 1) {
-      const rawTurn = turns[index] ?? [];
-      const turn = index < turns.length - UNCOMPACTED_RECENT_TURN_COUNT
-        ? compactOlderTurnToolParts(rawTurn)
-        : rawTurn;
-      const size = estimateMessages(turn, remaining + 1);
+      const candidate = compactedTurns[index] ?? [];
+      const size = estimateMessages(candidate, remaining + 1);
       if (size > remaining) break;
-      selected.unshift(turn);
+      selectedIndices.unshift(index);
       remaining -= size;
+    }
+    const selected = selectedIndices.map((index) => compactedTurns[index] ?? []);
+    for (let pos = selectedIndices.length - 2; pos >= 0; pos -= 1) {
+      const turnIndex = selectedIndices[pos]!;
+      if (turnIndex < turns.length - UNCOMPACTED_RECENT_TURN_COUNT) break;
+      const rawTurn = turns[turnIndex] ?? [];
+      const compactedSize = estimateMessages(selected[pos]!, MODEL_CONTEXT_CHARACTER_LIMIT + 1);
+      const rawSize = estimateMessages(rawTurn, compactedSize + remaining + 1);
+      if (rawSize - compactedSize <= remaining) {
+        selected[pos] = rawTurn;
+        remaining -= rawSize - compactedSize;
+      }
     }
     return selected.flat();
   }
@@ -1630,16 +1649,14 @@ function compactOlderTurnToolParts(turn: readonly UIMessage[]): UIMessage[] {
       if (name && !toolNames.includes(name)) toolNames.push(name);
       return false;
     });
-    if (toolNames.length === 0 || nonToolParts.length === 0) return message;
+    if (toolNames.length === 0) return message;
     const receipt = `\n\n[Verified tool calls in this turn (outputs compacted): ${toolNames.join(', ')}]`;
-    let attached = false;
+    const lastTextIndex = nonToolParts.findLastIndex((candidate) => candidate.type === 'text');
+    if (lastTextIndex < 0) {
+      return { ...message, parts: [...nonToolParts, { type: 'text', text: receipt.trimStart() }] };
+    }
     const compactedParts = nonToolParts.map((part, index) => {
-      if (
-        !attached &&
-        part.type === 'text' &&
-        index === nonToolParts.findLastIndex((candidate) => candidate.type === 'text')
-      ) {
-        attached = true;
+      if (index === lastTextIndex && part.type === 'text') {
         return part.text.includes('[Verified tool calls in this turn')
           ? part
           : { ...part, text: `${part.text.trimEnd()}${receipt}` };

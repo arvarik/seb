@@ -1,4 +1,5 @@
 import { normalizePlayerName, normalizeTeamText } from '../identity/normalize.js';
+import { eligibleForSlot } from './lineup.js';
 import type { FantasyAnalysis } from './output.js';
 import type { DataSourceRecord } from '../sources.js';
 
@@ -17,6 +18,7 @@ export interface RecommendationEvidence {
   injury: RequiredEvidenceState;
   leagueScoring: RequiredEvidenceState;
   projection: ProjectionEligibilityState;
+  unfoundPlayers?: string[];
 }
 
 export interface RecommendationEligibility {
@@ -73,9 +75,9 @@ const FACTUAL_FOLLOW_UP =
 const ANAPHORIC_DECISION_REFERENCE =
   /\b(?:him|her|them|both|either|neither|which\s+one|that\s+trade|this\s+trade|instead)\b/iu;
 const HAS_RECOMMENDATION_VERDICT =
-  /(?:^|\n)\s*(?:#+\s*decision\b|\*{0,2}recommendation\*{0,2}\s*:|(?:start|sit|bench|add|drop|claim|pick\s*up|accept|decline)\s+[A-Z])|\b(?:i|we)\s+(?:would\s+)?(?:recommend|suggest|advise)\s+(?:starting|sitting|benching|adding|dropping|claiming|trading|accepting|declining)\b|\byou\s+should\s+(?:start|sit|bench|add|drop|claim|pick\s*up|trade|accept|decline)\b/imu;
+  /(?:^|\n)\s*(?:#+\s*decision\b|\*{0,2}recommendation\*{0,2}\s*:|(?:[-*•]\s+|\d+\.\s+)?\*{0,2}(?:start|sit|bench|add|drop|claim|pick\s*up|accept|decline)\*{0,2}\s+[A-Z])|(?:,\s*so\b|;\s*|\b(?:i'?d|we'?d)\s+)(?:start|sit|bench|add|drop|claim|pick\s*up|accept|decline)\s+[A-Z]|\b(?:i|we)\s+(?:would\s+)?(?:recommend|suggest|advise)\s+(?:starting|sitting|benching|adding|dropping|claiming|trading|accepting|declining)\b|\byou\s+should\s+(?:start|sit|bench|add|drop|claim|pick\s*up|trade|accept|decline)\b/imu;
 const EXPLICIT_UNAVAILABLE_STATEMENT =
-  /\b(?:decision\s+is\s+unavailable|cannot\s+(?:make|give|provide)\s+a\s+(?:final\s+)?(?:recommendation|decision)|cannot\s+verify\s+current\s+reporting|withholding\s+(?:a\s+|the\s+)?recommendation)\b/iu;
+  /\b(?:decision\s+is\s+unavailable|can(?:'t|not)\s+(?:make|give|provide|pick|choose|select|compare)\b[\s\S]{0,60}\b(?:recommendation|decision|winner|starter|slot)\b|cannot\s+verify\s+current\s+reporting|withholding\s+(?:a\s+|the\s+)?recommendation|(?:does\s+not|doesn'?t)\s+have\s+a\s+[a-z_-]+\s+slot\b)\b/iu;
 const MAX_EVIDENCE_TRAVERSAL_DEPTH = 24;
 const MAX_EVIDENCE_TRAVERSAL_NODES = 10_000;
 
@@ -229,7 +231,7 @@ export function enforceFreeformRecommendation(
     };
   }
   const eligibility = enforceRecommendationEligibility(
-    eligibilityAnalysis(),
+    { ...eligibilityAnalysis(), recommendation: { action: answer, rationale: '' } },
     evidence,
   ).eligibility;
   if (eligibility.outcome === 'blocked') {
@@ -262,6 +264,17 @@ export function enforceFreeformRecommendation(
 export function buildRecommendationEvidence(
   input: BuildRecommendationEvidenceInput,
 ): RecommendationEvidence {
+  const hasMatchedDirectProjectionTool = input.toolResults.some((item) =>
+    (item.toolName === 'compareStartSit' ||
+      item.toolName === 'projectPlayer' ||
+      item.toolName === 'projectPlayers') &&
+    [...toolInputPlayerSubjects(item), ...playerSubjects([item.output])]
+      .some((subject) => textMentionsSubject(input.question, subject)),
+  );
+  const fullLineupOptimizationRequest =
+    /\b(?:optimize|audit)\b|\b(?:full|entire|whole|complete|optimal)\s+(?:starting\s+)?(?:lineup|starters?|roster)\b|\b(?:set|fix|build)\s+(?:my|our|the)\s+(?:week\s+\d+\s+)?(?:starting\s+)?(?:lineup|starters?)\b/iu.test(input.question);
+  const generalLineup = fullLineupOptimizationRequest ||
+    /\b(?:lineup|starters?)\b|\b(?:who|which|what)\b[^?\n]{0,40}\b(?:start|sit|bench)\b/iu.test(input.question);
   input = { ...input, toolResults: input.toolResults.flatMap((result) => {
     if (result.toolName === 'projectPlayers') {
       const results = asRecord(result.output)?.results;
@@ -284,6 +297,7 @@ export function buildRecommendationEvidence(
       });
     }
     if (result.toolName === 'optimizeRosterLineup') {
+      if (hasMatchedDirectProjectionTool && !fullLineupOptimizationRequest) return [];
       const out = asRecord(result.output);
       const projections = out?.projections;
       if (!Array.isArray(projections) || !projections.length || out?.recommendationEligible !== true) {
@@ -317,20 +331,24 @@ export function buildRecommendationEvidence(
       const selected = targetNames.size > 0
         ? mapped.filter((item) => typeof item.input.playerName === 'string' && targetNames.has(item.input.playerName))
         : mapped;
-      const generalLineup = /\b(?:lineup|starters?)\b|\b(?:who|which|what)\b[^?\n]{0,40}\b(?:start|sit|bench)\b/iu.test(input.question);
       return (selected.length > 0 ? selected : mapped).map((item) => ({
         ...item,
         input: { ...item.input, ...(generalLineup ? { fromLineupOptimization: true } : {}) },
       }));
     }
     if (result.toolName !== 'compareStartSit') return [result];
-    const projections = asRecord(result.output)?.projections;
+    const out = asRecord(result.output);
+    const projections = out?.projections;
     const requested = asRecord(result.input)?.playerNames;
     if (!Array.isArray(projections) || projections.length < 2 ||
       (Array.isArray(requested) && requested.length !== projections.length)) {
       return [{ toolName: 'projectPlayer', output: { recommendationEligible: false }, input: result.input }];
     }
-    return projections.map((projection) => ({ toolName: 'projectPlayer', output: asRecord(result.output)?.recommendationEligible === true
+    const slot = typeof out?.slot === 'string' && out.slot ? out.slot : null;
+    const hasValidSlot = Boolean(slot) &&
+      out?.slotSupportedByLeague !== false &&
+      projections.every((projection) => projectionFitsSlot(projection, slot!));
+    return projections.map((projection) => ({ toolName: 'projectPlayer', output: out?.recommendationEligible === true || hasValidSlot
       ? projection : { ...asRecord(projection), recommendationEligible: false },
       input: { ...asRecord(result.input), playerName: asRecord(asRecord(projection)?.player)?.name } }));
   }) };
@@ -344,16 +362,20 @@ export function buildRecommendationEvidence(
     };
   }
 
-  const needsLeagueScoring = LEAGUE_REQUEST.test(input.question) ||
+  const explicitNonSleeper = isExplicitNonSleeperQuestion(input.question, input.toolResults);
+  const needsLeagueScoring = !explicitNonSleeper && (
+    LEAGUE_REQUEST.test(input.question) ||
     input.analysis.kind === 'player' ||
     input.analysis.kind === 'fantasy-league' ||
-    input.analysis.kind === 'fantasy-matchup';
+    input.analysis.kind === 'fantasy-matchup'
+  );
   const needsPlayerStatus = PLAYER_DECISION.test(input.question) ||
     input.analysis.kind === 'player' ||
     input.analysis.kind === 'fantasy-league' ||
     input.analysis.kind === 'fantasy-matchup';
   const needsPlayerIdentity = needsPlayerStatus;
 
+  const unfoundPlayers = extractUnfoundPlayers(input.toolResults);
   return {
     currentEvidence: input.toolResults.length > 0
       ? sourceEvidenceState(input.sources)
@@ -368,6 +390,7 @@ export function buildRecommendationEvidence(
       ? leagueScoringEvidenceState(input.toolResults, input.question)
       : 'not-required',
     projection: projectionEligibilityState(input.toolResults, input.question),
+    ...(unfoundPlayers.length > 0 ? { unfoundPlayers } : {}),
   };
 }
 
@@ -386,7 +409,8 @@ export function enforceRecommendationEligibility(
     };
   }
 
-  const blockingReasons = eligibilityBlockingReasons(evidence);
+  const recommendationText = `${analysis.recommendation.action}\n${analysis.recommendation.rationale}`;
+  const blockingReasons = eligibilityBlockingReasons(evidence, recommendationText);
   if (blockingReasons.length > 0) {
     const limitation = `Seb withheld the recommendation: ${blockingReasons.join(' ')}`;
     return {
@@ -427,7 +451,10 @@ export function enforceRecommendationEligibility(
   };
 }
 
-function eligibilityBlockingReasons(evidence: RecommendationEvidence): string[] {
+function eligibilityBlockingReasons(
+  evidence: RecommendationEvidence,
+  recommendationText = '',
+): string[] {
   const reasons: string[] = [];
   if (evidence.currentEvidence === 'missing') {
     reasons.push('No current source supports this action.');
@@ -436,7 +463,10 @@ function eligibilityBlockingReasons(evidence: RecommendationEvidence): string[] 
   }
   if (evidence.identity === 'ambiguous') {
     reasons.push('The player identity is ambiguous.');
-  } else if (evidence.identity === 'missing') {
+  } else if (
+    evidence.identity === 'missing' ||
+    recommendsUnfoundPlayer(recommendationText, evidence.unfoundPlayers)
+  ) {
     reasons.push('The player identity is not resolved.');
   }
   if (evidence.injury === 'missing') {
@@ -479,8 +509,10 @@ function identityEvidenceState(
   toolResults: readonly RecommendationToolResult[],
   question: string,
 ): IdentityEvidenceState {
+  const hasRealPlayer = hasAnyResolvedRealPlayer(toolResults, question);
   const identityResults = toolResults.filter((result) =>
-    PLAYER_IDENTITY_TOOLS.has(result.toolName)
+    PLAYER_IDENTITY_TOOLS.has(result.toolName) &&
+    !(hasRealPlayer && isVerifiedMissingPlayerLookup(result))
   );
   if (identityResults.length === 0) return 'missing';
   const rosterSubjects = rosterDiscoveredSubjects(toolResults, question);
@@ -495,9 +527,10 @@ function identityEvidenceState(
     if (statuses.some((status) => status === 'ambiguous' || status === 'not-found')) {
       return 'ambiguous';
     }
-    return statuses.every((status) => status === 'resolved') &&
-        explicitResolutions.every((result) =>
-          individualPlayerResultMatchesQuestion(result, question, rosterSubjects))
+    const anyResolutionMatchesQuestion = explicitResolutions.some((result) =>
+      individualPlayerResultMatchesQuestion(result, question, rosterSubjects)
+    );
+    return statuses.every((status) => status === 'resolved') && anyResolutionMatchesQuestion
       ? 'resolved'
       : 'missing';
   }
@@ -512,6 +545,10 @@ function identityEvidenceState(
       individualPlayerResultMatchesQuestion(result, question, rosterSubjects),
     );
   });
+  const hasQuestionMatchedIndividual = identityResults.some((result) =>
+    (result.toolName === 'findPlayers' || result.toolName === 'projectPlayer') &&
+    individualPlayerResultMatchesQuestion(result, question, rosterSubjects)
+  );
 
   let resolved = 0;
   for (const result of identityResults) {
@@ -524,7 +561,9 @@ function identityEvidenceState(
         }
         return 'ambiguous';
       }
-      if (!individualPlayerResultMatchesQuestion(result, question, rosterSubjects)) return 'missing';
+      if (!hasQuestionMatchedIndividual && !individualPlayerResultMatchesQuestion(result, question, rosterSubjects)) {
+        return 'missing';
+      }
       resolved += 1;
       continue;
     }
@@ -550,7 +589,9 @@ function identityEvidenceState(
       if (!player || typeof player.playerId !== 'string' || !player.playerId) {
         return 'missing';
       }
-      if (!individualPlayerResultMatchesQuestion(result, question, rosterSubjects)) return 'missing';
+      if (!hasQuestionMatchedIndividual && !individualPlayerResultMatchesQuestion(result, question, rosterSubjects)) {
+        return 'missing';
+      }
       resolved += 1;
       continue;
     }
@@ -629,14 +670,18 @@ function hasCleanZeroHeadlineNewsCheck(
   subject: string,
 ): boolean {
   const output = asRecord(result.output);
-  if (Number(asRecord(output?.coverage)?.successfulSourceCount) <= 0) return false;
-  const articles = output?.articles;
-  if (
-    Array.isArray(articles) &&
-    articles.some((article) => evidenceMatchesSubjects([article], [subject]))
-  ) {
-    return false;
-  }
+  const coverage = asRecord(output?.coverage);
+  const succeeded = Number(coverage?.successfulSourceCount ?? 0);
+  const failed = Array.isArray(coverage?.failedSources)
+    ? coverage.failedSources.length
+    : Array.isArray(coverage?.failedSourceIds)
+      ? coverage.failedSourceIds.length
+      : 0;
+  const selected = typeof coverage?.selectedSourceCount === 'number'
+    ? coverage.selectedSourceCount
+    : succeeded;
+  if (succeeded <= 0 || Math.min(succeeded, selected - failed) <= 0) return false;
+  if (hasUsableFirstClassNews(output, [subject])) return false;
   const inputQuery = asRecord(result.input)?.query;
   const outputQuery = output?.query;
   return evidenceMatchesSubjects(
@@ -669,17 +714,61 @@ function projectionEligibilityState(
 ): ProjectionEligibilityState {
   const projections = toolResults.filter((result) => result.toolName === 'projectPlayer');
   if (projections.length === 0) {
+    if (isExplicitNonSleeperQuestion(question, toolResults)) {
+      const subjects = relevantPlayerSubjects(toolResults, question);
+      const statEntries = toolResults.flatMap((result) => {
+        const out = asRecord(result.output);
+        if (result.toolName === 'getPlayerWeeklyStats' && Array.isArray(out?.stats)) return out.stats;
+        if (result.toolName === 'comparePlayerTrends' && Array.isArray(out?.players)) return out.players;
+        return [];
+      });
+      const hasWeeklyStats = statEntries.length > 0 &&
+        subjects.length > 0 &&
+        subjects.every((subject) => evidenceMatchesSubjects(statEntries, [subject]));
+      const hasSchedule = toolResults.some((result) => {
+        const games = asRecord(result.output)?.games;
+        return result.toolName === 'getNflSchedule' && Array.isArray(games) && games.length > 0;
+      });
+      return hasWeeklyStats && hasSchedule ? 'eligible' : 'ineligible';
+    }
     return START_SIT_REQUEST.test(question) ? 'ineligible' : 'not-required';
   }
-  const comparesPlayers = /\b(?:versus|vs\.?)\b|\bor\s+(?!sit\b|start\b|bench\b|not\b|leave\b|keep\b|him\b|them\b)\p{L}+/iu.test(question);
-  if (START_SIT_REQUEST.test(question) && comparesPlayers && projections.length < 2) return 'ineligible';
+  const comparesPlayers = /\b(?:versus|vs\.?)\b|\bor\s+(?!sit\b|start\b|bench\b|not\b|leave\b|keep\b|him\b|them\b|stream\b|drop\b|hold\b|cut\b|add\b|claim\b|pick\b)\p{L}+/iu.test(question);
   const rosterSubjects = rosterDiscoveredSubjects(toolResults, question);
-  return projections.every(
-      (result) => asRecord(result.output)?.recommendationEligible === true &&
-        individualPlayerResultMatchesQuestion(result, question, rosterSubjects),
-    )
-    ? 'eligible'
-    : 'ineligible';
+  const matchedProjections = projections.filter((result) =>
+    individualPlayerResultMatchesQuestion(result, question, rosterSubjects)
+  );
+  if (matchedProjections.length === 0) return 'ineligible';
+  if (START_SIT_REQUEST.test(question) && comparesPlayers && matchedProjections.length < 2) {
+    return 'ineligible';
+  }
+  if (projections.every((result) => asRecord(result.output)?.recommendationEligible === true)) {
+    return 'eligible';
+  }
+  if (
+    projections.length >= 2 &&
+    projections.some((result) => asRecord(result.output)?.recommendationEligible === true) &&
+    projections.every((result) => {
+      const out = asRecord(result.output);
+      const player = asRecord(out?.player);
+      const limitations = Array.isArray(out?.limitations) ? out.limitations : [];
+      const kickoffBlocked = limitations.some(
+        (item) => typeof item === 'string' &&
+          (item.includes('game has started') || item.includes('no verified kickoff time')),
+      );
+      return Boolean(player && typeof player.playerId === 'string' && player.playerId) &&
+        hasProjectionScoring(out) &&
+        !kickoffBlocked &&
+        (out?.recommendationEligible === true ||
+          out?.scoreScope === 'historical-baseline' ||
+          out?.opponent === null ||
+          (typeof out?.games === 'number' && out.games < 3) ||
+          (out?.expectedPoints === 0 && out?.ceiling === 0));
+    })
+  ) {
+    return 'eligible';
+  }
+  return 'ineligible';
 }
 
 function findIdentityStatus(
@@ -830,29 +919,52 @@ function relevantPlayerSubjects(
   toolResults: readonly RecommendationToolResult[],
   question: string,
 ): string[] {
-  const hasQuestionMatch = toolResults.some((result) =>
+  const hasRealPlayer = hasAnyResolvedRealPlayer(toolResults, question);
+  const filteredResults = toolResults.filter((result) =>
+    !(hasRealPlayer && isVerifiedMissingPlayerLookup(result))
+  );
+  const hasQuestionMatch = filteredResults.some((result) =>
     PLAYER_IDENTITY_TOOLS.has(result.toolName) &&
     [...toolInputPlayerSubjects(result), ...playerSubjects([result.output])]
       .some((subject) => textMentionsSubject(question, subject)),
   );
-  const hasLineupOptimization = toolResults.some(
+  const hasLineupOptimization = filteredResults.some(
     (result) => asRecord(result.input)?.fromLineupOptimization === true,
   );
-  const rosterSubjects = rosterDiscoveredSubjects(toolResults, question);
+  const hasWaiverRanking = filteredResults.some((result) => result.toolName === 'rankWaiverTargets');
+  const rosterSubjects = rosterDiscoveredSubjects(filteredResults, question);
+  const matchedProjections = filteredResults.filter((result) =>
+    result.toolName === 'projectPlayer' &&
+    individualPlayerResultMatchesQuestion(result, question, rosterSubjects),
+  );
+  const includeStreamerProjections = hasQuestionMatch &&
+    matchedProjections.length > 0 &&
+    matchedProjections.every((result) => asRecord(result.output)?.recommendationEligible !== true);
   const hasProjectedRosterSubset = !hasQuestionMatch &&
     rosterSubjects.size > 0 &&
-    toolResults.some((result) =>
-      result.toolName === 'projectPlayer' &&
-      individualPlayerResultMatchesQuestion(result, question, rosterSubjects));
-  const subjects = toolResults.flatMap((result) => {
+    matchedProjections.length > 0;
+  const subjects = filteredResults.flatMap((result) => {
     if (!PLAYER_IDENTITY_TOOLS.has(result.toolName)) return [];
     if (result.toolName === 'getRosterPlayers' && hasProjectedRosterSubset) {
       return [];
+    }
+    if (!hasQuestionMatch && result.toolName === 'getTrendingPlayers' && hasWaiverRanking) {
+      return [];
+    }
+    if (!hasQuestionMatch && (result.toolName === 'rankWaiverTargets' || result.toolName === 'getTrendingPlayers')) {
+      return openEndedCandidateSubjects(result, question);
     }
     const candidates = [
       ...toolInputPlayerSubjects(result),
       ...playerSubjects([result.output]),
     ];
+    if (
+      includeStreamerProjections &&
+      result.toolName === 'projectPlayer' &&
+      asRecord(result.output)?.recommendationEligible === true
+    ) {
+      return candidates;
+    }
     return isIndividualPlayerTool(result.toolName, hasQuestionMatch || hasLineupOptimization) &&
         asRecord(result.input)?.fromLineupOptimization !== true
       ? candidates.filter((subject) =>
@@ -861,6 +973,113 @@ function relevantPlayerSubjects(
       : candidates;
   });
   return [...new Set(subjects.map(normalizePlayerName).filter(Boolean))];
+}
+
+function projectionFitsSlot(projection: unknown, slot: string): boolean {
+  const player = asRecord(asRecord(projection)?.player);
+  const fantasyPositions = Array.isArray(player?.fantasy_positions)
+    ? player.fantasy_positions.filter((pos): pos is string => typeof pos === 'string' && Boolean(pos))
+    : [];
+  const positions = fantasyPositions.length > 0
+    ? fantasyPositions
+    : typeof player?.position === 'string' && player.position
+      ? [player.position]
+      : [];
+  return positions.length > 0 && eligibleForSlot(positions, slot);
+}
+
+function extractUnfoundPlayers(toolResults: readonly RecommendationToolResult[]): string[] {
+  const resolved = new Set(
+    toolResults
+      .filter((result) => !isVerifiedMissingPlayerLookup(result))
+      .flatMap((result) => [...toolInputPlayerSubjects(result), ...playerSubjects([result.output])])
+      .map(normalizePlayerName)
+      .filter(Boolean),
+  );
+  return [...new Set(
+    toolResults
+      .filter(isVerifiedMissingPlayerLookup)
+      .flatMap(toolInputPlayerSubjects)
+      .map(normalizePlayerName)
+      .filter((name) => Boolean(name) && !resolved.has(name)),
+  )];
+}
+
+function recommendsUnfoundPlayer(
+  text: string,
+  unfoundPlayers: readonly string[] | undefined,
+): boolean {
+  if (!text || !unfoundPlayers?.length) return false;
+  const normalized = normalizeEvidenceText(text);
+  if (!normalized) return false;
+  return unfoundPlayers.some((name) => {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&').replace(/\s+/gu, '\\s+');
+    const positiveEndorsement = new RegExp(
+      `(?<!\\b(?:not|never|avoid|against)\\s+)(?<!\\bdon'?t\\s+)\\b(?:start(?:ing)?|add(?:ing)?|claim(?:ing)?|pick(?:ing)?\\s+up|acquir(?:e|ing)|target(?:ing)?|bid(?:ding)?\\s+on|stream(?:ing)?|recommend|suggest|advise)\\s+${escaped}\\b|\\brecommendation\\s+${escaped}\\b`,
+      'iu',
+    );
+    return positiveEndorsement.test(normalized);
+  });
+}
+
+function isExplicitNonSleeperQuestion(
+  question: string,
+  toolResults: readonly RecommendationToolResult[],
+): boolean {
+  return /\bnon[-\s]?sleeper\b|\boutside\s+(?:of\s+)?sleeper\b|\bno\s+sleeper\s+league\b/iu.test(question) &&
+    leagueIds(toolResults.flatMap((result) => [result.input, result.output])).length === 0;
+}
+
+function isVerifiedMissingPlayerLookup(result: RecommendationToolResult): boolean {
+  return (result.toolName === 'resolvePlayerIdentity' && findIdentityStatus(result.output) === 'not-found') ||
+    (result.toolName === 'findPlayers' && Array.isArray(result.output) && result.output.length === 0);
+}
+
+function hasAnyResolvedRealPlayer(
+  toolResults: readonly RecommendationToolResult[],
+  question: string,
+): boolean {
+  const rosterSubjects = rosterDiscoveredSubjects(toolResults, question);
+  return toolResults.some((result) =>
+    individualPlayerResultMatchesQuestion(result, question, rosterSubjects) && (
+      (result.toolName === 'resolvePlayerIdentity' && findIdentityStatus(result.output) === 'resolved') ||
+      (result.toolName === 'projectPlayer' && Boolean(asRecord(asRecord(result.output)?.player)?.playerId)) ||
+      (result.toolName === 'findPlayers' && Array.isArray(result.output) && result.output.length === 1)
+    ),
+  );
+}
+
+function openEndedCandidateSubjects(
+  result: RecommendationToolResult,
+  question: string,
+): string[] {
+  const out = asRecord(result.output);
+  const rawList = Array.isArray(out?.targets)
+    ? out.targets
+    : Array.isArray(out?.players)
+      ? out.players
+      : null;
+  if (!rawList) return playerSubjects([result.output]).slice(0, 3);
+  const positions = requestedWaiverPositions(question);
+  const filtered = positions.size > 0
+    ? rawList.filter((entry) => {
+        const player = asRecord(asRecord(entry)?.player) ?? asRecord(entry);
+        return typeof player?.position === 'string' && positions.has(player.position.toUpperCase());
+      })
+    : [];
+  const topSlice = (filtered.length > 0 ? filtered : rawList).slice(0, 3);
+  return playerSubjects(topSlice);
+}
+
+function requestedWaiverPositions(question: string): ReadonlySet<string> {
+  const positions = new Set<string>();
+  if (/\b(?:qbs?|quarterbacks?)\b/iu.test(question)) positions.add('QB');
+  if (/\b(?:rbs?|running\s+backs?)\b/iu.test(question)) positions.add('RB');
+  if (/\b(?:wrs?|wide\s+receivers?|wideouts?)\b/iu.test(question)) positions.add('WR');
+  if (/\b(?:tes?|tight[-\s]+ends?)\b/iu.test(question)) positions.add('TE');
+  if (/\b(?:kickers?|placekickers?)\b/iu.test(question)) positions.add('K');
+  if (/\b(?:d\/sts?|dsts?|defenses?)\b/iu.test(question)) positions.add('DEF');
+  return positions;
 }
 
 function toolInputPlayerSubjects(result: RecommendationToolResult): string[] {
@@ -872,7 +1091,7 @@ function toolInputPlayerSubjects(result: RecommendationToolResult): string[] {
       ? ['playerName']
       : result.toolName === 'findPlayers'
         ? ['query']
-        : ['givePlayerNames', 'receivePlayerNames'];
+        : ['playerNames', 'givePlayerNames', 'receivePlayerNames'];
   return keys.flatMap((key) => {
     const value = input[key];
     if (typeof value === 'string') return [value];

@@ -183,15 +183,14 @@ describe('NewsClient source policy', () => {
     expect(database.getCache('news', discoveryCacheKey(source))).toBeNull();
   });
 
-  it('rejects parser output that exceeds the declared article schema', async () => {
-    const source = newsSource('oversized-categories');
-    const database = createDatabase();
+  it('truncates oversized category lists to 30 and evicts cached entries that exceed the declared article schema', async () => {
+    const validTaggedSource = newsSource('many-categories');
     const categories = Array.from(
-      { length: 31 },
+      { length: 35 },
       (_value, index) => `<category>Category ${index}</category>`,
     ).join('');
-    const fetch = routeFetch(new Map([
-      [source.discoveryUrl, xmlResponse(`
+    const taggedClient = createClient([validTaggedSource], routeFetch(new Map([
+      [validTaggedSource.discoveryUrl, xmlResponse(`
         <rss version="2.0">
           <channel>
             <item>
@@ -203,8 +202,38 @@ describe('NewsClient source policy', () => {
           </channel>
         </rss>
       `)],
-    ]));
-    const client = createClient([source], fetch, { database });
+    ])));
+    const taggedResult = await taggedClient.search({
+      limit: 1,
+      query: 'quarterback practice',
+      sourceIds: [validTaggedSource.id],
+    });
+    expect(taggedResult.articles[0]?.categories).toHaveLength(30);
+
+    const source = newsSource('oversized-cached-categories');
+    const database = createDatabase();
+    database.putCache({
+      cachedAt: new Date().toISOString(),
+      etag: null,
+      key: discoveryCacheKey(source),
+      lastModified: null,
+      namespace: 'news',
+      schemaVersion: 'news-v1',
+      sourceUrl: source.discoveryUrl,
+      staleIfErrorMs: DAY_MS,
+      ttlMs: 5 * 60 * 1_000,
+      value: [
+        {
+          categories: Array.from({ length: 31 }, (_value, index) => `Category ${index}`),
+          excerpt: null,
+          modifiedAt: null,
+          publishedAt: '2026-08-29T19:00:00Z',
+          title: 'Quarterback practice report',
+          url: 'https://oversized-cached-categories.example/news/report',
+        },
+      ],
+    });
+    const client = createClient([source], routeFetch(new Map()), { database });
 
     const result = await client.search({
       limit: 1,

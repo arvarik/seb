@@ -73,7 +73,7 @@ export function createProjectionTools(
       execute: async ({ playerNames, slot, ...request }) => {
         const [projections, league] = await Promise.all([
           Promise.all(playerNames.map((playerName) => service.project({ ...request, playerName }))),
-          slot ? Promise.resolve(null) : sleeper.getLeague(request.leagueId).catch(() => null),
+          sleeper.getLeague(request.leagueId).catch(() => null),
         ]);
         return compareProjections(projections, slot, league?.roster_positions);
       },

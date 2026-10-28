@@ -430,10 +430,14 @@ describe('runDoctor', () => {
     const localRequest = streamTextMock.mock.calls[0]?.[0];
     expect(localRequest?.model.provider).toBe(expectedProvider);
     expect(localRequest?.tools).toHaveProperty('verifyLocalTool');
-    expect(localRequest?.toolChoice).toEqual({
-      toolName: 'verifyLocalTool',
-      type: 'tool',
-    });
+    expect(localRequest?.toolChoice).toEqual(
+      modelProvider.provider === 'anthropic'
+        ? 'auto'
+        : {
+            toolName: 'verifyLocalTool',
+            type: 'tool',
+          },
+    );
     expect(JSON.stringify(localRequest?.tools).includes('google.google_search'))
       .toBe(expectsGoogleSearch);
     expect(generateTextMock).toHaveBeenCalledTimes(expectsGoogleSearch ? 1 : 0);

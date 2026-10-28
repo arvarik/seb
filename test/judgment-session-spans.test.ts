@@ -121,4 +121,91 @@ describe('Judgment session attributes on exported spans', () => {
     expectSessionOnEverySpan('stream', 'stream-session');
     expect(exporter.getFinishedSpans().every((span) => span.attributes['judgment.session_id'] === 'stream-session')).toBe(true);
   });
+
+  it('keeps provider-executed tool spans inside parent chat timing and enriches grounded web sources', async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: [{
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'code-1',
+            toolName: 'code_execution',
+            input: '{"code":"1+1"}',
+            providerExecuted: true,
+          },
+          {
+            type: 'tool-result',
+            toolCallId: 'code-1',
+            toolName: 'code_execution',
+            result: { outcome: 'OUTCOME_OK', output: '2' },
+          },
+          {
+            type: 'tool-call',
+            toolCallId: 'search-1',
+            toolName: 'server:GOOGLE_SEARCH_WEB',
+            input: '{"queries":["Amon-Ra St. Brown Week 8 injury"]}',
+            providerExecuted: true,
+          },
+          {
+            type: 'tool-result',
+            toolCallId: 'search-1',
+            toolName: 'server:GOOGLE_SEARCH_WEB',
+            result: { search_suggestions: '<style>.chip { color: #555; }</style><div>Widget</div>' },
+          },
+          {
+            type: 'source',
+            sourceType: 'url',
+            id: 'src-1',
+            url: 'https://www.nbcsports.com/nfl/amon-ra-update',
+            title: 'St. Brown expected back at practice Thursday',
+          },
+          { type: 'text', text: 'Amon-Ra St. Brown is expected back Thursday.' },
+        ],
+        finishReason: { unified: 'stop', raw: undefined },
+        providerMetadata: {
+          google: {
+            groundingMetadata: {
+              webSearchQueries: ['Amon-Ra St. Brown Week 8 injury'],
+              searchEntryPoint: {
+                renderedContent: '<style>.container { display: flex; }</style><div>Search chip</div>',
+              },
+            },
+          },
+        },
+        usage,
+        warnings: [],
+      }],
+    });
+    await module.traceJudgmentOperation(
+      { name: 'grounded-search', sessionId: 'google-session', input: [{ role: 'user', content: 'St. Brown update?' }] },
+      async () => {
+        const res = await generateText({
+          model,
+          prompt: 'St. Brown update?',
+          telemetry: { isEnabled: true, integrations: [...module.judgmentTelemetry()] },
+        });
+        expect(res.text).toContain('Amon-Ra');
+      },
+    );
+    const spans = exporter.getFinishedSpans();
+    const byId = new Map(spans.map((span) => [span.spanContext().spanId, span]));
+    const toNs = ([sec, nano]: readonly [number, number]) => BigInt(sec) * 1_000_000_000n + BigInt(nano);
+    for (const span of spans) {
+      expect(toNs(span.endTime)).toBeGreaterThan(toNs(span.startTime));
+      if (!span.parentSpanContext?.spanId) continue;
+      const parent = byId.get(span.parentSpanContext.spanId);
+      expect(parent, `parent for ${span.name}`).toBeDefined();
+      expect(toNs(span.startTime), `${span.name} start >= ${parent!.name}`).toBeGreaterThanOrEqual(toNs(parent!.startTime));
+      expect(toNs(span.endTime), `${span.name} end <= ${parent!.name}`).toBeLessThanOrEqual(toNs(parent!.endTime));
+    }
+    const searchSpan = spans.find((span) => span.name === 'execute_tool server:GOOGLE_SEARCH_WEB');
+    expect(searchSpan).toBeDefined();
+    const recordedOutput = String(searchSpan?.attributes['gen_ai.tool.call.result'] ?? '');
+    expect(recordedOutput).toContain('https://www.nbcsports.com/nfl/amon-ra-update');
+    expect(recordedOutput).toContain('webSearchQueries');
+    expect(recordedOutput).not.toContain('<style>');
+    expect(recordedOutput).not.toContain('searchEntryPoint');
+    const codeSpan = spans.find((span) => span.name === 'execute_tool code_execution');
+    expect(String(codeSpan?.attributes['gen_ai.tool.call.result'] ?? '')).not.toContain('webSearchQueries');
+  });
 });

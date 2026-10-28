@@ -85,7 +85,7 @@ export function parseRssFeed(
     output.push({
       categories: item.find('category').map((_categoryIndex, category) =>
         cleanText($(category).text(), 100)
-      ).get().filter(Boolean),
+      ).get().filter(Boolean).slice(0, 30),
       excerpt: htmlToText(firstText(item, ['description', 'summary'])),
       modifiedAt: normalizeDate(firstText(item, ['updated', 'dc\\:modified'])),
       ...(publisher ? { publisher } : {}),
@@ -115,7 +115,7 @@ export function parseAtomFeed(
     output.push({
       categories: entry.find('category').map((_categoryIndex, category) =>
         cleanText($(category).attr('term') ?? $(category).text(), 100)
-      ).get().filter(Boolean),
+      ).get().filter(Boolean).slice(0, 30),
       excerpt: htmlToText(firstText(entry, ['summary', 'content'])),
       modifiedAt: normalizeDate(entry.find('updated').first().text()),
       publishedAt,

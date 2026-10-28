@@ -795,6 +795,38 @@ describe('GroupMe adapter, history compaction, and link-safe splitting', () => {
     const chunks = splitConnectorMessage(text, 100);
     expect(chunks.join('')).toBe(text);
     expect(chunks.some((chunk) => chunk.includes(link))).toBe(true);
+
+    const multiChunk = compactConnectorHistory([
+      { role: 'user', content: 'Turn 1 prompt' },
+      { role: 'assistant', content: 'Chunk 1 analysis.' },
+      { role: 'assistant', content: 'Chunk 2 conclusion.\n\n## Evidence\n1. [Sleeper](<https://api.sleeper.app>)' },
+      { role: 'assistant', content: '2. [NFL News](<https://www.nfl.com/news/1>)' },
+      { role: 'assistant', content: '3. [ESPN](<https://www.espn.com/nfl/1>)' },
+      { role: 'user', content: 'Turn 2 follow-up' },
+    ]);
+    expect(multiChunk).toEqual([
+      { role: 'user', content: 'Turn 1 prompt' },
+      { role: 'assistant', content: 'Chunk 1 analysis.\n\nChunk 2 conclusion.' },
+      { role: 'user', content: 'Turn 2 follow-up' },
+    ]);
+
+    const orphanTrimmed = compactConnectorHistory(
+      [
+        { role: 'user', content: 'x'.repeat(500) },
+        { role: 'assistant', content: 'Prior reply' },
+        { role: 'user', content: 'Current question' },
+      ],
+      50,
+    );
+    expect(orphanTrimmed[0]?.role).toBe('user');
+    expect(orphanTrimmed).toEqual([{ role: 'user', content: 'Current question' }]);
+
+    const evidenceOnlyDropped = compactConnectorHistory([
+      { role: 'user', content: 'Question 1' },
+      { role: 'assistant', content: '## Evidence\n1. [Sleeper](<https://api.sleeper.app>)' },
+      { role: 'user', content: 'Question 2' },
+    ]);
+    expect(evidenceOnlyDropped).toEqual([{ role: 'user', content: 'Question 1\n\nQuestion 2' }]);
   });
 });
 

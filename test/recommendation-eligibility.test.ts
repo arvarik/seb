@@ -1143,6 +1143,10 @@ describe('dogfood edge cases: bye comparisons, proactive streamers, unfound foil
       'Game of Throws does not have a Superflex slot.\n- **Start Josh Allen** at QB.',
       { currentEvidence: 'fresh', identity: 'missing', injury: 'missing', leagueScoring: 'present', projection: 'ineligible' },
     ).eligibility.outcome).toBe('blocked');
+    expect(enforceFreeformRecommendation(
+      'Game of Throws has no Superflex slot. Start Josh Allen at QB.',
+      { currentEvidence: 'fresh', identity: 'missing', injury: 'missing', leagueScoring: 'present', projection: 'ineligible' },
+    ).eligibility.outcome).toBe('blocked');
 
     // 5. Explicit non-Sleeper question with empty stats or schedule is ineligible
     const emptyNonSleeper = buildRecommendationEvidence({
@@ -1158,6 +1162,266 @@ describe('dogfood edge cases: bye comparisons, proactive streamers, unfound foil
       ],
     });
     expect(emptyNonSleeper.projection).toBe('ineligible');
+
+    // 6. Open-ended rankWaiverTargets + getRosterPlayers ignores existing roster players for news checks
+    const waiverWithRosterContext = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Rank the top 5 wide receiver and tight end waiver targets for Week 8 in Game of Throws and tell me who to claim first.',
+      sources: [
+        directSource(),
+        {
+          accessedAt: '2026-10-28T19:00:00.000Z',
+          cacheOutcome: 'source-updated',
+          id: 'news-source:team-buf',
+          label: 'Buffalo Bills News',
+          url: 'https://www.buffalobills.com/rss',
+        },
+      ],
+      toolResults: [
+        {
+          toolName: 'getRosterPlayers',
+          output: {
+            league_id: '1389392984620953600',
+            missingPlayerIds: [],
+            players: [{ playerId: '3163', name: 'Jayden Daniels', position: 'QB', injuryStatus: null }],
+          },
+        },
+        {
+          toolName: 'rankWaiverTargets',
+          output: {
+            league: { leagueId: '1389392984620953600' },
+            methodology: { scoringKeysUsed: ['rec'], scoringKeysIgnored: [] },
+            targets: [
+              { player: { playerId: 'wr1', name: 'Keon Coleman', position: 'WR', injuryStatus: null } },
+            ],
+          },
+        },
+        {
+          toolName: 'searchFirstClassNews',
+          input: { query: 'Keon Coleman Bills WR status injury Week 8' },
+          output: {
+            coverage: { selectedSourceCount: 3, successfulSourceCount: 3, failedSources: [] },
+            articles: [],
+          },
+        },
+      ],
+    });
+    expect(waiverWithRosterContext).toMatchObject({
+      identity: 'resolved',
+      injury: 'present',
+      leagueScoring: 'present',
+      projection: 'not-required',
+    });
+
+    // 7. Teamless/inactive player (e.g. Tom Brady team: null) allows refusal + blocks positive endorsement
+    const bradyEvidence = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Should I start Tom Brady in my Superflex slot in Judgment Labs for Week 8?',
+      sources: [directSource()],
+      toolResults: [
+        {
+          toolName: 'findPlayers',
+          input: { query: 'Tom Brady' },
+          output: [{ playerId: '167', name: 'Tom Brady', position: 'QB', team: null, active: true, injuryStatus: null }],
+        },
+        {
+          toolName: 'getLeagueOverview',
+          output: { league: { league_id: '1390394948242649088', scoring_settings: { pass_td: 4 } } },
+        },
+      ],
+    });
+    expect(
+      enforceFreeformRecommendation(
+        "## No. Tom Brady can't fill a Superflex slot\n\nJudgment Labs has no Superflex slot, and Brady has no NFL team.\n\n## Decision\n- **Recommendation:** Don't add or start Tom Brady. Keep Jordan Love at QB.",
+        bradyEvidence,
+      ).eligibility.outcome,
+    ).toBe('allowed');
+    expect(
+      enforceFreeformRecommendation('Start Tom Brady in Week 8.', bradyEvidence).eligibility.outcome,
+    ).toBe('blocked');
+    // Cross-comma / earlier-clause negation, Markdown formatting, and unprojected swap bypasses
+    expect(
+      enforceFreeformRecommendation("Don't bench Amon-Ra, start Brady.", bradyEvidence).eligibility.outcome,
+    ).toBe('blocked');
+    expect(
+      enforceFreeformRecommendation(
+        'Judgment Labs does not have a Superflex slot, so start Brady at QB.',
+        bradyEvidence,
+      ).eligibility.outcome,
+    ).toBe('blocked');
+    expect(
+      enforceFreeformRecommendation("Don't add Brady, start Brady.", bradyEvidence).eligibility.outcome,
+    ).toBe('blocked');
+    expect(
+      enforceFreeformRecommendation('- **Recommendation:** Tom Brady', bradyEvidence).eligibility.outcome,
+    ).toBe('blocked');
+    expect(
+      enforceFreeformRecommendation('Start **Tom Brady** in Week 8.', bradyEvidence).eligibility.outcome,
+    ).toBe('blocked');
+    expect(
+      enforceFreeformRecommendation(
+        'Tom Brady has no NFL team.\n- **Start Baker Mayfield** at QB instead.',
+        bradyEvidence,
+      ).eligibility.outcome,
+    ).toBe('blocked');
+    expect(
+      enforceFreeformRecommendation(
+        'Tom Brady has no NFL team.\n- **Recommendation:** Baker Mayfield',
+        bradyEvidence,
+      ).eligibility.outcome,
+    ).toBe('blocked');
+
+    // 8. Mixed active + team: null comparison requires projecting the active player, then allows active & blocks teamless
+    const unprojectedMixed = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Should I start Josh Allen or Tom Brady at QB in league 123456 for Week 8?',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        {
+          toolName: 'findPlayers',
+          input: { query: 'Tom Brady' },
+          output: [{ playerId: '167', name: 'Tom Brady', position: 'QB', team: null, active: true, injuryStatus: null }],
+        },
+        {
+          toolName: 'findPlayers',
+          input: { query: 'Josh Allen' },
+          output: [{ playerId: '4984', name: 'Josh Allen', position: 'QB', team: 'BUF', active: true, injuryStatus: null }],
+        },
+        { toolName: 'getLeagueOverview', output: { league: { league_id: '123456', scoring_settings: { pass_td: 4 } } } },
+        { toolName: 'searchCurrentNews', output: { result: 'Josh Allen practiced in full.' } },
+      ],
+    });
+    expect(unprojectedMixed.projection).toBe('ineligible');
+    expect(
+      enforceFreeformRecommendation('Start Josh Allen at QB; Tom Brady is retired.', unprojectedMixed).eligibility.outcome,
+    ).toBe('blocked');
+
+    const projectedMixed = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Should I start Josh Allen or Tom Brady at QB in league 123456 for Week 8?',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        {
+          toolName: 'resolvePlayerIdentity',
+          input: { name: 'Tom Brady' },
+          output: {
+            resolution: {
+              status: 'resolved',
+              identity: { canonicalId: 'sleeper:167', displayName: 'Tom Brady', position: 'QB', teamId: null },
+            },
+          },
+        },
+        {
+          toolName: 'projectPlayers',
+          input: { leagueId: '123456', playerNames: ['Josh Allen', 'Tom Brady'], season: 2026, week: 8 },
+          output: {
+            complete: false,
+            results: [
+              {
+                playerName: 'Josh Allen',
+                status: 'projected',
+                projection: {
+                  league: { leagueId: '123456', name: 'Test League' },
+                  limitations: [],
+                  player: { playerId: '4984', name: 'Josh Allen', position: 'QB', team: 'BUF' },
+                  recommendationEligible: true,
+                  scoring: { usedSettings: ['pass_td'], ignoredSettings: [] },
+                },
+              },
+              { playerName: 'Tom Brady', status: 'unavailable', reason: 'nflverse found no completed games for Tom Brady.' },
+            ],
+          },
+        },
+        { toolName: 'searchCurrentNews', output: { result: 'Josh Allen practiced in full.' } },
+      ],
+    });
+    expect(projectedMixed).toMatchObject({
+      identity: 'resolved',
+      injury: 'present',
+      leagueScoring: 'present',
+      projection: 'eligible',
+    });
+    expect(
+      enforceFreeformRecommendation('Start Josh Allen at QB; Tom Brady has no NFL team.', projectedMixed).eligibility.outcome,
+    ).toBe('allowed');
+    expect(
+      enforceFreeformRecommendation('Start Tom Brady at QB.', projectedMixed).eligibility.outcome,
+    ).toBe('blocked');
+
+    // Same-surname disambiguation: retired Jared Allen does not block "start Allen" when Josh Allen is in the answer
+    const sameSurnameMixed = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Should I start Josh Allen or Jared Allen in league 123456 for Week 8?',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        {
+          toolName: 'findPlayers',
+          input: { query: 'Jared Allen' },
+          output: [{ playerId: 'ret1', name: 'Jared Allen', position: 'DE', team: null, active: false, injuryStatus: null }],
+        },
+        {
+          toolName: 'projectPlayer',
+          input: { leagueId: '123456', playerName: 'Josh Allen' },
+          output: {
+            league: { leagueId: '123456', name: 'Test League' },
+            limitations: [],
+            player: { playerId: '4984', name: 'Josh Allen', position: 'QB', team: 'BUF' },
+            recommendationEligible: true,
+            scoring: { usedSettings: ['pass_td'], ignoredSettings: [] },
+          },
+        },
+        { toolName: 'searchCurrentNews', output: { result: 'Josh Allen practiced in full.' } },
+      ],
+    });
+    expect(
+      enforceFreeformRecommendation('Jared Allen is retired. Start Josh Allen — start Allen with confidence.', sameSurnameMixed).eligibility.outcome,
+    ).toBe('allowed');
+    expect(
+      enforceFreeformRecommendation('Start Jared Allen.', sameSurnameMixed).eligibility.outcome,
+    ).toBe('blocked');
+
+    // 9. Open-ended rankWaiverTargets + getRosterPlayers + projectPlayer on top waiver target resolves cleanly
+    const waiverWithProjectedTarget = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Rank the top 5 wide receiver and tight end waiver targets for Week 8 in Game of Throws and tell me who to claim first.',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        {
+          toolName: 'getRosterPlayers',
+          output: {
+            league_id: '1389392984620953600',
+            missingPlayerIds: [],
+            players: [{ playerId: '3163', name: 'Jayden Daniels', position: 'QB', injuryStatus: null }],
+          },
+        },
+        {
+          toolName: 'rankWaiverTargets',
+          output: {
+            league: { leagueId: '1389392984620953600' },
+            methodology: { scoringKeysUsed: ['rec'], scoringKeysIgnored: [] },
+            targets: [{ player: { playerId: 'wr1', name: 'Keon Coleman', position: 'WR', injuryStatus: null } }],
+          },
+        },
+        {
+          toolName: 'projectPlayer',
+          input: { leagueId: '1389392984620953600', playerName: 'Keon Coleman' },
+          output: {
+            league: { leagueId: '1389392984620953600', name: 'Game of Throws' },
+            limitations: [],
+            player: { playerId: 'wr1', name: 'Keon Coleman', position: 'WR', team: 'BUF' },
+            recommendationEligible: true,
+            scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+          },
+        },
+        { toolName: 'searchCurrentNews', output: { result: 'Keon Coleman practiced in full.' } },
+      ],
+    });
+    expect(waiverWithProjectedTarget).toMatchObject({
+      identity: 'resolved',
+      injury: 'present',
+      leagueScoring: 'present',
+      projection: 'eligible',
+    });
   });
 });
 

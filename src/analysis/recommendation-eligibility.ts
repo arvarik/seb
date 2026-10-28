@@ -14,10 +14,12 @@ export type ProjectionEligibilityState = 'eligible' | 'ineligible' | 'not-requir
 
 export interface RecommendationEvidence {
   currentEvidence: EvidenceState;
+  inactiveOrTeamlessPlayers?: string[];
   identity: IdentityEvidenceState;
   injury: RequiredEvidenceState;
   leagueScoring: RequiredEvidenceState;
   projection: ProjectionEligibilityState;
+  requiresRefusalOnly?: boolean;
   unfoundPlayers?: string[];
 }
 
@@ -75,9 +77,9 @@ const FACTUAL_FOLLOW_UP =
 const ANAPHORIC_DECISION_REFERENCE =
   /\b(?:him|her|them|both|either|neither|which\s+one|that\s+trade|this\s+trade|instead)\b/iu;
 const HAS_RECOMMENDATION_VERDICT =
-  /(?:^|\n)\s*(?:#+\s*decision\b|\*{0,2}recommendation\*{0,2}\s*:|(?:[-*•]\s+|\d+\.\s+)?\*{0,2}(?:start|sit|bench|add|drop|claim|pick\s*up|accept|decline)\*{0,2}\s+[A-Z])|(?:,\s*so\b|;\s*|\b(?:i'?d|we'?d)\s+)(?:start|sit|bench|add|drop|claim|pick\s*up|accept|decline)\s+[A-Z]|\b(?:i|we)\s+(?:would\s+)?(?:recommend|suggest|advise)\s+(?:starting|sitting|benching|adding|dropping|claiming|trading|accepting|declining)\b|\byou\s+should\s+(?:start|sit|bench|add|drop|claim|pick\s*up|trade|accept|decline)\b/imu;
+  /(?:^|\n)\s*(?:#+\s*decision\b|\*{0,2}recommendation\*{0,2}\s*:|(?:[-*•]\s+|\d+\.\s+)?\*{0,2}(?:start|sit|bench|add|drop|claim|pick\s*up|accept|decline)\*{0,2}\s+(?!(?:times?|spots?|slots?|points|scoring|rate|rates|off|a|an|the|your|my|our|their|his|her|this|that|over|process|lineup|week)\b)[A-Z])|(?:,\s*(?:so\s+)?|;\s*|[.!?]\s+|\s+[-–—]\s*|\b(?:i'?d|we'?d)\s+)\*{0,2}(?:start|sit|bench|add|drop|claim|pick\s*up|accept|decline)\*{0,2}\s+(?!(?:times?|spots?|slots?|points|scoring|rate|rates|off|a|an|the|your|my|our|their|his|her|this|that|over|process|lineup|week)\b)[A-Z]|\b(?:i|we)\s+(?:would\s+)?(?:recommend|suggest|advise)\s+(?:starting|sitting|benching|adding|dropping|claiming|trading|accepting|declining)\b|\byou\s+should\s+(?:start|sit|bench|add|drop|claim|pick\s*up|trade|accept|decline)\b/imu;
 const EXPLICIT_UNAVAILABLE_STATEMENT =
-  /\b(?:decision\s+is\s+unavailable|can(?:'t|not)\s+(?:make|give|provide|pick|choose|select|compare)\b[\s\S]{0,60}\b(?:recommendation|decision|winner|starter|slot)\b|cannot\s+verify\s+current\s+reporting|withholding\s+(?:a\s+|the\s+)?recommendation|(?:does\s+not|doesn'?t)\s+have\s+a\s+[a-z_-]+\s+slot\b)\b/iu;
+  /\b(?:decision\s+is\s+unavailable|can(?:'t|not)\s+(?:make|give|provide|pick|choose|select|compare)\b[\s\S]{0,60}\b(?:recommendation|decision|winner|starter|slot)\b|cannot\s+verify\s+current\s+reporting|withholding\s+(?:a\s+|the\s+)?recommendation|(?:(?:does\s+not|doesn'?t)\s+have\s+a|(?:has|is)\s+no)\s+[a-z0-9_-]+\s+slot\b)\b/iu;
 const MAX_EVIDENCE_TRAVERSAL_DEPTH = 24;
 const MAX_EVIDENCE_TRAVERSAL_NODES = 10_000;
 
@@ -264,6 +266,25 @@ export function enforceFreeformRecommendation(
 export function buildRecommendationEvidence(
   input: BuildRecommendationEvidenceInput,
 ): RecommendationEvidence {
+  const initialInactiveOrTeamless = extractInactiveOrTeamlessPlayers(input.toolResults);
+  const initialUnfound = extractUnfoundPlayers(input.toolResults);
+  const verifiedUnprojectableSet = new Set([
+    ...initialInactiveOrTeamless,
+    ...initialUnfound,
+  ]);
+  const hasInactiveOrTeamlessQuestionMatch = initialInactiveOrTeamless.some((subject) =>
+    textMentionsSubject(input.question, subject),
+  );
+  const hasActiveQuestionMatch = input.toolResults.some((item) =>
+    PLAYER_IDENTITY_TOOLS.has(item.toolName) &&
+    [...toolInputPlayerSubjects(item), ...playerSubjects([item.output])]
+      .map(normalizePlayerName)
+      .some((subject) =>
+        Boolean(subject) &&
+        !verifiedUnprojectableSet.has(subject) &&
+        textMentionsSubject(input.question, subject),
+      ),
+  );
   const hasMatchedDirectProjectionTool = input.toolResults.some((item) =>
     (item.toolName === 'compareStartSit' ||
       item.toolName === 'projectPlayer' ||
@@ -289,15 +310,26 @@ export function buildRecommendationEvidence(
         returnedNames.some((name) => !requestedNames.has(name))) {
         return [{ toolName: 'projectPlayer', output: { recommendationEligible: false }, input: result.input }];
       }
-      return results.map((item) => {
+      return results.flatMap((item) => {
         const record = asRecord(item);
-        return { toolName: 'projectPlayer',
+        const normalized = typeof record?.playerName === 'string'
+          ? normalizePlayerName(record.playerName)
+          : '';
+        if (record?.status !== 'projected' && normalized && verifiedUnprojectableSet.has(normalized)) {
+          return [];
+        }
+        return [{ toolName: 'projectPlayer',
           input: { ...asRecord(result.input), playerName: record?.playerName },
-          output: record?.status === 'projected' ? record.projection : { recommendationEligible: false } };
+          output: record?.status === 'projected' ? record.projection : { recommendationEligible: false } }];
       });
     }
     if (result.toolName === 'optimizeRosterLineup') {
-      if (hasMatchedDirectProjectionTool && !fullLineupOptimizationRequest) return [];
+      if (
+        (hasMatchedDirectProjectionTool || (hasInactiveOrTeamlessQuestionMatch && !hasActiveQuestionMatch)) &&
+        !fullLineupOptimizationRequest
+      ) {
+        return [];
+      }
       const out = asRecord(result.output);
       const projections = out?.projections;
       if (!Array.isArray(projections) || !projections.length || out?.recommendationEligible !== true) {
@@ -376,10 +408,19 @@ export function buildRecommendationEvidence(
   const needsPlayerIdentity = needsPlayerStatus;
 
   const unfoundPlayers = extractUnfoundPlayers(input.toolResults);
+  const inactiveOrTeamlessPlayers = extractInactiveOrTeamlessPlayers(input.toolResults);
+  const projection = projectionEligibilityState(input.toolResults, input.question);
+  const requiresRefusalOnly =
+    START_SIT_REQUEST.test(input.question) &&
+    !explicitNonSleeper &&
+    projection === 'not-required' &&
+    inactiveOrTeamlessPlayers.length > 0 &&
+    !input.toolResults.some((result) => result.toolName === 'projectPlayer');
   return {
     currentEvidence: input.toolResults.length > 0
       ? sourceEvidenceState(input.sources)
       : 'missing',
+    ...(inactiveOrTeamlessPlayers.length > 0 ? { inactiveOrTeamlessPlayers } : {}),
     identity: needsPlayerIdentity
       ? identityEvidenceState(input.toolResults, input.question)
       : 'not-required',
@@ -389,7 +430,8 @@ export function buildRecommendationEvidence(
     leagueScoring: needsLeagueScoring
       ? leagueScoringEvidenceState(input.toolResults, input.question)
       : 'not-required',
-    projection: projectionEligibilityState(input.toolResults, input.question),
+    projection,
+    ...(requiresRefusalOnly ? { requiresRefusalOnly: true } : {}),
     ...(unfoundPlayers.length > 0 ? { unfoundPlayers } : {}),
   };
 }
@@ -475,7 +517,11 @@ function eligibilityBlockingReasons(
   if (evidence.leagueScoring === 'missing') {
     reasons.push('The selected league scoring settings are missing.');
   }
-  if (evidence.projection === 'ineligible') {
+  if (
+    evidence.projection === 'ineligible' ||
+    recommendsUnfoundPlayer(recommendationText, evidence.inactiveOrTeamlessPlayers) ||
+    (evidence.requiresRefusalOnly === true && hasPositiveActionEndorsement(recommendationText))
+  ) {
     reasons.push('The projection does not meet its deterministic recommendation rules.');
   }
   return reasons;
@@ -635,11 +681,20 @@ function playerStatusEvidenceState(
   const hasFreshNewsSource = hasFreshNewsArticleSource || sources.some((source) =>
     source.id.startsWith('news-source:') && source.cacheOutcome !== 'stale-if-error'
   );
+  const inactiveOrTeamlessSet = new Set(extractInactiveOrTeamlessPlayers(toolResults));
   const supported = subjects.every((subject) => {
     const hasPlayerStatus = toolResults.some((result) =>
       PLAYER_STATUS_TOOLS.has(result.toolName) &&
       evidenceMatchesSubjects([result.output], [subject]) &&
       (result.toolName === 'projectPlayer' ? hasProjectionPlayerStatus(result.output) : hasPlayerStatusFields(result.output)));
+    if (inactiveOrTeamlessSet.has(normalizePlayerName(subject))) {
+      const hasResolvedIdentity = toolResults.some((result) =>
+        result.toolName === 'resolvePlayerIdentity' &&
+        findIdentityStatus(result.output) === 'resolved' &&
+        evidenceMatchesSubjects([result.input, result.output], [subject]),
+      );
+      return hasPlayerStatus || hasResolvedIdentity;
+    }
     const hasGroundedWebNews = toolResults.some((result) => result.toolName === 'searchCurrentNews' &&
       evidenceMatchesSubjects([result.output], [subject])) && sources.some((source) => source.id.startsWith('web:'));
     const hasFirstClassNews = (hasFreshNewsArticleSource && toolResults.some((result) =>
@@ -731,6 +786,11 @@ function projectionEligibilityState(
       });
       return hasWeeklyStats && hasSchedule ? 'eligible' : 'ineligible';
     }
+    const inactiveOrTeamlessSet = new Set(extractInactiveOrTeamlessPlayers(toolResults));
+    const subjects = relevantPlayerSubjects(toolResults, question);
+    if (subjects.length > 0 && subjects.every((subject) => inactiveOrTeamlessSet.has(subject))) {
+      return 'not-required';
+    }
     return START_SIT_REQUEST.test(question) ? 'ineligible' : 'not-required';
   }
   const comparesPlayers = /\b(?:versus|vs\.?)\b|\bor\s+(?!sit\b|start\b|bench\b|not\b|leave\b|keep\b|him\b|them\b|stream\b|drop\b|hold\b|cut\b|add\b|claim\b|pick\b)\p{L}+/iu.test(question);
@@ -739,7 +799,21 @@ function projectionEligibilityState(
     individualPlayerResultMatchesQuestion(result, question, rosterSubjects)
   );
   if (matchedProjections.length === 0) return 'ineligible';
-  if (START_SIT_REQUEST.test(question) && comparesPlayers && matchedProjections.length < 2) {
+  const matchedProjectionNames = new Set(
+    matchedProjections
+      .flatMap((result) => [...toolInputPlayerSubjects(result), ...playerSubjects([result.output])])
+      .map(normalizePlayerName)
+      .filter(Boolean),
+  );
+  const matchedUnprojectableCount = new Set(
+    [...extractInactiveOrTeamlessPlayers(toolResults), ...extractUnfoundPlayers(toolResults)]
+      .filter((subject) => !matchedProjectionNames.has(subject) && textMentionsSubject(question, subject)),
+  ).size;
+  if (
+    START_SIT_REQUEST.test(question) &&
+    comparesPlayers &&
+    matchedProjections.length + matchedUnprojectableCount < 2
+  ) {
     return 'ineligible';
   }
   if (projections.every((result) => asRecord(result.output)?.recommendationEligible === true)) {
@@ -892,7 +966,11 @@ function rosterDiscoveredSubjects(
   );
   if (hasExplicitMatch) return new Set();
   const names = toolResults
-    .filter((result) => result.toolName === 'getRosterPlayers')
+    .filter((result) =>
+      result.toolName === 'getRosterPlayers' ||
+      result.toolName === 'rankWaiverTargets' ||
+      result.toolName === 'getTrendingPlayers',
+    )
     .flatMap((result) => playerSubjects([result.output]))
     .map(normalizePlayerName)
     .filter(Boolean);
@@ -933,6 +1011,13 @@ function relevantPlayerSubjects(
   );
   const hasWaiverRanking = filteredResults.some((result) => result.toolName === 'rankWaiverTargets');
   const rosterSubjects = rosterDiscoveredSubjects(filteredResults, question);
+  const rosterOnlyNames = new Set(
+    filteredResults
+      .filter((result) => result.toolName === 'getRosterPlayers')
+      .flatMap((result) => playerSubjects([result.output]))
+      .map(normalizePlayerName)
+      .filter(Boolean),
+  );
   const matchedProjections = filteredResults.filter((result) =>
     result.toolName === 'projectPlayer' &&
     individualPlayerResultMatchesQuestion(result, question, rosterSubjects),
@@ -941,11 +1026,16 @@ function relevantPlayerSubjects(
     matchedProjections.length > 0 &&
     matchedProjections.every((result) => asRecord(result.output)?.recommendationEligible !== true);
   const hasProjectedRosterSubset = !hasQuestionMatch &&
-    rosterSubjects.size > 0 &&
-    matchedProjections.length > 0;
+    rosterOnlyNames.size > 0 &&
+    matchedProjections.some((result) =>
+      individualPlayerResultMatchesQuestion(result, question, rosterOnlyNames),
+    );
   const subjects = filteredResults.flatMap((result) => {
     if (!PLAYER_IDENTITY_TOOLS.has(result.toolName)) return [];
-    if (result.toolName === 'getRosterPlayers' && hasProjectedRosterSubset) {
+    if (
+      result.toolName === 'getRosterPlayers' &&
+      (hasProjectedRosterSubset || (!hasQuestionMatch && hasWaiverRanking))
+    ) {
       return [];
     }
     if (!hasQuestionMatch && result.toolName === 'getTrendingPlayers' && hasWaiverRanking) {
@@ -988,6 +1078,75 @@ function projectionFitsSlot(projection: unknown, slot: string): boolean {
   return positions.length > 0 && eligibleForSlot(positions, slot);
 }
 
+function extractInactiveOrTeamlessPlayers(toolResults: readonly RecommendationToolResult[]): string[] {
+  const verifiedActive = new Set<string>();
+  const candidates: string[] = [];
+  for (const result of toolResults) {
+    if (result.toolName === 'findPlayers' && Array.isArray(result.output) && result.output.length === 1) {
+      const record = asRecord(result.output[0]);
+      const name = typeof record?.name === 'string'
+        ? record.name
+        : typeof record?.full_name === 'string'
+          ? record.full_name
+          : null;
+      if (!name) continue;
+      if (
+        ('team' in (record ?? {}) && record?.team === null) ||
+        record?.active === false ||
+        record?.status === 'Inactive' ||
+        record?.status === 'Retired'
+      ) {
+        candidates.push(name);
+      } else if (typeof record?.team === 'string' && record.team.trim().length > 0 && record.active !== false) {
+        verifiedActive.add(normalizePlayerName(name));
+      }
+    } else if (result.toolName === 'resolvePlayerIdentity' && findIdentityStatus(result.output) === 'resolved') {
+      const root = asRecord(result.output);
+      const identity = asRecord(asRecord(root?.resolution)?.identity ?? root?.identity);
+      const name = typeof identity?.displayName === 'string'
+        ? identity.displayName
+        : typeof identity?.name === 'string'
+          ? identity.name
+          : typeof identity?.fullName === 'string'
+            ? identity.fullName
+            : null;
+      if (!name) continue;
+      if (
+        ('teamId' in (identity ?? {}) && identity?.teamId === null) ||
+        ('team' in (identity ?? {}) && identity?.team === null) ||
+        identity?.active === false
+      ) {
+        candidates.push(name);
+      } else if (
+        ((typeof identity?.teamId === 'string' && identity.teamId.trim().length > 0) ||
+          (typeof identity?.team === 'string' && identity.team.trim().length > 0)) &&
+        identity?.active !== false
+      ) {
+        verifiedActive.add(normalizePlayerName(name));
+      }
+    } else if (result.toolName === 'projectPlayer') {
+      const out = asRecord(result.output);
+      const player = asRecord(out?.player);
+      const name = typeof player?.name === 'string' ? player.name : null;
+      if (!name) continue;
+      const limitations = Array.isArray(out?.limitations) ? out.limitations : [];
+      const lacksActiveTeam = limitations.some(
+        (item) => typeof item === 'string' && item.includes('no verified active team'),
+      );
+      if (out?.recommendationEligible === false && lacksActiveTeam) {
+        candidates.push(name);
+      } else if (out?.recommendationEligible === true) {
+        verifiedActive.add(normalizePlayerName(name));
+      }
+    }
+  }
+  return [...new Set(
+    candidates
+      .map(normalizePlayerName)
+      .filter((name) => Boolean(name) && !verifiedActive.has(name)),
+  )];
+}
+
 function extractUnfoundPlayers(toolResults: readonly RecommendationToolResult[]): string[] {
   const resolved = new Set(
     toolResults
@@ -1005,21 +1164,82 @@ function extractUnfoundPlayers(toolResults: readonly RecommendationToolResult[])
   )];
 }
 
+const COORDINATED_ACTION_VERB =
+  '(?:add(?:ing)?|claim(?:ing)?|pick(?:ing)?\\s+up|acquir(?:e|ing)|target(?:ing)?|bid(?:ding)?\\s+on|stream(?:ing)?|drop(?:ping)?|bench(?:ing)?|sit(?:ting)?|start(?:ing)?|play(?:ing)?|roster(?:ing)?|us(?:e|ing)|consider(?:ing)?|touch(?:ing)?)';
+const DIRECT_NEGATION_PREFIX = new RegExp(
+  `\\b(?:do\\s+not|don['’]?t|can(?:not|['’]?t)|should(?:n['’]?t|\\s+not)|would(?:n['’]?t|\\s+not)|won['’]?t|never|avoid|against|not)` +
+    `(?:\\s+(?:ever|even|just|simply|recommend|suggest|advise|try|plan|bother|worth))*(?:\\s+to)?` +
+    `(?:\\s+${COORDINATED_ACTION_VERB}\\s*(?:,\\s*(?:(?:or|and|nor)\\b)?|\\b(?:or|and|nor)\\b)(?:\\s+to)?)*\\s*$`,
+  'iu',
+);
+const NON_FIRST_NAME_WORDS = new Set([
+  'start', 'starting', 'add', 'adding', 'claim', 'claiming', 'up', 'acquire', 'acquiring',
+  'target', 'targeting', 'on', 'stream', 'streaming', 'recommend', 'recommendation',
+  'suggest', 'advise', 'sit', 'sitting', 'bench', 'benching', 'drop', 'dropping', 'keep', 'hold',
+]);
+const REFUSAL_OR_HOLD_WORDS = new Set([
+  'do', "don't", 'dont', 'don’t', 'never', 'avoid', 'no', 'none', 'neither', 'not',
+  'pass', 'hold', 'keep', 'leave', 'stay', 'withhold', 'withheld', 'unavailable',
+  'cannot', "can't", 'cant', 'can’t', 'bench', 'sit', 'drop',
+]);
+
 function recommendsUnfoundPlayer(
   text: string,
   unfoundPlayers: readonly string[] | undefined,
 ): boolean {
   if (!text || !unfoundPlayers?.length) return false;
-  const normalized = normalizeEvidenceText(text);
-  if (!normalized) return false;
+  const stripped = text.replace(/[*_`~]+/gu, '');
+  const clauses = stripped.split(/[\n.!?;]+/u);
   return unfoundPlayers.some((name) => {
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&').replace(/\s+/gu, '\\s+');
-    const positiveEndorsement = new RegExp(
-      `(?<!\\b(?:not|never|avoid|against)\\s+)(?<!\\bdon'?t\\s+)\\b(?:start(?:ing)?|add(?:ing)?|claim(?:ing)?|pick(?:ing)?\\s+up|acquir(?:e|ing)|target(?:ing)?|bid(?:ding)?\\s+on|stream(?:ing)?|recommend|suggest|advise)\\s+${escaped}\\b|\\brecommendation\\s+${escaped}\\b`,
-      'iu',
+    const tokens = name.split(' ').filter(Boolean);
+    if (tokens.length === 0) return false;
+    const fullPattern = tokens
+      .map((token) => token.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'))
+      .join('[\\s.\'’-]+');
+    const surname = tokens.length >= 2 ? tokens.at(-1) : undefined;
+    const escapedSurname = surname?.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    const hasOtherSameSurnamePlayer = Boolean(escapedSurname) && Array.from(
+      stripped.matchAll(new RegExp(`\\b([A-Za-z][A-Za-z'’-]{1,20})\\.?\\s+${escapedSurname}\\b`, 'giu')),
+    ).some((match) => {
+      const rawFirst = match[1]!;
+      const candidateFirst = rawFirst.toLowerCase();
+      return /^[A-Z]/u.test(rawFirst) &&
+        candidateFirst !== tokens[0]!.toLowerCase() &&
+        !NON_FIRST_NAME_WORDS.has(candidateFirst);
+    });
+    const subjectPattern = surname && surname.length >= 4 && !hasOtherSameSurnamePlayer
+      ? `(?:${fullPattern}|${escapedSurname})`
+      : fullPattern;
+    if (new RegExp(`\\brecommendation\\s*(?::|[-–—]|\\bis\\b)\\s*${subjectPattern}\\b`, 'iu').test(stripped)) {
+      return true;
+    }
+    const actionBeforeSubject = new RegExp(
+      `\\b(?:start(?:ing)?|add(?:ing)?|claim(?:ing)?|pick(?:ing)?\\s+up|acquir(?:e|ing)|target(?:ing)?|bid(?:ding)?\\s+on|stream(?:ing)?|recommend|suggest|advise)\\s+${subjectPattern}\\b`,
+      'giu',
     );
-    return positiveEndorsement.test(normalized);
+    return clauses.some((clause) =>
+      Array.from(clause.matchAll(actionBeforeSubject)).some(
+        (match) => !DIRECT_NEGATION_PREFIX.test(clause.slice(0, match.index ?? 0)),
+      ),
+    );
   });
+}
+
+function hasPositiveActionEndorsement(text: string): boolean {
+  if (!text) return false;
+  const stripped = text.replace(/[*_`~]+/gu, '');
+  for (const match of stripped.matchAll(/(?:\b[Rr]ecommendation|\bRECOMMENDATION)\s*:\s*([A-Z][A-Za-z.'’-]+)\s+([A-Z][A-Za-z.'’-]+)/gu)) {
+    if (!REFUSAL_OR_HOLD_WORDS.has(match[1]!.toLowerCase())) {
+      return true;
+    }
+  }
+  const positiveActionPattern =
+    /\b(?:[Ss]tart(?:ing)?|[Aa]dd(?:ing)?|[Cc]laim(?:ing)?|[Pp]ick(?:ing)?\s+[Uu]p|[Aa]cquir(?:e|ing)|[Ss]tream(?:ing)?|START|ADD|CLAIM|PICK\s+UP|ACQUIRE|STREAM)\s+(?!(?:Week|Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|NFL|Sleeper|Superflex)\b)[A-Z][A-Za-z.'’-]+/gu;
+  return stripped.split(/[\n.!?;]+/u).some((clause) =>
+    Array.from(clause.matchAll(positiveActionPattern)).some(
+      (match) => !DIRECT_NEGATION_PREFIX.test(clause.slice(0, match.index ?? 0)),
+    ),
+  );
 }
 
 function isExplicitNonSleeperQuestion(

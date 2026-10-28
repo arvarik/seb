@@ -291,7 +291,7 @@ export function resolveVerifiedModelProvider(
       'The verified model must equal the configured primary or fallback model.',
     );
   }
-  return { ...selection, fallbackModel: model, model };
+  return { ...selection, model };
 }
 
 /** Creates an AI SDK language model for the selected provider. */

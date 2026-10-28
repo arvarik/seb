@@ -2544,3 +2544,140 @@ async function streamText(stream: ReadableStream<UIMessageChunk>): Promise<strin
   for await (const chunk of stream) output += textDelta(chunk);
   return output;
 }
+
+describe('interactive context compaction under character budget', () => {
+  it('compacts oversize recent tool turns before dropping Turn 1', async () => {
+    const capturedPrompts: unknown[] = [];
+    const model = new MockLanguageModelV4({
+      doStream: async (callOptions) => {
+        capturedPrompts.push(callOptions.prompt);
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              { type: 'text-start', id: 'text-1' },
+              { type: 'text-delta', id: 'text-1', delta: 'Grounded reply.' },
+              { type: 'text-end', id: 'text-1' },
+              {
+                type: 'finish',
+                finishReason: { unified: 'stop', raw: undefined },
+                usage: {
+                  inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
+                  outputTokens: { total: 2, text: 2, reasoning: undefined },
+                },
+              },
+            ],
+          }),
+        };
+      },
+    });
+    const clients = dataClients();
+    const transport = new SebInteractiveTransport({
+      agent: createFantasyFootballAgent({ languageModel: model, ...clients }),
+      environment: {},
+      model: 'test-model',
+      nflverse: clients.nflverseClient,
+      session: createSessionState(),
+      sleeper: clients.sleeperClient,
+      sources: new SourceTracker(),
+      version: 'test',
+      weather: clients.weatherClient,
+    });
+
+    const heavyTurns: UIMessage[] = [
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'Check Jayden Daniels and Jared Goff in Turn 1.' }] },
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-compareStartSit',
+            toolCallId: 'c1',
+            input: {},
+            state: 'output-available',
+            output: { summary: 'Daniels 21.9 vs Goff 19.5' },
+          },
+          { type: 'text', text: 'Jayden Daniels projects ahead of Jared Goff.' },
+        ],
+      },
+      { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'Optimize my full lineup.' }] },
+      {
+        id: 'a2',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-optimizeRosterLineup',
+            toolCallId: 'c2',
+            input: {},
+            state: 'output-available',
+            output: { hugePayload: 'x'.repeat(85_000) },
+          },
+          { type: 'text', text: 'Optimized your Week 8 lineup.' },
+        ],
+      },
+      { id: 'u3', role: 'user', parts: [{ type: 'text', text: 'Check my kicker too.' }] },
+      {
+        id: 'a3',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-projectPlayers',
+            toolCallId: 'c3',
+            input: {},
+            state: 'output-available',
+            output: { hugePayload: 'y'.repeat(50_000) },
+          },
+          { type: 'text', text: 'Hold Will Reichard.' },
+        ],
+      },
+      { id: 'u4', role: 'user', parts: [{ type: 'text', text: 'What happened in Turn 1?' }] },
+    ];
+
+    await sendConversation(transport, heavyTurns);
+    const firstPromptJson = JSON.stringify(capturedPrompts[0]);
+    expect(firstPromptJson).toContain('Check Jayden Daniels and Jared Goff in Turn 1.');
+    expect(firstPromptJson).toContain('Verified tool calls in this turn (outputs compacted): optimizeRosterLineup');
+
+    // Even when two recent heavy turns together sit under 120k (e.g. 58k + 58k = 116k) and an older
+    // assistant turn had tool-only parts, compaction preserves Turn 1 instead of evicting it.
+    capturedPrompts.length = 0;
+    const subBudgetHeavyTurns: UIMessage[] = [
+      { id: 's-u1', role: 'user', parts: [{ type: 'text', text: 'Turn 1 anchor: Breece Hall check.' + 'p'.repeat(5_500) }] },
+      {
+        id: 's-a1',
+        role: 'assistant',
+        parts: [{
+          type: 'tool-projectPlayer',
+          toolCallId: 'sc1',
+          input: {},
+          state: 'output-available',
+          output: { summary: 'Breece Hall 17.4' },
+        }],
+      },
+      { id: 's-u2', role: 'user', parts: [{ type: 'text', text: 'Turn 2 lineup.' }] },
+      {
+        id: 's-a2',
+        role: 'assistant',
+        parts: [
+          { type: 'tool-optimizeRosterLineup', toolCallId: 'sc2', input: {}, state: 'output-available', output: { huge: 'a'.repeat(58_000) } },
+          { type: 'text', text: 'Turn 2 answer.' },
+        ],
+      },
+      { id: 's-u3', role: 'user', parts: [{ type: 'text', text: 'Turn 3 waivers.' }] },
+      {
+        id: 's-a3',
+        role: 'assistant',
+        parts: [
+          { type: 'tool-rankWaiverTargets', toolCallId: 'sc3', input: {}, state: 'output-available', output: { huge: 'b'.repeat(58_000) } },
+          { type: 'text', text: 'Turn 3 answer.' },
+        ],
+      },
+      { id: 's-u4', role: 'user', parts: [{ type: 'text', text: 'Recall Turn 1?' }] },
+    ];
+    await sendConversation(transport, subBudgetHeavyTurns);
+    const secondPromptJson = JSON.stringify(capturedPrompts[0]);
+    expect(secondPromptJson).toContain('Turn 1 anchor: Breece Hall check.');
+    expect(secondPromptJson).toContain('Verified tool calls in this turn (outputs compacted): projectPlayer');
+    expect(secondPromptJson).toContain('Verified tool calls in this turn (outputs compacted): optimizeRosterLineup');
+  });
+});

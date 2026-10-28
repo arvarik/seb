@@ -96,8 +96,16 @@ export function compareProjections(
   const slot =
     requestedSlot?.toUpperCase() ??
     (positions.size === 1 ? first.player.position : inferredLeagueSlot);
-  const eligible = Boolean(slot) && projections.every((projection) => projection.recommendationEligible && eligibleForSlot(projection.player.fantasy_positions?.length ? projection.player.fantasy_positions : [projection.player.position], slot!));
-  return { slot, projections: ordered, recommendationEligible: eligible,
+  const starterLeagueSlots = leagueSlots
+    ? [...leagueSlots].filter((candidate) => !['BN', 'BENCH', 'IR', 'RESERVE', 'TAXI'].includes(candidate))
+    : null;
+  const slotPositions = slot
+    ? ['QB', 'RB', 'WR', 'TE', 'K', 'DEF', 'DL', 'LB', 'DB'].filter((pos) => eligibleForSlot([pos], slot))
+    : [];
+  const slotSupportedByLeague = !starterLeagueSlots?.length || (slotPositions.length > 0 &&
+    starterLeagueSlots.some((leagueSlot) => slotPositions.every((pos) => eligibleForSlot([pos], leagueSlot))));
+  const eligible = Boolean(slot) && slotSupportedByLeague && projections.every((projection) => projection.recommendationEligible && eligibleForSlot(projection.player.fantasy_positions?.length ? projection.player.fantasy_positions : [projection.player.position], slot!));
+  return { slot, slotSupportedByLeague, projections: ordered, recommendationEligible: eligible,
     preferredPlayerId: eligible ? leader.player.playerId : null,
     expectedPointAdvantage: Math.round(difference * 100) / 100,
     approximateHeadToHeadProbability: Math.round(probability * 1000) / 1000,
@@ -105,6 +113,7 @@ export function compareProjections(
     closeDecision: probability < 0.6,
     assumptions: ['The comparison maximizes expected points.',
       ...(!slot ? ['Select a legal starter slot when comparing different positions.'] : []),
+      ...(slot && !slotSupportedByLeague ? [`Starter slot ${slot} is not configured in this league.`] : []),
       ...(!eligible ? ['A player or starter slot failed an eligibility check. The comparison cannot select a starter.'] : []),
       rho !== 0
         ? 'The probability assumes normal scoring errors with empirical same-game stack/touch correlation adjustments.'

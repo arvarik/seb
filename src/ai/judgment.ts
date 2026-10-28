@@ -23,6 +23,7 @@ const currentTrace = new AsyncLocalStorage<TraceState>();
 const MAX_OUTPUT_CHARACTERS = 128_000;
 let initialization: Promise<void> | undefined;
 let tracer: TracerClass | undefined;
+let otelTracer: ReturnType<TracerClass['getOTELTracer']> | undefined;
 let integration: Telemetry | undefined;
 let shutdown: Promise<void> | undefined;
 
@@ -56,14 +57,21 @@ async function initialize(environment: NodeJS.ProcessEnv): Promise<void> {
       await shutdownJudgmentTracing();
       return;
     }
+    otelTracer = monotonicOtelTracer(Tracer.getOTELTracer());
     const telemetry = new OpenTelemetry({
-      tracer: Tracer.getOTELTracer(),
+      tracer: otelTracer,
       usage: true,
       enrichSpan: () => {
         const state = currentTrace.getStore();
         return state ? { 'judgment.session_id': state.sessionId } : undefined;
       },
     });
+    if (typeof telemetry.onLanguageModelCallEnd === 'function') {
+      const onModelEnd = telemetry.onLanguageModelCallEnd.bind(telemetry);
+      telemetry.onLanguageModelCallEnd = (event) => {
+        onModelEnd(enrichProviderExecutedToolOutputs(event));
+      };
+    }
     const onStepEnd = telemetry.onStepEnd.bind(telemetry);
     telemetry.onStepEnd = (event) => {
       // Child chat spans report LLM usage; step wrappers lack model/IO and would be misread as LLM spans.
@@ -126,7 +134,8 @@ export async function traceJudgmentOperation<T>(
 ): Promise<T> {
   if (!integration || !tracer) return run();
   const sdk = tracer;
-  return sdk.getOTELTracer().startActiveSpan(options.name, async (span) => {
+  const activeTracer = otelTracer ?? sdk.getOTELTracer();
+  return activeTracer.startActiveSpan(options.name, async (span) => {
     const state = startTrace(sdk, span, options);
     return currentTrace.run(state, async () => {
       try {
@@ -148,7 +157,8 @@ export async function traceJudgmentStream(
 ): Promise<ReadableStream<UIMessageChunk>> {
   if (!integration || !tracer) return run();
   const sdk = tracer;
-  return sdk.getOTELTracer().startActiveSpan(options.name, async (span) => {
+  const activeTracer = otelTracer ?? sdk.getOTELTracer();
+  return activeTracer.startActiveSpan(options.name, async (span) => {
     const state = startTrace(sdk, span, options);
     return currentTrace.run(state, async () => {
       let reader: ReadableStreamDefaultReader<UIMessageChunk>;
@@ -225,8 +235,146 @@ async function endTrace(sdk: TracerClass, state: TraceState): Promise<void> {
 export async function shutdownJudgmentTracing(): Promise<void> {
   if (!tracer) return;
   integration = undefined;
+  otelTracer = undefined;
   shutdown ??= tracer.shutdown().catch(() => { warn('Trace shutdown failed.'); });
   await shutdown;
+}
+
+const CLOCK_ORIGIN_MS = Date.now() - performance.now();
+let lastMonotonicMs = 0;
+
+function nextMonotonicEpochMs(minMs = 0): number {
+  const next = Math.max(CLOCK_ORIGIN_MS + performance.now(), lastMonotonicMs + 0.001, minMs);
+  lastMonotonicMs = next;
+  return next;
+}
+
+function toEpochMs(input: unknown): number | undefined {
+  if (typeof input === 'number' && Number.isFinite(input)) {
+    return input < CLOCK_ORIGIN_MS / 2 ? CLOCK_ORIGIN_MS + input : input;
+  }
+  if (input instanceof Date) return input.getTime();
+  if (Array.isArray(input) && input.length === 2 && typeof input[0] === 'number' && typeof input[1] === 'number') {
+    return input[0] * 1_000 + input[1] / 1_000_000;
+  }
+  return undefined;
+}
+
+function wrapMonotonicSpanEnd(span: Span, startedAt: number): Span {
+  const end = span.end.bind(span);
+  let ended = false;
+  span.end = (endTime?: Parameters<Span['end']>[0]) => {
+    if (ended) {
+      end(endTime);
+      return;
+    }
+    ended = true;
+    const explicitEnd = toEpochMs(endTime);
+    end(nextMonotonicEpochMs(Math.max(startedAt + 0.001, explicitEnd ?? 0)));
+  };
+  return span;
+}
+
+function monotonicOtelTracer<T extends ReturnType<TracerClass['getOTELTracer']>>(base: T): T {
+  if (typeof (base as { startSpan?: unknown }).startSpan !== 'function') return base;
+  return new Proxy(base, {
+    get(target, prop, receiver) {
+      if (prop === 'startSpan') {
+        return (name: string, options?: Record<string, unknown>, ctx?: unknown) => {
+          const explicitStart = toEpochMs(options?.startTime);
+          const startedAt = nextMonotonicEpochMs(explicitStart ?? 0);
+          const span = (target.startSpan as (...args: unknown[]) => Span)(
+            name,
+            { ...options, startTime: startedAt },
+            ctx,
+          );
+          return wrapMonotonicSpanEnd(span, startedAt);
+        };
+      }
+      if (prop === 'startActiveSpan') {
+        return (name: string, ...rest: unknown[]) => {
+          const callback = rest.at(-1);
+          if (typeof callback !== 'function') {
+            return Reflect.apply(target.startActiveSpan, target, [name, ...rest]);
+          }
+          const rawOptions = rest.length >= 2 && rest[0] && typeof rest[0] === 'object'
+            ? (rest[0] as Record<string, unknown>)
+            : undefined;
+          const startedAt = nextMonotonicEpochMs(toEpochMs(rawOptions?.startTime) ?? 0);
+          const nextOptions = { ...rawOptions, startTime: startedAt };
+          const wrapped = (span: Span) =>
+            (callback as (span: Span) => unknown)(wrapMonotonicSpanEnd(span, startedAt));
+          return rest.length >= 3
+            ? (target.startActiveSpan as (...args: unknown[]) => unknown)(name, nextOptions, rest[1], wrapped)
+            : (target.startActiveSpan as (...args: unknown[]) => unknown)(name, nextOptions, wrapped);
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+}
+
+function sanitizeGroundingMetadata(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  const entry = record.searchEntryPoint;
+  if (
+    entry &&
+    typeof entry === 'object' &&
+    typeof (entry as Record<string, unknown>).renderedContent === 'string' &&
+    ((entry as Record<string, unknown>).renderedContent as string).includes('<style>')
+  ) {
+    const rest = { ...record };
+    delete rest.searchEntryPoint;
+    return rest;
+  }
+  return value;
+}
+
+function enrichProviderExecutedToolOutputs<
+  T extends Parameters<NonNullable<Telemetry['onLanguageModelCallEnd']>>[0],
+>(event: T): T {
+  if (!Array.isArray(event.content)) return event;
+  const searchToolIds = new Set<string>();
+  const sources: Record<string, unknown>[] = [];
+  for (const part of event.content) {
+    if (part.type === 'tool-call' && part.providerExecuted && /search/iu.test(part.toolName)) {
+      searchToolIds.add(part.toolCallId);
+    } else if (part.type === 'source') {
+      sources.push(part as unknown as Record<string, unknown>);
+    }
+  }
+  if (searchToolIds.size === 0) return event;
+  const googleMeta = event.providerMetadata && typeof event.providerMetadata === 'object'
+    ? (event.providerMetadata as Record<string, unknown>).google
+    : undefined;
+  const groundingMetadata = sanitizeGroundingMetadata(
+    googleMeta && typeof googleMeta === 'object'
+      ? (googleMeta as Record<string, unknown>).groundingMetadata
+      : undefined,
+  );
+  let changed = false;
+  const content = event.content.map((part) => {
+    if (part.type !== 'tool-result' || !searchToolIds.has(part.toolCallId)) return part;
+    const raw: Record<string, unknown> = part.output && typeof part.output === 'object' && !Array.isArray(part.output)
+      ? { ...(part.output as Record<string, unknown>) }
+      : { result: part.output };
+    const hadStyleWidget = typeof raw.search_suggestions === 'string' && raw.search_suggestions.includes('<style>');
+    if (hadStyleWidget) delete raw.search_suggestions;
+    if (!hadStyleWidget && sources.length === 0 && groundingMetadata === undefined) return part;
+    changed = true;
+    return {
+      ...part,
+      output: {
+        ...raw,
+        ...(sources.length > 0 ? { sources } : {}),
+        ...(groundingMetadata !== undefined ? { groundingMetadata } : {}),
+      },
+    };
+  });
+  return changed
+    ? Object.assign(Object.create(Object.getPrototypeOf(event)) as T, event, { content })
+    : event;
 }
 
 function returnedFailure(output: unknown): boolean {

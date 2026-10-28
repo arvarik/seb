@@ -201,6 +201,9 @@ describe('full-roster optimal lineup solver', () => {
       pointsGain: 16.4,
     }]);
     expect(optimized.warnings.some((warning) => warning.includes('Injured Receiver'))).toBe(true);
+    expect(optimized.bench).toEqual([
+      expect.objectContaining({ playerId: 'out_wr', name: 'Injured Receiver', position: 'WR', injuryStatus: 'Out' }),
+    ]);
 
     const evidence = buildRecommendationEvidence({
       analysis: {
@@ -366,8 +369,19 @@ describe('full-roster optimal lineup solver', () => {
     } as unknown as ScoringAwarePlayerProjection;
     expect(compareProjections([rbProj, wrProj], undefined, ['QB', 'RB', 'WR', 'FLEX', 'BN'])).toMatchObject({
       slot: 'FLEX',
+      slotSupportedByLeague: true,
       recommendationEligible: true,
       preferredPlayerId: 'rb1',
+    });
+    const qbProj = {
+      ...rbProj, expectedPoints: 21,
+      player: { playerId: 'qb1', name: 'Passer', position: 'QB', team: 'BUF' },
+    } as unknown as ScoringAwarePlayerProjection;
+    expect(compareProjections([qbProj, rbProj], 'SUPER_FLEX', ['QB', 'RB', 'WR', 'FLEX', 'BN'])).toMatchObject({
+      slot: 'SUPER_FLEX',
+      slotSupportedByLeague: false,
+      recommendationEligible: false,
+      preferredPlayerId: null,
     });
 
     // Completed-week matchup deterministic winProbability

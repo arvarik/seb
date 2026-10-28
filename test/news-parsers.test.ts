@@ -122,6 +122,34 @@ describe('news feed parsers', () => {
       },
     ]);
   });
+
+  it('caps RSS and Atom category arrays at 30 items for high-tag roundup posts', () => {
+    const rssTags = Array.from({ length: 42 }, (_, i) => `<category>Tag ${i + 1}</category>`).join('');
+    const rssXml = `
+      <rss version="2.0"><channel><item>
+        <title>Daily NFL Transactions</title>
+        <link>https://news.example/nfl/transactions</link>
+        <pubDate>Fri, 28 Aug 2026 18:30:00 GMT</pubDate>
+        ${rssTags}
+      </item></channel></rss>
+    `;
+    const rssParsed = parseRssFeed(rssXml, 'https://news.example/feed');
+    expect(rssParsed[0]?.categories).toHaveLength(30);
+    expect(rssParsed[0]?.categories[0]).toBe('Tag 1');
+    expect(rssParsed[0]?.categories[29]).toBe('Tag 30');
+
+    const atomTags = Array.from({ length: 38 }, (_, i) => `<category term="Atom ${i + 1}" />`).join('');
+    const atomXml = `
+      <feed xmlns="http://www.w3.org/2005/Atom"><entry>
+        <title>Practice Squad Roundup</title>
+        <link href="https://feed.example/news/roundup" />
+        <updated>2026-08-26T12:00:00Z</updated>
+        ${atomTags}
+      </entry></feed>
+    `;
+    const atomParsed = parseAtomFeed(atomXml, 'https://feed.example/atom.xml');
+    expect(atomParsed[0]?.categories).toHaveLength(30);
+  });
 });
 
 describe('news HTML discovery parsers', () => {

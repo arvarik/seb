@@ -712,4 +712,453 @@ it('passes clarifying questions through, skips opponent/process/hindsight prompt
   })).toContain('Automatically gather the missing evidence now');
 });
 
+describe('dogfood edge cases: bye comparisons, proactive streamers, unfound foils, waivers, and non-Sleeper leagues', () => {
+  it('allows compareStartSit with a valid slot when active starter faces bye-week options alongside supplemental optimizeRosterLineup', () => {
+    const evidence = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'What about my FLEX in that same league — Romeo Doubs, Woody Marks, or Isaiah Likely for Week 8?',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        {
+          toolName: 'compareStartSit',
+          input: { leagueId: '123456', playerNames: ['Romeo Doubs', 'Woody Marks', 'Isaiah Likely'], slot: 'FLEX' },
+          output: {
+            slot: 'FLEX',
+            recommendationEligible: false,
+            projections: [
+              {
+                player: { name: 'Romeo Doubs', playerId: 'p1', position: 'WR' },
+                league: { leagueId: '123456' },
+                games: 7,
+                opponent: 'JAC',
+                scoreScope: 'weekly-estimate',
+                recommendationEligible: true,
+                limitations: [],
+                scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+              },
+              {
+                player: { name: 'Woody Marks', playerId: 'p2', position: 'RB' },
+                league: { leagueId: '123456' },
+                games: 7,
+                opponent: null,
+                scoreScope: 'historical-baseline',
+                recommendationEligible: false,
+                limitations: [],
+                scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+              },
+              {
+                player: { name: 'Isaiah Likely', playerId: 'p3', position: 'TE' },
+                league: { leagueId: '123456' },
+                games: 7,
+                opponent: null,
+                scoreScope: 'historical-baseline',
+                recommendationEligible: false,
+                limitations: [],
+                scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+              },
+            ],
+          },
+        },
+        {
+          toolName: 'optimizeRosterLineup',
+          input: { leagueId: '123456', rosterId: 1 },
+          output: { league: { id: '123456' }, recommendationEligible: false, projections: [] },
+        },
+        {
+          toolName: 'searchCurrentNews',
+          output: { result: 'Romeo Doubs is active while Woody Marks and Isaiah Likely are on Week 8 bye.' },
+        },
+      ],
+    });
+    expect(evidence).toEqual({
+      currentEvidence: 'fresh',
+      identity: 'resolved',
+      injury: 'present',
+      leagueScoring: 'present',
+      projection: 'eligible',
+    });
+  });
+
+  it('does not block hold-or-stream D/ST and kicker prompts when unnamed waiver alternatives are also projected', () => {
+    const evidence = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Should I hold Cleveland Browns D/ST and Will Reichard for Week 8 in league 123456, or stream someone off waivers?',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        {
+          toolName: 'projectPlayers',
+          input: { leagueId: '123456', playerNames: ['Cleveland Browns', 'Will Reichard', 'Tyler Bass'] },
+          output: {
+            results: [
+              {
+                playerName: 'Cleveland Browns',
+                status: 'projected',
+                projection: {
+                  player: { name: 'Cleveland Browns D/ST', playerId: 'CLE', position: 'DEF' },
+                  league: { leagueId: '123456' },
+                  recommendationEligible: true,
+                  limitations: [],
+                  scoring: { usedSettings: ['sack'], ignoredSettings: [] },
+                },
+              },
+              {
+                playerName: 'Will Reichard',
+                status: 'projected',
+                projection: {
+                  player: { name: 'Will Reichard', playerId: 'k1', position: 'K' },
+                  league: { leagueId: '123456' },
+                  recommendationEligible: true,
+                  limitations: [],
+                  scoring: { usedSettings: ['fgm_30_39'], ignoredSettings: [] },
+                },
+              },
+              {
+                playerName: 'Tyler Bass',
+                status: 'projected',
+                projection: {
+                  player: { name: 'Tyler Bass', playerId: 'k2', position: 'K' },
+                  league: { leagueId: '123456' },
+                  recommendationEligible: true,
+                  limitations: [],
+                  scoring: { usedSettings: ['fgm_30_39'], ignoredSettings: [] },
+                },
+              },
+            ],
+          },
+        },
+        {
+          toolName: 'searchCurrentNews',
+          output: { result: 'Cleveland Browns defense and Will Reichard are healthy for Week 8.' },
+        },
+      ],
+    });
+    expect(evidence).toMatchObject({
+      identity: 'resolved',
+      injury: 'present',
+      leagueScoring: 'present',
+      projection: 'eligible',
+    });
+  });
+
+  it('handles stale articles in zero-headline checks and scopes open-ended waiver targets by requested positions', () => {
+    const evidence = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Rank the top 5 wide receiver and tight end waiver targets for Week 8 in league 123456 and tell me who to claim first.',
+      sources: [
+        directSource(),
+        {
+          accessedAt: '2026-10-28T18:00:00.000Z',
+          cacheOutcome: 'source-updated',
+          id: 'news-source:espn-nfl',
+          label: 'ESPN NFL',
+          url: 'https://www.espn.com/espn/rss/nfl/news',
+        },
+      ],
+      toolResults: [
+        {
+          toolName: 'rankWaiverTargets',
+          output: {
+            leagueId: '123456',
+            methodology: { scoringKeysUsed: ['rec'], scoringKeysIgnored: [] },
+            targets: [
+              { player: { playerId: 'rb1', name: 'Tyjae Spears', position: 'RB', injuryStatus: null } },
+              { player: { playerId: 'wr1', name: 'Darnell Mooney', position: 'WR', injuryStatus: null } },
+              { player: { playerId: 'te1', name: 'Tucker Kraft', position: 'TE', injuryStatus: null } },
+              { player: { playerId: 'wr2', name: 'Xavier Legette', position: 'WR', injuryStatus: null } },
+              { player: { playerId: 'wr3', name: 'Josh Downs', position: 'WR', injuryStatus: null } },
+            ],
+          },
+        },
+        {
+          toolName: 'getTrendingPlayers',
+          output: {
+            players: Array.from({ length: 10 }, (_, idx) => ({
+              player: { playerId: `tr-${idx}`, name: `Trending Candidate ${idx}`, position: 'RB', injuryStatus: null },
+            })),
+          },
+        },
+        {
+          toolName: 'searchFirstClassNews',
+          input: { query: 'Darnell Mooney Tucker Kraft Xavier Legette injury status' },
+          output: {
+            coverage: { successfulSourceCount: 3 },
+            articles: [
+              { stale: true, publishedAt: '2026-09-01T00:00:00.000Z', title: 'Darnell Mooney preseason note' },
+            ],
+          },
+        },
+      ],
+    });
+    expect(evidence).toMatchObject({
+      identity: 'resolved',
+      injury: 'present',
+      leagueScoring: 'present',
+    });
+  });
+
+  it('allows rejecting a verified nonexistent player foil and preserves natural slot-mismatch refusals', () => {
+    const fakeFoil = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Should I drop Amon-Ra St. Brown to pick up Jaxson Vortex in league 123456?',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        {
+          toolName: 'resolvePlayerIdentity',
+          input: { name: 'Amon-Ra St. Brown' },
+          output: { resolution: { status: 'resolved', identity: { canonicalId: 'arsb' } } },
+        },
+        {
+          toolName: 'resolvePlayerIdentity',
+          input: { name: 'Jaxson Vortex' },
+          output: { resolution: { status: 'not-found' } },
+        },
+        {
+          toolName: 'findPlayers',
+          input: { query: 'Amon-Ra St. Brown' },
+          output: [{ playerId: 'arsb', name: 'Amon-Ra St. Brown', injuryStatus: null }],
+        },
+        {
+          toolName: 'findPlayers',
+          input: { query: 'Jaxson Vortex' },
+          output: [],
+        },
+        {
+          toolName: 'getLeagueOverview',
+          output: { league: { league_id: '123456', scoring_settings: { rec: 1 } } },
+        },
+        {
+          toolName: 'searchCurrentNews',
+          output: { result: 'Amon-Ra St. Brown practiced in full.' },
+        },
+      ],
+    });
+    expect(fakeFoil).toMatchObject({
+      identity: 'resolved',
+      injury: 'present',
+      leagueScoring: 'present',
+    });
+
+    const slotRefusal = enforceFreeformRecommendation(
+      "**Summary:** I can't pick a winner among Tom Brady, Josh Allen, and Bijan Robinson because Game of Throws does not have a Superflex slot and Tom Brady is retired.",
+      {
+        currentEvidence: 'fresh',
+        identity: 'missing',
+        injury: 'missing',
+        leagueScoring: 'present',
+        projection: 'ineligible',
+      },
+    );
+    expect(slotRefusal.eligibility.outcome).toBe('not-applicable');
+    expect(slotRefusal.answer).not.toContain('Decision unavailable');
+  });
+
+  it('supports explicit non-Sleeper custom-scoring start/sit questions when nflverse stats and schedule are verified', () => {
+    const nonSleeper = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'In a non-Sleeper 12-team 1.5 TE-Premium league, should I start Travis Kelce or George Kittle in Week 8?',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        {
+          toolName: 'findPlayers',
+          input: { query: 'Travis Kelce' },
+          output: [{ playerId: 'kelce', name: 'Travis Kelce', injuryStatus: null }],
+        },
+        {
+          toolName: 'findPlayers',
+          input: { query: 'George Kittle' },
+          output: [{ playerId: 'kittle', name: 'George Kittle', injuryStatus: null }],
+        },
+        {
+          toolName: 'comparePlayerTrends',
+          output: { players: [{ name: 'Travis Kelce' }, { name: 'George Kittle' }] },
+        },
+        {
+          toolName: 'getNflSchedule',
+          output: { season: 2026, week: 8, games: [{ gameId: '2026_08_KC_LV' }] },
+        },
+        {
+          toolName: 'searchCurrentNews',
+          output: { result: 'Travis Kelce and George Kittle are active for Week 8.' },
+        },
+      ],
+    });
+    expect(nonSleeper).toEqual({
+      currentEvidence: 'fresh',
+      identity: 'resolved',
+      injury: 'present',
+      leagueScoring: 'not-required',
+      projection: 'eligible',
+    });
+  });
+
+  it('rejects illegal slots, stale-only zero-headline feeds, hijacked fake-player verdicts, and empty non-Sleeper stats', () => {
+    // 1. Illegal QB in FLEX compareStartSit or unsupported league slot must remain ineligible
+    const illegalFlex = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Who should I start at FLEX in my lineup in league 123456: Romeo Doubs or Josh Allen?',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        {
+          toolName: 'compareStartSit',
+          input: { leagueId: '123456', playerNames: ['Romeo Doubs', 'Josh Allen'], slot: 'FLEX' },
+          output: {
+            slot: 'FLEX',
+            recommendationEligible: false,
+            projections: [
+              {
+                player: { name: 'Romeo Doubs', playerId: 'p1', position: 'WR' },
+                league: { leagueId: '123456' },
+                games: 7,
+                opponent: 'JAC',
+                scoreScope: 'weekly-estimate',
+                recommendationEligible: true,
+                limitations: [],
+                scoring: { usedSettings: ['rec'], ignoredSettings: [] },
+              },
+              {
+                player: { name: 'Josh Allen', playerId: 'qb1', position: 'QB' },
+                league: { leagueId: '123456' },
+                games: 7,
+                opponent: 'SEA',
+                scoreScope: 'weekly-estimate',
+                recommendationEligible: true,
+                limitations: [],
+                scoring: { usedSettings: ['pass_td'], ignoredSettings: [] },
+              },
+            ],
+          },
+        },
+        {
+          toolName: 'searchCurrentNews',
+          output: { result: 'Romeo Doubs and Josh Allen are active.' },
+        },
+      ],
+    });
+    expect(illegalFlex.projection).toBe('ineligible');
+
+    // 2. Bye-week named kicker + active unnamed streamer requires streamer news and allows eligible stream
+    const byeHoldOrStream = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Should I hold Will Reichard for Week 8 in league 123456, or stream someone off waivers?',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        {
+          toolName: 'projectPlayers',
+          input: { leagueId: '123456', playerNames: ['Will Reichard', 'Tyler Bass'] },
+          output: {
+            results: [
+              {
+                playerName: 'Will Reichard',
+                status: 'projected',
+                projection: {
+                  player: { name: 'Will Reichard', playerId: 'k1', position: 'K' },
+                  league: { leagueId: '123456' },
+                  games: 7,
+                  opponent: null,
+                  scoreScope: 'historical-baseline',
+                  recommendationEligible: false,
+                  limitations: [],
+                  scoring: { usedSettings: ['fgm_30_39'], ignoredSettings: [] },
+                },
+              },
+              {
+                playerName: 'Tyler Bass',
+                status: 'projected',
+                projection: {
+                  player: { name: 'Tyler Bass', playerId: 'k2', position: 'K' },
+                  league: { leagueId: '123456' },
+                  games: 7,
+                  opponent: 'SEA',
+                  scoreScope: 'weekly-estimate',
+                  recommendationEligible: true,
+                  limitations: [],
+                  scoring: { usedSettings: ['fgm_30_39'], ignoredSettings: [] },
+                },
+              },
+            ],
+          },
+        },
+        {
+          toolName: 'searchCurrentNews',
+          output: { result: 'Will Reichard is on bye while Tyler Bass is active for Week 8.' },
+        },
+      ],
+    });
+    expect(byeHoldOrStream).toMatchObject({ injury: 'present', projection: 'eligible' });
+
+    // 3. Plural WRs/TEs waiver filter + 100%-failed stale-if-error news feed must report injury: 'missing'
+    const allStaleZeroHeadline = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Rank top WRs and TEs on waivers for Week 8 in league 123456 and tell me who to claim.',
+      sources: [
+        directSource(),
+        {
+          accessedAt: '2026-10-28T18:00:00.000Z',
+          cacheOutcome: 'source-updated',
+          id: 'news-source:unrelated',
+          label: 'NFL News',
+          url: 'https://www.nfl.com/rss',
+        },
+      ],
+      toolResults: [
+        {
+          toolName: 'rankWaiverTargets',
+          output: {
+            leagueId: '123456',
+            methodology: { scoringKeysUsed: ['rec'], scoringKeysIgnored: [] },
+            targets: [
+              { player: { playerId: 'rb1', name: 'Tyjae Spears', position: 'RB', injuryStatus: null } },
+              { player: { playerId: 'wr1', name: 'Darnell Mooney', position: 'WR', injuryStatus: null } },
+            ],
+          },
+        },
+        {
+          toolName: 'searchFirstClassNews',
+          input: { query: 'Darnell Mooney injury status' },
+          output: {
+            coverage: { selectedSourceCount: 2, successfulSourceCount: 2, failedSources: [{ id: 'a' }, { id: 'b' }] },
+            articles: [],
+          },
+        },
+      ],
+    });
+    expect(allStaleZeroHeadline.injury).toBe('missing');
+
+    // 4. Positively recommending a verified nonexistent foil or sneaking a bulleted verdict past slot refusal is blocked
+    const fakeFoilEvidence = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'Should I drop Amon-Ra St. Brown to pick up Jaxson Vortex in league 123456?',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        { toolName: 'resolvePlayerIdentity', input: { name: 'Amon-Ra St. Brown' }, output: { resolution: { status: 'resolved', identity: { canonicalId: 'arsb' } } } },
+        { toolName: 'resolvePlayerIdentity', input: { name: 'Jaxson Vortex' }, output: { resolution: { status: 'not-found' } } },
+        { toolName: 'findPlayers', input: { query: 'Amon-Ra St. Brown' }, output: [{ playerId: 'arsb', name: 'Amon-Ra St. Brown', injuryStatus: null }] },
+        { toolName: 'getLeagueOverview', output: { league: { league_id: '123456', scoring_settings: { rec: 1 } } } },
+        { toolName: 'searchCurrentNews', output: { result: 'Amon-Ra St. Brown practiced in full.' } },
+      ],
+    });
+    expect(enforceFreeformRecommendation('Keep Amon-Ra St. Brown and do not pick up Jaxson Vortex.', fakeFoilEvidence).eligibility.outcome).toBe('allowed');
+    expect(enforceFreeformRecommendation('You should pick up Jaxson Vortex right away!', fakeFoilEvidence).eligibility.outcome).toBe('blocked');
+    expect(enforceFreeformRecommendation(
+      'Game of Throws does not have a Superflex slot.\n- **Start Josh Allen** at QB.',
+      { currentEvidence: 'fresh', identity: 'missing', injury: 'missing', leagueScoring: 'present', projection: 'ineligible' },
+    ).eligibility.outcome).toBe('blocked');
+
+    // 5. Explicit non-Sleeper question with empty stats or schedule is ineligible
+    const emptyNonSleeper = buildRecommendationEvidence({
+      analysis: exampleAnalysis(),
+      question: 'In a non-Sleeper 12-team league, should I start Travis Kelce or George Kittle in Week 8?',
+      sources: [directSource(), webSource()],
+      toolResults: [
+        { toolName: 'findPlayers', input: { query: 'Travis Kelce' }, output: [{ playerId: 'kelce', name: 'Travis Kelce', injuryStatus: null }] },
+        { toolName: 'findPlayers', input: { query: 'George Kittle' }, output: [{ playerId: 'kittle', name: 'George Kittle', injuryStatus: null }] },
+        { toolName: 'comparePlayerTrends', output: { players: [{ name: 'Travis Kelce' }] } },
+        { toolName: 'getNflSchedule', output: { season: 2026, week: 8, games: [] } },
+        { toolName: 'searchCurrentNews', output: { result: 'Travis Kelce and George Kittle are active.' } },
+      ],
+    });
+    expect(emptyNonSleeper.projection).toBe('ineligible');
+  });
+});
+
 

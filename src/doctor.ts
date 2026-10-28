@@ -725,7 +725,8 @@ async function sendModelProviderTest(
       }),
     },
     prompt: [
-      'Call verifyLocalTool once with the marker seb.',
+      'You must call verifyLocalTool once with the marker seb before responding.',
+      'Do not answer without calling verifyLocalTool.',
       'After the tool returns, write only SEB_TOOL_LOOP_OK.',
     ].join(' '),
     maxOutputTokens: 1_024,
@@ -736,7 +737,9 @@ async function sendModelProviderTest(
     stopWhen: stepCountIs(3),
     abortSignal: signal,
     telemetry,
-    toolChoice: { toolName: 'verifyLocalTool', type: 'tool' },
+    toolChoice: modelProvider.provider === 'anthropic'
+      ? 'auto'
+      : { toolName: 'verifyLocalTool', type: 'tool' },
   });
   const [finishReason, text, toolResults] = await Promise.all([
     localResult.finishReason,
@@ -781,7 +784,8 @@ async function sendGeminiTest(
       }),
     },
     prompt: [
-      'Call verifyLocalTool once with the marker seb.',
+      'You must call verifyLocalTool once with the marker seb before responding.',
+      'Do not answer without calling verifyLocalTool.',
       'After the tool returns, write only SEB_TOOL_LOOP_OK.',
     ].join(' '),
     maxOutputTokens: 1_024,

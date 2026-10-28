@@ -340,6 +340,12 @@ export async function optimizeRosterLineup(
       points: resolved.points, status: resolved.status, injuryStatus: resolved.injuryStatus, wasStarter: starterSet.has(player.id) };
   });
   const optimalPlayerIds = new Set(assignments.map((entry) => entry.player.id));
+  const bench = [...byId.values()]
+    .filter((entry) => !optimalPlayerIds.has(entry.playerId))
+    .sort((a, b) => (b.points ?? -Infinity) - (a.points ?? -Infinity) || a.playerId.localeCompare(b.playerId))
+    .map(({ playerId, name, position, points, status, injuryStatus, reason }) => ({
+      playerId, name, position, points, status, injuryStatus, reason,
+    }));
   const displacedIndices = new Set(
     currentLineup
       .map((entry, index) => ({ entry, index }))
@@ -401,6 +407,7 @@ export async function optimizeRosterLineup(
     currentProjectedPoints,
     optimalLineup,
     optimalProjectedPoints,
+    bench,
     pointsDelta: Math.round(Math.max(0, optimalProjectedPoints - currentProjectedPoints) * 100) / 100,
     recommendedSwaps,
     missingSlots: optimalUnlocked.missingSlots,

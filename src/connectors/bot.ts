@@ -68,7 +68,7 @@ import {
 } from './config.js';
 import { createGroupMeAdapter } from './groupme.js';
 
-const HISTORY_LIMIT = 20;
+const HISTORY_LIMIT = 40;
 const MAX_HISTORY_CHARS = 12_000;
 const CONNECTOR_CONTEXT_TTL_MS = 5 * 60_000;
 const CONNECTOR_FAILURE_TIMEOUT_MS = 5_000;
@@ -375,7 +375,9 @@ function createAgentReply(environment: Environment): ConnectorReply {
         requestSignal,
       );
       await traceJudgmentOperation({
-        name: 'seb.connector.reply', sessionId: thread.id, input: prompt,
+        name: 'seb.connector.reply',
+        sessionId: thread.id,
+        input: [{ role: 'user', content: message.text }],
       }, async () => {
         const clearStaleCaches = async () => {
           clients.newsClient.clearCache();
@@ -798,21 +800,42 @@ export function compactConnectorHistory<
   T extends { content: unknown; role: string },
 >(messages: readonly T[], maxChars = MAX_HISTORY_CHARS): T[] {
   if (messages.length === 0) return [];
-  const cleaned = messages.map((msg) => {
-    if (msg.role !== 'assistant') return msg;
-    if (typeof msg.content === 'string') {
-      return { ...msg, content: stripEvidenceAppendix(msg.content) };
+  const coalesce = (items: readonly T[]): T[] => {
+    const out: T[] = [];
+    for (const msg of items) {
+      const prev = out.at(-1);
+      if (
+        prev &&
+        prev.role === msg.role &&
+        typeof prev.content === 'string' &&
+        typeof msg.content === 'string'
+      ) {
+        out[out.length - 1] = { ...prev, content: `${prev.content}\n\n${msg.content}` };
+      } else {
+        out.push(msg);
+      }
     }
-    if (!Array.isArray(msg.content)) return msg;
-    return {
-      ...msg,
-      content: msg.content.map((part) =>
-        part && typeof part === 'object' && (part as { type?: unknown }).type === 'text' && typeof (part as { text?: unknown }).text === 'string'
-          ? { ...part, text: stripEvidenceAppendix((part as { text: string }).text) }
-          : part,
-      ),
-    };
-  });
+    return out;
+  };
+  const cleaned = coalesce(
+    coalesce(messages).flatMap((msg): T[] => {
+      if (msg.role !== 'assistant') return [msg];
+      if (typeof msg.content === 'string') {
+        const content = stripEvidenceAppendix(msg.content);
+        return content.trim().length > 0 ? [{ ...msg, content }] : [];
+      }
+      if (!Array.isArray(msg.content)) return [msg];
+      const content = msg.content.flatMap((part) => {
+        if (part && typeof part === 'object' && (part as { type?: unknown }).type === 'text' && typeof (part as { text?: unknown }).text === 'string') {
+          const text = stripEvidenceAppendix((part as { text: string }).text);
+          return text.trim().length > 0 ? [{ ...part, text }] : [];
+        }
+        return [part];
+      });
+      return content.length > 0 ? [{ ...msg, content }] : [];
+    }),
+  );
+  if (cleaned.length === 0) return [];
   const kept: T[] = [cleaned[cleaned.length - 1] as T];
   let budget = maxChars;
   for (let i = cleaned.length - 2; i >= 0; i -= 1) {
@@ -824,11 +847,14 @@ export function compactConnectorHistory<
     budget -= size;
     kept.unshift(item);
   }
+  while (kept.length > 1 && kept[0]?.role !== 'user') {
+    kept.shift();
+  }
   return kept;
 }
 
 function stripEvidenceAppendix(text: string): string {
-  return text.replace(/\n\n## Evidence\n[\s\S]*$/u, '');
+  return text.replace(/(?:^|\r?\n)##\s+Evidence\r?\n[\s\S]*$/u, '').trimEnd();
 }
 
 async function runReply(

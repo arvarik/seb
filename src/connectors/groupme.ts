@@ -58,6 +58,15 @@ export function createGroupMeAdapter(
   const recordMessage = (threadId: string, message: Message<GroupMeWebhookPayload>): void => {
     const list = history.get(threadId) ?? [];
     if (!list.some((item) => item.id === message.id)) {
+      const prevMs = list.at(-1)?.metadata?.dateSent?.getTime();
+      const currMs = message.metadata?.dateSent?.getTime();
+      if (
+        typeof prevMs === 'number' &&
+        Number.isFinite(prevMs) &&
+        (typeof currMs !== 'number' || !Number.isFinite(currMs) || currMs <= prevMs)
+      ) {
+        message.metadata.dateSent = new Date(prevMs + 1);
+      }
       list.push(message);
       if (list.length > MAX_CACHED_MESSAGES) list.splice(0, list.length - MAX_CACHED_MESSAGES);
       history.set(threadId, list);
@@ -124,7 +133,7 @@ export function createGroupMeAdapter(
         isMention,
         links: [],
         metadata: {
-          dateSent: typeof raw.created_at === 'number'
+          dateSent: typeof raw.created_at === 'number' && Number.isFinite(raw.created_at)
             ? new Date(raw.created_at * 1_000)
             : new Date(),
           edited: false,
@@ -152,7 +161,12 @@ export function createGroupMeAdapter(
       if (!payload || typeof payload !== 'object' || !payload.group_id) {
         return new Response('Bad Request', { status: 400 });
       }
-      if (payload.sender_type === 'bot' || payload.sender_type === 'system' || payload.system) {
+      if (
+        payload.sender_type === 'bot' ||
+        payload.sender_type === 'system' ||
+        payload.system ||
+        !String(payload.text ?? '').trim()
+      ) {
         return new Response('ok', { status: 200 });
       }
       const message = this.parseMessage(payload);

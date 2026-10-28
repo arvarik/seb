@@ -374,6 +374,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
         buildPrompt(thread, message, context),
         requestSignal,
       );
+      if (prompt.length === 0) return;
       await traceJudgmentOperation({
         name: 'seb.connector.reply',
         sessionId: thread.id,
@@ -767,32 +768,29 @@ function isUrlSourcePart(value: unknown): value is {
   return normalizeWebUrl(record.url) !== null;
 }
 
-async function buildPrompt(
+export async function buildPrompt(
   thread: Thread,
   message: Message,
   context?: MessageContext,
 ) {
+  const options = { includeNames: !thread.isDM };
   const incoming = [...(context?.skipped ?? []), message];
+  const incomingAi = await toAiMessages(incoming, options);
+  if (incomingAi.length === 0) return [];
+  const incomingIds = new Set(incoming.map((item) => item.id));
   try {
     const result = await thread.adapter.fetchMessages(thread.id, {
       limit: HISTORY_LIMIT,
     });
-    const knownIds = new Set(result.messages.map((item) => item.id));
-    const combined = [
-      ...result.messages,
-      ...incoming.filter((item) => !knownIds.has(item.id)),
-    ];
-    return compactConnectorHistory(
-      await toAiMessages(combined, { includeNames: !thread.isDM }),
-    );
+    const prior = result.messages.filter((item) => !incomingIds.has(item.id));
+    const priorAi = await toAiMessages(prior, options);
+    return compactConnectorHistory([...priorAi, ...incomingAi]);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     process.stderr.write(
       `Seb could not read connector history. It will use the current turn. ${reason}\n`,
     );
-    return compactConnectorHistory(
-      await toAiMessages(incoming, { includeNames: !thread.isDM }),
-    );
+    return compactConnectorHistory(incomingAi);
   }
 }
 
@@ -803,6 +801,9 @@ export function compactConnectorHistory<
   const coalesce = (items: readonly T[]): T[] => {
     const out: T[] = [];
     for (const msg of items) {
+      if (typeof msg.content === 'string' && msg.content.trim().length === 0) {
+        continue;
+      }
       const prev = out.at(-1);
       if (
         prev &&
@@ -819,7 +820,9 @@ export function compactConnectorHistory<
   };
   const cleaned = coalesce(
     coalesce(messages).flatMap((msg): T[] => {
-      if (msg.role !== 'assistant') return [msg];
+      if (msg.role !== 'assistant') {
+        return Array.isArray(msg.content) && msg.content.length === 0 ? [] : [msg];
+      }
       if (typeof msg.content === 'string') {
         const content = stripEvidenceAppendix(msg.content);
         return content.trim().length > 0 ? [{ ...msg, content }] : [];
@@ -835,6 +838,9 @@ export function compactConnectorHistory<
       return content.length > 0 ? [{ ...msg, content }] : [];
     }),
   );
+  while (cleaned.length > 0 && cleaned.at(-1)?.role !== 'user') {
+    cleaned.pop();
+  }
   if (cleaned.length === 0) return [];
   const kept: T[] = [cleaned[cleaned.length - 1] as T];
   let budget = maxChars;

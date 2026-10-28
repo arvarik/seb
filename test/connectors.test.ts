@@ -7,6 +7,7 @@ import { Chat } from 'chat';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildPrompt,
   compactConnectorHistory,
   ModelResponseError,
   postConnectorResponse,
@@ -778,7 +779,91 @@ describe('GroupMe adapter, history compaction, and link-safe splitting', () => {
     const postedTexts = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).text as string);
     expect(postedTexts.every((chunk) => chunk.length <= 1_000)).toBe(true);
     expect(postedTexts[1]).toContain('[NFL News](<https://www.nfl.com/news/example>)');
+
+    const sameSecFollowup = await app.request('/webhooks/groupme', {
+      body: JSON.stringify({
+        created_at: Math.floor(Date.now() / 1_000),
+        group_id: 'g1',
+        id: 'm3',
+        name: 'Commish',
+        sender_id: 'u1',
+        sender_type: 'user',
+        text: 'What about my RB2?',
+      }),
+      headers: { 'x-groupme-bot-secret': 'gm-secret' },
+      method: 'POST',
+    });
+    expect(sameSecFollowup.status).toBe(202);
+    await tasks.drain(1_000);
+    const fetchedHistory = await groupme.fetchMessages('groupme:g1:g1', { limit: 40 });
+    expect(fetchedHistory.messages[3]?.id).toBe('m3');
+    expect(
+      fetchedHistory.messages.every(
+        (item, index, arr) => index === 0 || item.metadata.dateSent.getTime() > arr[index - 1]!.metadata.dateSent.getTime(),
+      ),
+    ).toBe(true);
+
+    const postCountBeforeEmpty = fetchMock.mock.calls.length;
+    const attachmentOnly = await app.request('/webhooks/groupme', {
+      body: JSON.stringify({
+        attachments: [{ type: 'image' }],
+        created_at: Math.floor(Date.now() / 1_000),
+        group_id: 'g1',
+        id: 'm4-empty',
+        name: 'Commish',
+        sender_id: 'u1',
+        sender_type: 'user',
+        text: null,
+      }),
+      headers: { 'x-groupme-bot-secret': 'gm-secret' },
+      method: 'POST',
+    });
+    expect(attachmentOnly.status).toBe(200);
+    await tasks.drain(500);
+    expect(fetchMock.mock.calls.length).toBe(postCountBeforeEmpty);
+    const historyAfterEmpty = await groupme.fetchMessages('groupme:g1:g1', { limit: 40 });
+    expect(historyAfterEmpty.messages.some((item) => item.id === 'm4-empty')).toBe(false);
     await bot.shutdown();
+  });
+
+  it('keeps incoming user turns at the tail in buildPrompt and drops empty/attachment-stripped turns without assistant prefill', async () => {
+    const u1 = createTestMessage('u1', 'Start Allen or Mayfield?', {
+      metadata: { dateSent: new Date(1_730_140_000_100), edited: false },
+    });
+    const bot1 = createTestMessage('b1', 'Start Josh Allen.', {
+      author: { fullName: 'seb', isBot: true, isMe: true, userId: 'bot', userName: 'seb' },
+      metadata: { dateSent: new Date(1_730_140_000_850), edited: false },
+    });
+    const u2SameSec = createTestMessage('u2', 'What about my RB2?', {
+      metadata: { dateSent: new Date(1_730_140_000_000), edited: false },
+    });
+    const fetchMessages = vi.fn().mockResolvedValue({ messages: [u1, bot1, u2SameSec] });
+    const mockThread = {
+      adapter: { fetchMessages },
+      id: 'groupme:g1:g1',
+      isDM: true,
+    } as unknown as Parameters<typeof buildPrompt>[0];
+
+    const ordered = await buildPrompt(mockThread, u2SameSec);
+    expect(ordered).toEqual([
+      { role: 'user', content: 'Start Allen or Mayfield?' },
+      { role: 'assistant', content: 'Start Josh Allen.' },
+      { role: 'user', content: 'What about my RB2?' },
+    ]);
+
+    fetchMessages.mockClear();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const videoOnly = createTestMessage('u3-video', '', {
+        attachments: [{ name: 'clip.mp4', type: 'video' }],
+        metadata: { dateSent: new Date(1_730_140_001_000), edited: false },
+      });
+      const skippedPrompt = await buildPrompt(mockThread, videoOnly);
+      expect(skippedPrompt).toEqual([]);
+      expect(fetchMessages).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('strips prior Evidence sections from assistant history and preserves markdown links when splitting', () => {
@@ -827,6 +912,15 @@ describe('GroupMe adapter, history compaction, and link-safe splitting', () => {
       { role: 'user', content: 'Question 2' },
     ]);
     expect(evidenceOnlyDropped).toEqual([{ role: 'user', content: 'Question 1\n\nQuestion 2' }]);
+
+    expect(compactConnectorHistory([
+      { role: 'user', content: 'Question 1' },
+      { role: 'assistant', content: 'Prior answer' },
+      { role: 'user', content: '   ' },
+    ])).toEqual([{ role: 'user', content: 'Question 1' }]);
+    expect(compactConnectorHistory([
+      { role: 'assistant', content: 'Orphan greeting' },
+    ])).toEqual([]);
   });
 });
 

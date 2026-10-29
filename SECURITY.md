@@ -1,19 +1,28 @@
-# Security policy
+# Security Policy
 
-## Supported versions
+## Supported Versions
 
-The maintainer accepts security reports for the latest tagged release and the current `main` branch.
-Older releases do not receive separate security fixes. Update to the latest release before checking a known issue.
+Security reports are accepted for the latest tagged release (`v1.1.x`) and the `main` branch. Older releases do not receive backported security patches—update to the latest release before verifying an issue.
 
-## Report a vulnerability
+| Version | Supported |
+| --- | --- |
+| `1.1.x` / `main` | Yes |
+| `< 1.1.0` | No |
 
-Open a [GitHub issue](https://github.com/arvarik/seb/issues/new) titled "Security contact request".
-Ask the maintainer for a private follow-up channel.
-Do not include exploit details, credentials, personal data, or private league data in the public issue.
-After the maintainer supplies a private channel, send the affected version, reproduction steps, impact, and a proposed fix if available.
+## Reporting a Vulnerability
 
-The maintainer reviews the report and coordinates a fix and disclosure date with the reporter.
-This project has no guaranteed response time. If you receive no response, add a follow-up to the contact request.
-Wait for coordinated disclosure before you publish exploit details.
+> [!IMPORTANT]
+> Never post exploit details, API keys, personal data, or private league data in a public issue.
 
-For ordinary bugs and support questions, use the [issue tracker](https://github.com/arvarik/seb/issues).
+1. Open a [GitHub issue](https://github.com/arvarik/seb/issues/new) titled **`Security contact request`** asking the maintainer for a private follow-up channel.
+2. Once a private channel is established, share the affected version, reproduction steps, impact assessment, and any proposed fix.
+3. Wait for coordinated disclosure before publishing technical details. If you do not receive an initial response, post a brief follow-up comment on the contact request.
+
+For non-security bugs and feature requests, use the standard [issue tracker](https://github.com/arvarik/seb/issues).
+
+## Local Credential & Data Boundaries
+
+- **Private file permissions**: Saved credentials (`credentials.json`), settings (`settings.json`), model configuration (`model-settings.json`), history, and resumable sessions live in `~/.config/seb` (`0700` directory, `0600` files).
+- **Endpoint binding**: OpenAI-compatible API keys are bound to their exact canonical origin and require HTTPS for non-loopback hosts.
+- **No implicit `.env` loading**: Seb never auto-loads a working-directory `.env` file; imports require explicit review via `seb configure --import-env <path>`.
+- **Metadata-only local telemetry**: Local SQLite usage records exclude prompts, answers, tool payloads, and secrets. Optional Judgment OpenTelemetry tracing stays disabled unless `SEB_JUDGMENT_TRACING=true` is explicitly configured.

@@ -1,389 +1,90 @@
-# Terminal interface guide
+# Terminal Interface Guide
 
-Seb `0.2.0` includes a local terminal renderer for interactive research.
+[Documentation Hub](README.md) · [Interactive Guide](INTERACTIVE.md) · [CLI Guide](CLI.md) · [Experience Model](EXPERIENCES.md)
 
-Seb owns the conversation loop and uses the public AI SDK transport contract.
+Seb includes a purpose-built terminal renderer for interactive NFL research and fantasy analysis. Built directly on the public AI SDK transport contract, the renderer owns prompt editing, layout, clickable tool and reasoning inspection, responsive stat tables, accessibility themes, and clipboard integration.
 
-Seb controls prompt editing, screen layout, accessibility, history, and terminal actions.
+## Home screen, header, and contextual suggestions
 
-## Start the interface
+Start the interface with `seb` (or `npm run seb` from a source checkout). Seb switches cleanly into the terminal's alternate screen buffer, enables bracketed paste, and restores your normal screen on exit.
 
-Run either command from the project folder.
+### Reading the header
 
-```bash
-seb
-npm run seb
-```
+The top header surfaces live session state while hiding empty placeholders:
 
-The home screen shows the current NFL state and the active Seb experience.
+- **Seb version** and **current NFL season, phase, and display week**.
+- **Active resolved model ID** (for example, the concrete version resolved from a model family such as `gemini-flash`).
+- **Sleeper connection badge** showing `@user · N LEAGUES` when connected (with your two most urgent fantasy actions surfaced on the home screen), or `SLEEPER NOT CONNECTED`.
+- **Active context overrides** when present: `FOCUS` (focused league), `ROSTER`, `PLAYER`, `TEAM`, and `WORKFLOW` (selected skill), alongside the latest source freshness badge (`LIVE`, `WEB`, `CACHED 4m`, `2025 STATS`, or `STALE`).
 
-It shows the two most urgent fantasy actions when a Sleeper account is connected.
+### Using numbered contextual suggestions
 
-Explore covers player, team, league, statistic, schedule, result, and news questions.
+Seb displays up to three numbered next-step suggestions (`1`, `2`, `3`) on the home screen and whenever you run `/explore`, `/fantasy`, `/analyze`, `/skill`, `/next`, or `/new`.
 
-My Fantasy uses one optional Sleeper username.
+1. Press **`1`**, **`2`**, or **`3`** on an empty prompt to **stage** that suggestion in the editor.
+2. Press **`Enter`** to execute a complete suggestion immediately—or fill in any placeholder text in the editor first and then press `Enter`.
 
-Analyze continues from the active subject with comparison and decision context.
-
-The first prompt shows up to three useful next actions.
-
-The `/new` and `/clear` commands show these actions again.
-
-Press `1`, `2`, or `3` to select one action.
-
-Seb shows each action on a separate footer row.
-
-Seb submits a complete action immediately.
-
-Seb places an action with a placeholder in the editor.
-
-Replace the placeholder before you submit the prompt.
-
-## Edit a prompt
+## Prompt editing and keyboard navigation
 
 | Key | Action |
 | --- | --- |
-| `Left` and `Right` | Move the cursor by one character. |
-| `Option+Left` and `Option+Right` | Move the cursor by one word. |
-| `Ctrl+A` | Move the cursor to the start. |
-| `Ctrl+E` | Move the cursor to the end. |
-| `Backspace` | Delete the prior character. |
-| `Delete` | Delete the next character. |
-| `Ctrl+W` | Delete the prior word. |
-| `Ctrl+U` | Delete from the cursor to the start. |
-| `Alt+Enter` | Insert a new line. |
-| `Enter` | Submit the complete prompt. |
+| `Left` / `Right` | Move the cursor by one character (or complete a slash command at end-of-line with `Right`). |
+| `Option+Left` / `Option+Right` | Move the cursor by one word. |
+| `Home` / `End` (or `Ctrl+A` / `Ctrl+E`) | Jump to the start or end of the current line. |
+| `Backspace` / `Delete` | Delete the character before or after the cursor. |
+| `Ctrl+W` / `Ctrl+U` | Delete the previous word, or delete from the cursor to the start of the line. |
+| `Alt+Enter` | Insert a newline inside a multiline prompt. |
+| `Enter` | Submit the prompt (or queue a draft while a response is streaming). |
+| `Up` / `Down` | Browse saved prompt history or move through open menu items. |
+| `Ctrl+R` | Search saved prompt history matching the current editor text. |
+| `PageUp` / `PageDown`, mouse wheel | Scroll the transcript (3 lines per wheel tick, batched at 60 fps). |
+| `Ctrl+L` | Force a full-screen repaint. |
+| `?` (on empty prompt) or `/shortcuts` | Open the keyboard shortcut overlay (press any key or `Escape` to close). |
+| `Escape` | Close an open palette/panel, cancel an active request, or exit Seb on an empty prompt. |
+| `Ctrl+C` | Cancel any active request and exit Seb immediately. |
 
-Seb enables bracketed paste while the interface runs.
+Bracketed paste keeps multiline pastes inside a single prompt and normalizes Windows (`\r\n`) line endings automatically.
 
-A multiline paste stays inside one prompt.
+## Command palette and context selector
 
-Seb normalizes Windows line endings in pasted text.
+- **Command palette (`Ctrl+K` or `/`)**: Searches command names and descriptions across nine groups (**Essentials**, **Explore**, **My Fantasy**, **Analyze**, **Sources**, **Conversation**, **Preferences**, **Advanced**, and **Diagnostics**), prioritizing recently used commands, displaying active override values, and marking state-clearing commands with a warning glyph. Navigate with `Up`/`Down`, press **`Tab`** or **`Right Arrow`** to accept the highlighted command or argument completion into the editor, and press `Enter` to run or `Escape` to dismiss.
+- **Active context selector (`Ctrl+G`)**: Opens a compact selector for **league**, **roster**, **week**, **player**, and **team** using discovered account values. Use `Up`/`Down` to pick a field, `Left`/`Right` to cycle values, and `Enter` to apply.
 
-## Use the command palette
+## Inspecting tool and reasoning rows
 
-Press `Ctrl+K` to open the palette.
+During a model turn, active external lookups show a single animated status marker with plain-language labels and elapsed time. Once completed, tool calls and model reasoning collapse into compact, clickable rows so answers stay easy to scan:
 
-You can also type `/` at the start of a prompt.
+- **Click purple tool rows**: Click any completed purple tool row to expand its JSON input and output details in place; click again to collapse. Each expanded detail view caps output at **64,000 characters** and labels any shortened payload explicitly.
+- **Expand grouped tool calls**: Consecutive successful calls to the same tool combine into one grouped summary row showing call count and total duration. Clicking a grouped row first expands it into individual call rows (each with its short call ID and elapsed time), and clicking any individual call toggles its input and result.
+- **Click reasoning cards**: When a provider returns model reasoning, Seb keeps reasoning collapsed into a compact card by default—click the reasoning row to expand or collapse the full reasoning trace.
+- **Compact evidence footer**: Every sourced answer ends with a single blue `Evidence:` summary line pointing to `/sources` (copy and `/export` commands preserve the full evidence listing).
 
-The palette groups commands into nine categories.
+## Analysis tables, bars, and sparklines
 
-- Essentials
-- Explore
-- My Fantasy
-- Analyze
-- Sources
-- Conversation
-- Preferences
-- Advanced
-- Diagnostics
+Seb formats structured Markdown answers for terminal readability without inventing or altering model values:
 
-The empty palette shows common tasks before advanced tools.
+- **Responsive tables & record cards**: Standard Markdown tables render with clean borders, wide NFL stat tables group passing, rushing, receiving, and fantasy columns, and tables too wide for the current viewport automatically reflow into labeled record cards so no column is dropped. Long answers open directly at the highlighted `Decision` section or main heading (`Page Down` scrolls onward).
+- **Progress bars & sparklines**: `Confidence` percentages render as 10-cell bars and `Win probability` percentages as 20-cell bars. Supported comma-separated series (`Weekly points`, `Usage trend`, and `Schedule difficulty`) render as Unicode block sparklines—or numeric arrow sequences when `/icons ascii` is active.
 
-The palette searches command names and descriptions.
+## Selection, clipboard, links, and prompt history
 
-It places recent commands before equally relevant commands.
+- **Drag-to-copy & `/copy`**: Drag across visible transcript cells (holding near the top/bottom edge or scrolling the wheel mid-drag to span multiple screens) to highlight text and copy automatically on mouse release. You can also run `/copy` for the latest answer, `/copy all` for the full conversation (using both the local OS clipboard and OSC 52), or `/select` (`/copy-mode`) to print the conversation into native terminal scrollback (`Escape` returns to Seb).
+- **Clickable links**: Markdown links, `<https://...>` links, bare URLs, and `/source <INDEX>` outputs emit clickable OSC 8 hyperlinks in supported terminals and fall back to plain readable URLs elsewhere.
+- **Private prompt history**: Seb stores up to 200 unique prompts (each up to 16 KiB) with `0600` permissions at `SEB_HISTORY_FILE`, `$SEB_CONFIG_HOME/history.json`, `$XDG_CONFIG_HOME/seb/history.json`, or `~/.config/seb/history.json` (`0700` on newly created parent folders). Set `SEB_HISTORY=false` to keep prompt history in memory only (and disable session snapshot saving); never paste API keys into chat prompts.
 
-Advanced override commands show their active value when one exists.
+## Themes, symbols, and troubleshooting
 
-The bottom row describes the selected command effect.
-
-A warning symbol identifies a command that clears local state.
-
-Use `Up` and `Down` to change the selection.
-
-Press `Tab` to place the selected value in the editor.
-
-Press `Escape` to close the palette.
-
-Run `/commands SEARCH` when you need the same search in a transcript.
-
-## Select active context
-
-Press `Ctrl+G` to open the active context selector.
-
-Use `Up` and `Down` to select league, roster, week, player, or team.
-
-Use `Left` and `Right` to choose an available value.
-
-Press `Enter` to apply that value with the related local command.
-
-The selector shows only discovered leagues and rosters.
-
-Seb opens a long answer at its Decision section or answer heading.
-
-Press `Page Down` to continue toward the latest line.
-
-## Use prompt history
-
-Seb saves up to 200 unique prompts on the local computer.
-
-The newest prompt appears first.
-
-Use `Up` and `Down` to read saved prompts.
-
-Press `Ctrl+R` to find a prompt that contains the current editor text.
-
-Run `/history` to show the latest entries.
-
-Run `/history clear` to delete every saved entry.
-
-Seb stores the history at the first applicable path.
-
-1. `SEB_HISTORY_FILE`
-2. `SEB_CONFIG_HOME/history.json`
-3. `XDG_CONFIG_HOME/seb/history.json`
-4. `~/.config/seb/history.json`
-
-The file uses permission mode `0600`.
-
-The parent directory uses permission mode `0700` when Seb creates it.
-
-Seb keeps the existing mode when you select an existing custom directory.
-
-Set this value to disable disk history.
-
-```dotenv
-SEB_HISTORY=false
-```
-
-Seb then keeps history only for the current process.
-
-Seb does not save a prompt longer than 16 KiB in history.
-
-Seb keeps prompts in memory when the history file becomes unavailable.
-
-The next prompt screen shows the file error.
-
-Do not place an API key or another secret in a prompt.
-
-Tool activity uses one compact row per call. Consecutive successful calls to the same tool share a count and total duration. Failures retain their error text.
-
-Evidence occupies one blue line with a source count and `/sources`. Run `/sources` to show full details.
-Copy commands and transcript exports retain the evidence text.
-
-## Reuse an answer or prompt
-
-Run `/retry` to submit the latest non-command prompt again.
-
-Run `/edit` to place that prompt in the editor.
-
-Run `/copy all` to copy the full conversation, including prompts and tool activity.
-
-Run `/copy` to copy the latest Seb answer.
-
-The copy command uses the local system clipboard when available.
-
-It also sends the terminal OSC 52 clipboard sequence for compatible terminals.
-
-Drag across visible text to select and copy it without a command.
-
-Seb highlights the selected cells and copies the text when you release the mouse button.
-
-Hold the pointer at the top or bottom edge while dragging to select across screens. You can also scroll with the mouse wheel during a drag.
-
-Run `/select` to print the full conversation to normal terminal scrollback for native selection. Press `Escape` to return. The printed conversation remains in scrollback.
-
-Run `/source 1` to show the first validated source link.
-
-Replace `1` with another number from `/sources`.
-
-Seb emits OSC 8 links when the terminal supports terminal links.
-
-Seb makes Markdown links, angle-bracket links, and bare HTTP URLs clickable.
-
-Seb prints a normal URL when terminal links are unavailable.
-
-## Read the header
-
-The first header row shows these values.
-
-- Seb version
-- Active experience
-- NFL season and week
-
-The following rows show only useful active context.
-
-- Active model provider and model ID
-- Connected Sleeper username and discovered league count
-- Focused fantasy league, when one league has focus
-- Active NFL player or team
-- Latest source state
-
-Seb hides empty league, roster, team, and workflow placeholders.
-
-Source states include `LIVE`, `WEB`, `CACHED 4m`, `2025 STATS`, and `STALE`.
-
-The exact cache age changes as time passes.
-
-Run `/context` for the full context.
-
-Run `/provider` or `/model` to show the active model selection.
-
-Run `/provider NAME` or `/model MODEL` to verify and switch the session model.
-A model family such as `/model gemini-flash` selects its newest stable version. The header shows the resolved ID.
-
-The interface starts a fresh model context after a successful switch.
-
-It keeps the visible transcript and clears the prior answer evidence.
-
-Run `seb configure` outside the chat interface to save a key or endpoint.
-
-Run `/sources` for exact links, retrieval times, and cache outcomes.
-
-## Read analysis presentation
-
-Seb highlights a `Decision` section when the answer includes one.
-
-Seb converts Markdown tables into bordered terminal tables.
-
-Wide NFL stat tables group passing, rushing, receiving, and fantasy fields.
-
-Seb uses labeled record cards when another wide table cannot fit safely.
-
-The renderer keeps every table value in both layouts.
-
-Headings, nested lists, numbered lists, labeled metrics, quotes, and code blocks use distinct terminal styles.
-
-Inline styles include emphasis, strong emphasis, nested styles, strikethrough, links, and code spans.
-
-Escaped Markdown characters remain visible as literal characters.
-
-A percentage on a `Confidence` line becomes a ten-cell bar.
-
-A `Win probability` percentage becomes a twenty-cell bar.
-
-Seb renders supported comma-separated series as terminal charts.
-
-Supported series names include these values.
-
-- `Weekly points`
-- `Usage trend`
-- `Schedule difficulty`
-
-Unicode mode uses block sparklines.
-
-ASCII mode prints the values with arrows.
-
-The chart never creates data.
-
-It only renders values that the answer already contains.
-
-## Read tool progress
-
-Seb shows one animated marker for each active operation.
-
-The operation label states the external action in plain language.
-
-The label also shows elapsed time.
-
-Seb changes a completed operation to one compact row.
-
-Press `Escape` during a request to stop that request.
-
-The session remains open after this action.
-
-Press `Ctrl+C` to stop the request and exit Seb.
-
-Run `/exit`, `/quit`, or `/q` from the prompt to exit Seb.
-
-Use `Page Up` and `Page Down` to scroll the transcript.
-
-Use the mouse wheel or a trackpad gesture to scroll the transcript.
-
-Seb moves three lines for each vertical wheel event. It batches rapid events at 60 frames per second.
-
-Seb ignores horizontal gestures and release events. It stops redraws when the transcript reaches either boundary.
-
-The footer shows when the screen displays earlier transcript rows.
-
-Mouse scrolling does not select an older prompt from history.
-
-Use `Ctrl+L` to repaint the complete screen.
-
-## Select a theme
-
-Run one of these commands.
+Switch visual styles live in chat or persist defaults via `seb configure` / environment variables:
 
 ```text
 /theme default
-/theme high-contrast
+/theme high-contrast    # Alias: /theme contrast
 /theme compact
-```
-
-The default theme uses the normal Seb colors and spacing.
-
-The high-contrast theme uses brighter text and stronger header contrast.
-
-The compact theme removes blank rows between transcript sections.
-
-Set a startup theme in `.env`.
-
-```dotenv
-SEB_THEME=compact
-```
-
-Set the `NO_COLOR` environment variable to disable all terminal colors.
-
-Seb also disables colors when `TERM=dumb`.
-
-## Select terminal symbols
-
-Run one of these commands.
-
-```text
 /icons unicode
 /icons ascii
 ```
 
-Unicode mode uses block charts and graphical status symbols.
+Set `SEB_THEME=compact` (or `high-contrast`) and `SEB_ICONS=ascii` for startup defaults, or export `NO_COLOR=1` (also honored automatically when `TERM=dumb`) to disable all ANSI color output. Note that interactive mode requires a TTY at least **40 columns** wide; use `seb ask` for narrower environments, pipes, or CI scripts.
 
-ASCII mode uses portable characters and numeric chart arrows.
-
-Set the startup mode in `.env`.
-
-```dotenv
-SEB_ICONS=ascii
-```
-
-## Open the shortcut guide
-
-Press `?` when the editor is empty.
-
-You can also run `/shortcuts`.
-
-Press `Escape`, `Enter`, or any character to close the guide.
-
-## Terminal compatibility
-
-Seb needs an interactive terminal for `seb` or `seb chat`.
-
-Use `seb ask` for a pipe, file, automation, or noninteractive shell.
-
-The interface needs a terminal width of at least 40 columns.
-
-Seb uses the alternate screen and restores the normal screen at exit.
-
-It enables bracketed paste only while the interface runs.
-
-OSC 8 and OSC 52 support depends on the terminal application.
-
-The analysis and source URLs remain readable without those features.
-
-## Troubleshoot the interface
-
-If the screen looks incomplete, press `Ctrl+L`.
-
-If symbols look incorrect, run `/icons ascii`.
-
-If colors have low contrast, run `/theme high-contrast`.
-
-If colors remain incorrect, start Seb with `NO_COLOR=1`.
-
-If a paste submits early, confirm that the terminal supports bracketed paste.
-
-If `/copy` does not change the clipboard, enable OSC 52 in the terminal settings.
-
-Use `/select` when the terminal blocks in-app selection or clipboard access.
-
-Run `seb doctor` when a model or data request fails.
+> [!TIP]
+> **Quick display fixes**: Press `Ctrl+L` if terminal output looks garbled after a window resize, switch to `/icons ascii` if box/sparkline glyphs render poorly in a remote font, use `/theme contrast` (or `NO_COLOR=1`) for legibility, enable OSC 52 in your terminal preferences if `/copy` cannot reach a remote clipboard, or run `/select` for native terminal copy mode.

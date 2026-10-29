@@ -1,158 +1,67 @@
 # Canonical identity guide
 
-Seb maps source identifiers to one internal player or NFL team identity.
+Seb maps disparate Sleeper and nflverse identifiers to canonical internal NFL team (`nfl-team:CODE`) and player (`nfl-player:...`) records so cross-provider joins never rely on raw display-name strings alone.
 
-This mapping prevents a source join from using only a display name.
+```mermaid
+flowchart LR
+  IN["Input Identifier (Name, Alias, Provider Code, or Source ID)"] --> KIND{"Entity Type"}
+
+  KIND -->|"NFL Team"| TCODE{"Direct Provider Code?"}
+  TCODE -->|"nflverse 'LA' / 'OAK' / 'SD'"| TMAP["Deterministic Franchise (nfl-team:LAR / LV / LAC)"]
+  TCODE -->|"Free-text Alias"| TALIAS{"Unambiguous Franchise?"}
+  TALIAS -->|"Yes ('WSH', 'WFT', 'Seahawks')"| TMAP
+  TALIAS -->|"No (Free-text 'LA')"| TAMB["Ambiguous Result (Candidates: LV, LAC, LAR)"]
+
+  KIND -->|"NFL Player"| PNORM["Normalize Name, Position & Canonical Team"]
+  PNORM --> PLINK{"Explicit Link or Strict Match?"}
+  PLINK -->|"Exact Name + Pos + Team (1 per provider)"| PRES["Resolved Canonical Player"]
+  PLINK -->|"Team Mismatch"| PXFER{"1 Unique Name + Pos per Provider & Sleeper active === true?"}
+  PXFER -->|"Yes (Guarded Transfer)"| PRES
+  PXFER -->|"No / Multiple Candidates"| PAMB["Ambiguous, Conflict, or Not-Found (Never Guessed)"]
+
+  TMAP --> DB["Persist in SQLite (identities + identity_links + SHA-256)"]
+  PRES --> DB
+```
 
 ## NFL team identities
 
-Seb includes all 32 current NFL franchises in a built-in registry.
+`TeamIdentityRegistry` ships a built-in catalog of all 32 current NFL franchises keyed by `nfl-team:CODE` (for example, `nfl-team:SEA` or `nfl-team:LAR`), storing each club's canonical code, city, nickname, historical aliases, and provider source codes:
 
-Each team uses this canonical ID format.
+- **Historical franchise aliases**: Former codes and names map cleanly to current franchises—`WAS`, `WSH`, and `WFT` resolve to `nfl-team:WAS`, while `OAK` maps to `nfl-team:LV` and `SD` maps to `nfl-team:LAC`.
+- **Provider `'LA'` vs. free-text `'LA'`**: When parsing an explicit `nflverse` provider team code, `'LA'` maps deterministically to `nfl-team:LAR` (Los Angeles Rams) across schedules, weekly player logs, team defense statistics, and source links. By contrast, free-text `'LA'` in a user or tool query remains intentionally **ambiguous** across the three franchises with Los Angeles history (`LV`, `LAC`, and `LAR`) and returns those candidate teams rather than guessing; callers disambiguate with a current code (`LAR`, `LAC`, `LV`) or full team name.
 
-```text
-nfl-team:SEA
-```
+## Player identities, `active` status, and matching strategies
 
-The identity contains the current code, city, team name, aliases, and source identifiers.
+Each resolved player record tracks a canonical ID (explicit or generated as URL-encoded `nfl-player:PROVIDER:SOURCE_ID`), display name (preferring nflverse formatting), normalized lookup key, uppercase position, optional canonical team ID, Sleeper **`active`** status flag, display aliases, and linked Sleeper/nflverse source IDs.
 
-The aliases include common codes, full names, nicknames, and selected historical names.
+Name normalization strips case differences, diacritics, punctuation, suffixes, and irregular whitespace while resolving team fields through `TeamIdentityRegistry` first. Preserving Sleeper's boolean `active` flag governs both current-team assignment and retirement/inactive safety:
 
-For example, the Washington identity accepts `WAS`, `WSH`, and `WFT`.
+- **Active roster authority and guarded transfers**: An explicitly active (`active: true`) Sleeper profile supplies the linked player's current canonical team. Under production `strict` matching, Seb first requires exact normalized `name + position + canonicalTeam` with at most one candidate per provider; when a traded or signed veteran's historical nflverse team differs from their current Sleeper club, the guarded transfer fallback links them **only** if each provider has exactly one `name + position` candidate and the Sleeper profile is explicitly `active: true`.
+- **Teamless and retired player detection**: Inactive or teamless Sleeper profiles (`active: false` or retired veterans without an active roster assignment) never trigger cross-team transfer merges onto active players sharing a name, and allow projection and Decision Gate checks to flag retired or unrostered players accurately instead of treating missing games as zero points.
 
-Historical source codes map to the current franchise identity.
+| Matching strategy | Linking rule | Typical usage |
+| --- | --- | --- |
+| `strict` | Exact normalized `name + position + team` (1 candidate per provider), plus guarded `active === true` unique `name + position` transfer fallback. | Production agent tools and projections (`resolvePlayerIdentity`). |
+| `name-position` | Normalized `name + position` when unique per provider. | Controlled developer diagnostics only. |
+| `off` | Explicit `sourceLinks` only; disables automatic cross-provider matching. | Pinned catalog overrides when upstream names diverge. |
 
-Seb maps `OAK` to the Las Vegas Raiders and `SD` to the Los Angeles Chargers.
+## Resolution outcomes and SQLite persistence
 
-An ambiguous alias returns candidate teams instead of one guessed team.
+`resolveTeamIdentity` and `resolvePlayerIdentity` return structured resolution envelopes alongside match issues and source row counts:
 
-For example, `LA` can refer to three franchises.
+| Outcome | Condition | SQLite persistence behavior |
+| --- | --- | --- |
+| `resolved` | Exactly one unambiguous canonical franchise or player identity matched. | Saved to `identities` (with SHA-256 payload checksum) and `identity_links`. |
+| `ambiguous` | Multiple franchises (e.g., free-text `'LA'`) or same-name players match the query. | **Never persisted**; returns candidate records so the caller supplies position, team, or source ID. |
+| `conflict` | Source IDs in a proposed match already point to two different stored canonical IDs. | **Rejected** (`IdentityConflictError`) to prevent silently merging distinct people. |
+| `not-found` | No matching franchise or player exists in the queried sources. | **Never persisted**; surfaces missing source coverage explicitly. |
 
-Use a current team code or a full team name after an ambiguous result.
+### Stable canonical IDs
 
-## Player identities
-
-A player identity contains these values.
-
-- A canonical player ID.
-- A display name and normalized name.
-- A position and canonical team ID when known.
-- Display aliases.
-- Sleeper and nflverse source identifiers.
-
-Seb prefers an nflverse record for the display name. An explicitly active Sleeper profile supplies the current team for a linked group.
-
-Seb generates this ID when no explicit canonical ID exists.
-
-```text
-nfl-player:PROVIDER:SOURCE_ID
-```
-
-Seb URL-encodes the source ID inside the generated identifier.
-
-## Automatic player matching
-
-The identity tool uses the strict matching strategy.
-
-This strategy first matches the normalized name, position, and team.
-For a team transfer, Seb also accepts one unique name-position candidate from each provider when the Sleeper profile is explicitly active.
-
-It also requires one candidate from each provider.
-
-Seb reports an issue when one provider supplies several candidates for the same match.
-
-Seb never joins those ambiguous candidates automatically.
-
-The registry can also use these developer strategies.
-
-| Strategy | Rule |
-| --- | --- |
-| `strict` | Match the name, position, and team, with the guarded active-player transfer fallback. |
-| `name-position` | Match the normalized name and position. |
-| `off` | Use only explicit source links. |
-
-Use explicit links when the guarded transfer fallback cannot resolve a player or the source names conflict.
-
-An explicit link can also assign a stable canonical ID.
-
-## Name normalization
-
-Player matching removes case differences, accents, punctuation, and spacing differences.
-
-Position values use uppercase text.
-
-Team values first pass through the canonical team registry.
-
-Normalized matching can still return several players.
-
-Add a position, team, or source ID to resolve that case.
-
-## Agent tools
-
-`resolveTeamIdentity` accepts a code, full name, nickname, historical alias, or canonical ID.
-
-It can also resolve a direct Sleeper or nflverse source code.
-
-`resolvePlayerIdentity` reads Sleeper players and nflverse weekly records.
-
-It then builds a strict identity registry for the requested name and season.
-
-The result contains the identity resolution, match issues, and source row counts.
-
-The agent uses these tools when a name can map to several source identifiers.
-
-## SQLite persistence
-
-Seb stores resolved player and team identities in SQLite.
-
-The `identities` table stores the entity type, canonical ID, checked payload, and update time.
-
-The `identity_links` table maps each provider source ID to one canonical ID.
-
-The player identity tool still builds a strict registry from current source records.
-
-It saves the result only after the registry returns one resolved identity.
-
-The team identity tool saves a team after one successful resolution.
-
-Ambiguous and missing results do not create identity records.
-
-The repository can read an identity by canonical ID or provider source ID.
-
-Each stored payload has a SHA-256 checksum.
-
-Seb stops when a stored identity fails checksum validation.
-
-## Stable canonical IDs
-
-The first stored source mapping owns the stable canonical ID.
-
-A later cross-source match reuses that ID when it includes the first source mapping.
-
-Seb merges the new source links into the existing canonical record.
-
-For example, an early Sleeper-only ID remains stable after nflverse supplies a matching ID.
-
-Seb rejects a write when its source links already point to several canonical IDs.
-
-This rule prevents a silent merge of conflicting people.
-
-Cache clearing and source refresh commands preserve identity records and links.
-
-The built-in team aliases remain versioned with the application.
-
-The identity libraries can also serialize a validated version `1` catalog.
+The first persisted source mapping owns a player's canonical ID permanently. If a rookie initially resolves with a Sleeper-only ID (`nfl-player:sleeper:...`) and later appears in nflverse weekly releases, `IdentityRepository` reuses that existing canonical ID and appends the new nflverse link into `identity_links`. `seb cache clear` and `/refresh` preserve `identities` and `identity_links`, and checksum verification halts reads immediately if a stored identity payload is altered on disk (see the [storage guide](STORAGE.md)).
 
 ## Developer rules
 
-Use a canonical ID inside every derived record that combines several providers.
-
-Keep every original source identity beside the canonical ID.
-
-Do not silently replace an ambiguous result.
-
-Record an explicit identity issue when source records conflict.
-
-Add identity tests before you add a new provider.
-
-Review historical team aliases before each season.
+- Always carry canonical IDs alongside original provider source IDs in derived cross-source records.
+- Never coerce `ambiguous` or `conflict` outcomes into a best-guess player join.
+- Add unit coverage in `identity.test.ts` before onboarding a new data provider, and review franchise aliases prior to each NFL season.

@@ -1,628 +1,168 @@
 # Architecture guide
 
-Seb separates conversation control, source access, deterministic analysis, and model explanation.
+Seb separates user surfaces, resilient public-source ingestion, deterministic fantasy analysis, and model explanation so that factual claims and lineup actions remain grounded in verifiable runtime evidence. Direct tools fetch current league, schedule, statistical, weather, and news records, deterministic TypeScript services compute projections and lineup math, and an evidence-backed Decision Gate validates every direct fantasy recommendation before output reaches the user.
 
-Direct tools supply current facts. Model explanations still need source review.
+```mermaid
+flowchart LR
+  subgraph Surfaces["User Surfaces"]
+    TUI["Interactive TUI & SessionStore"]
+    CLI["One-Shot CLI (ask / --json)"]
+    CONN["Chat Connectors (Slack, Discord, Telegram, GroupMe)"]
+  end
+
+  subgraph Harness["Agent Harness & Context"]
+    TRANS["Transport, Slash Router & Experience Selector"]
+    AGENT["ToolLoopAgent (16 steps, prepareStep, ephemeral cacheControl)"]
+    GATE["Decision Gate & Single-Retry Auto-Recovery"]
+  end
+
+  subgraph Execution["Tools & Deterministic Services"]
+    CLIENTS["Source Clients (Sleeper, nflverse, NWS, 47 Newsrooms)"]
+    CACHE["Two-Tier Cache (128-entry L1 Map + SQLite L2 + FTS5)"]
+    CALC["Deterministic Engine (Projections, Lineup Solver, Covariance, Learning)"]
+    DOCS["System & Identity Tools (inspectSystemDocs, Canonical Registries)"]
+  end
+
+  subgraph Observability["Local & Optional Telemetry"]
+    USAGE["SebUsageTelemetry (Metadata-Only SQLite)"]
+    TRACES["Optional DevTools (.devtools/) & Judgment OTel"]
+  end
+
+  TUI --> TRANS
+  CLI --> TRANS
+  CONN --> TRANS
+  TRANS --> AGENT
+  AGENT --> CLIENTS
+  AGENT --> CALC
+  AGENT --> DOCS
+  CLIENTS --> CACHE
+  CALC --> CACHE
+  AGENT --> GATE
+  GATE -->|"Stale or missing evidence (1x)"| AGENT
+  GATE -->|"Verified output & sources"| Surfaces
+  AGENT -.-> USAGE
+  AGENT -.-> TRACES
+```
 
 ## Request flow
 
-1. The command-line parser selects the requested command and its provider or model override.
-2. Seb loads private credentials, non-secret model settings, and one optional Sleeper username.
-3. Seb refreshes the NFL state, league season, leagues, owned rosters, and league settings.
-4. The Seb renderer reads and edits the terminal prompt.
-5. The transport selects Explore, My Fantasy, or Analyze from the question.
-6. The transport runs a slash command locally or sends a normal question to the agent.
-7. `ToolLoopAgent` gives the selected model source tools, local learning tools, and active session instructions.
-8. Middleware adds valid input examples to each compatible data tool.
-9. An identity tool resolves ambiguous player or team identifiers when necessary.
-10. The selected model calls only the tools that the question needs.
-11. A source client reads a fresh SQLite cache record or requests the source.
-12. The news client searches the built-in sources for every model provider.
-13. Google Search can supply secondary coverage when Google is active.
-14. Google URL Context can read a supplied web page when Google is active.
-15. A deterministic function calculates summaries and risk signals.
-16. The selected model explains the returned facts.
-17. AI SDK telemetry emits run, model-step, performance, and tool lifecycle events.
-18. Seb writes bounded usage metadata to the local SQLite database.
-19. The transport records each executed tool input and result for the decision gate.
-20. A decision gate matches that evidence to the requested subject and selected league.
-21. The gate replaces an unsupported action before any user-facing output.
-22. The transport adds validated web sources and records contextual actions.
-23. The Seb renderer draws the response, responsive tables, record cards, tool progress, badges, and supported charts.
+1. **Startup and configuration**: The CLI parser or connector bootstrap resolves CLI flags, loads saved user defaults from `~/.config/seb/` via `loadUserEnvironment(process.env, true)` for any unset environment variables, initializes optional Judgment OpenTelemetry tracing, and constructs the active model provider.
+2. **Session hydration**: Seb refreshes the current NFL state, Sleeper season, discovered leagues, owned rosters, and league scoring/waiver/playoff settings into the session state (restoring prior transcript state from `SessionStore` when resuming an interactive session).
+3. **Routing and experience selection**: Local slash commands execute immediately without a model call; natural-language prompts select the `Explore`, `My Fantasy`, or `Analyze` experience (plus any active skill) and enter the two-pass turn compactor.
+4. **Tool-loop research**: AI SDK `ToolLoopAgent` runs up to 16 model steps with schema-validated tools, tool-input examples middleware, canonical identity resolution (`resolveTeamIdentity`, `resolvePlayerIdentity`), on-demand architecture/CLI reference lookup (`inspectSystemDocs`), and `toModelOutput` payload compaction.
+5. **Source retrieval and deterministic math**: Source clients read the 128-entry in-memory L1 cache or `.cache/seb.sqlite` L2 cache before fetching remote endpoints (`SleeperClient`, `NflverseClient`, `WeatherClient`, `NewsClient` across 47 built-in publishers, plus optional Gemini Search and URL Context when Google is active). Deterministic TypeScript functions compute projections, same-game correlations, optimal lineups, waiver scores, trade impacts, and playoff odds.
+6. **Decision Gate and auto-recovery**: For direct fantasy action questions, the buffered response and recorded `(input, output)` tool pairs pass through the deterministic Decision Gate (reusing fresh prior-turn evidence up to 5 minutes old). If required evidence is missing or stale on the first pass, Seb clears stale caches when needed and runs one targeted recovery pass via `buildRecommendationRecoveryPrompt` before finalizing or withholding an unsupported recommendation.
+7. **Presentation and telemetry**: The transport attaches validated HTTP/HTTPS source links, updates contextual follow-up actions, persists metadata-only run/step/tool metrics through `SebUsageTelemetry`, and streams sanitized Markdown, cards, badges, and tables to the terminal or chat platform.
 
 ## Agent harness
 
-Seb uses AI SDK `ToolLoopAgent` for model and tool-loop control.
+Seb orchestrates model execution through AI SDK `ToolLoopAgent` with strict Zod input schemas covering seasons, weeks, team codes, limits, roster slots, and entity IDs. Each agent run allows at most **16 model steps** (`0` through `15`), where a single step may execute multiple tool calls in parallel (`projectPlayers`, for example, evaluates up to 40 player names with four concurrent projections while reporting missing players individually).
 
-Each tool uses a Zod input schema.
+Before every step, `prepareStep` manages context budgets, provider caching, and final-answer synthesis:
 
-The schemas validate seasons, weeks, teams, limits, IDs, and other inputs.
+- **Context pruning and two-pass turn compaction**: Individual prompts are capped at 32,000 characters. Interactive sessions retain up to 24 recent messages and apply a two-pass compactor that keeps up to 3 recent turns uncompacted within a 120,000-character budget, replacing older turns' bulky tool outputs with compact verified receipts (`[Verified tool calls in this turn (outputs compacted): ...]`). Within the active turn, `pruneMessages` strips prior-turn reasoning and stale tool payloads while preserving every current-turn tool call, result, and provider thought signature.
+- **Prompt caching and forced synthesis**: On Anthropic models, `prepareStep` attaches per-step `cacheControl: { type: 'ephemeral' }` markers so stable system instructions, tool declarations, and conversation prefixes hit Anthropic's ephemeral prompt cache across steps. When the loop reaches step `15` (the 16th step) or prepared messages reach 200,000 estimated characters, Seb switches to static synthesis instructions and disables further tool execution (`activeTools: []`), keeping function declarations attached so Gemini emits an explicit `NONE` function-calling config while removing hosted provider tools.
+- **Tool set and news routing**: Every production provider receives first-class data, analysis, learning, identity, system-docs (`inspectSystemDocs` in `src/system/tools.ts`), and `searchFirstClassNews` tools. Only the Google Gemini provider additionally receives hosted Google Search (secondary public coverage) and URL Context (for user-supplied URLs); test harnesses can inject custom agents with news tools disabled.
+- **Structured `--json` execution**: `seb ask --json` runs a two-stage flow—first executing the tool-enabled research agent to collect grounded evidence and source records, then passing that evidence to a tool-free `Output.object` pass validated against Seb's Zod analysis schema (`schemaVersion: 1`) before applying the Decision Gate and rendering the compatible `answer` text.
 
-The agent uses at most 16 model steps for one request. Each step can request several tools.
+> [!IMPORTANT]
+> Tools are strictly read-only against external platforms and never submit Sleeper lineups, waiver claims, trades, or commissioner changes. Local side effects are confined to SQLite caches/snapshots, metadata telemetry, session files, and explicit football learning revisions.
 
-The agent runs AI SDK `pruneMessages` before each model request.
+### Cancellation, streaming completion, and fallback
 
-This policy removes old reasoning and tool data from earlier turns. It preserves the active turn, including provider signatures and all returned research.
+Every interactive turn, local network slash command, CLI invocation, and connector reply binds an `AbortSignal` that propagates through `ToolLoopAgent` into every client download, gzip expansion, SQLite shared-refresh wait, and retry backoff timer. Connector replies enforce a shared two-minute deadline across primary and fallback models and abort all active streams on service shutdown.
 
-The interactive transport also limits model history to 24 recent messages.
+Completion rules distinguish ordinary prose from gated decisions:
 
-It also limits retained context to 120,000 estimated characters.
+- **Structured JSON and connector replies** require a clean `stop` finish event; intermediate `tool-calls` steps never complete an answer.
+- **One-shot text commands** retain partial non-decision prose with an explicit warning if generation hits an output-token or step limit, whereas buffered decision responses withhold recommendations on incomplete finishes, content filters, or cancellations.
+- **Interactive tool approvals** can pause cleanly on `tool-calls` and clear pending state when denied.
+- **Capacity fallback**: Seb retries the same-provider fallback model only when a rate-limit or capacity error occurs before visible output starts. Timeouts and user cancellations never trigger fallback retries.
 
-One submitted prompt can contain at most 32,000 characters.
+## Interactive renderer, transport, and sessions
 
-The last allowed step asks the model for a final answer with function calling disabled.
+Seb owns its terminal user interface, prompt editor, and conversation loop while speaking public AI SDK `ChatTransport`, UI message, and `readUIMessageStream` contracts without private SDK imports. The TUI starts immediately while background session hydration finishes; pressing `Escape` aborts the active model stream and underlying network readers, isolating late chunks so they cannot leak into subsequent turns.
 
-Seb keeps function definitions so Gemini sends its explicit `NONE` setting. Seb removes hosted tools from this step.
+The custom `ChatTransport` wraps `DirectChatTransport` (with source stream parts enabled) to handle local slash commands, `/explore` / `/fantasy` / `/analyze` experience switches, inline `/skill NAME QUESTION` invocations, `/new` context boundaries, and live `/provider` or `/model` verification before swapping agents. Provider reasoning streams into a muted collapsible region excluded from clipboard copies, rapid token updates coalesce to animation frames, mouse wheel scrolling preserves reading position, and a stateful ANSI/OSC text sanitizer strips untrusted terminal control sequences across streamed chunks.
 
-The agent also switches to a final answer when its prepared messages reach 200,000 characters.
+### Session context and resumable transcripts
 
-The `projectPlayers` tool projects up to 40 names per call. It runs at most four player projections concurrently and returns missing projections individually.
+In-memory session state tracks the active experience, NFL season/phase/week, Sleeper username/user ID, discovered leagues and owned rosters, league scoring/waiver/playoff rules, focused league/roster/team/player subjects, active skill, model display state, token totals, and `/new` context boundaries. Trusted skill instructions travel via system call options, whereas runtime session JSON is attached to the user message as untrusted context data (capped per string field so league or team names cannot inject prompt instructions).
 
-The active provider and tool set control the news instructions.
+Interactive transcripts also persist to `~/.config/seb/sessions/<id>.json` through `SessionStore`, allowing users to list and resume saved conversations via `seb sessions` and `seb resume <session-id>` while keeping local command outputs stripped from model context. Prompt history saves separately to `~/.config/seb/history.json` through a serialized write queue with unique `0600` temporary files and bounded regular-file reads.
 
-Every production provider receives the direct first-class news tool.
+## User settings and model provider configuration
 
-Only the Google provider receives Google Search and URL Context.
+Seb supports **Google Gemini**, **Anthropic**, **OpenAI**, and **OpenAI-compatible** chat endpoints. Persistent user files live in `~/.config/seb/` (overridable via `SEB_CONFIG_HOME` or `XDG_CONFIG_HOME`; see the [setup guide](SETUP.md) and [storage guide](STORAGE.md)):
 
-An injected test agent can disable all news tools.
+| Store | Purpose | Security & validation |
+| --- | --- | --- |
+| `settings.json` | Non-secret persistent environment defaults (`NWS_USER_AGENT`, default Sleeper username, model/tracing preferences) managed via `configuration-registry.ts`. | Atomic `0600` write; explicit imports cannot redirect config directories or silently inject remote compatible endpoints. |
+| `credentials.json` | Masked API keys and canonical base-URL bindings for OpenAI-compatible keys. | Atomic `0600` write, 64 KiB cap; verified via `seb configure` outside chat transcripts. |
+| `model-settings.json` | Saved active provider, primary/fallback model IDs, and optional compatible base URL. | Atomic `0600` write, bounded schema, no secrets stored. |
+| `profile.json` | Optional default Sleeper username, schema version, and update timestamp. | Atomic `0600` write; never stores API keys. |
+| `history.json` & `sessions/<id>.json` | Interactive input history and resumable conversation sessions (`SessionStore`). | Serialized atomic `0600` writes and bounded file-size checks. |
 
-The interactive transport binds one cancellation signal to each model request.
+Both CLI commands and chat connector processes call `loadUserEnvironment(process.env, true)` at startup before tracing and provider initialization. Saved values in `~/.config/seb/` populate unset settings as defaults, while explicit `process.env` variables and CLI flags (`--provider`, `--model`) always take precedence. Neither CLI nor connector processes auto-load a working-directory `.env` file.
 
-It also binds the signal to local commands that read a network source.
+When resolving a provider without an explicit CLI flag, Seb checks `SEB_MODEL_PROVIDER`, then the saved active provider, and finally auto-discovers configured credentials in order: Google, Anthropic, OpenAI, and OpenAI-compatible. Explicit single-model overrides (`--model` or `/model`) use the chosen model as its own fallback, whereas provider-level selection preserves that provider's configured fallback model. OpenAI-compatible endpoints require HTTPS for remote hosts (permitting HTTP only on loopback addresses), reject embedded URL credentials/queries/fragments/completion paths and HTTP redirects, and require interactive confirmation before sending prompts to a new remote origin.
 
-The agent binds that signal to every local tool call.
+## Source clients and two-tier cache
 
-The source clients use the same signal for downloads, cache waits, and retry delays.
+Four typed clients encapsulate external public data:
 
-Connector replies use one two-minute deadline for the primary and fallback models.
+- **`SleeperClient`**: Reads Sleeper REST JSON endpoints for NFL state, users, leagues, rosters, matchups, transactions, player profiles, and add/drop trends.
+- **`NflverseClient`**: Streams and parses gzip-compressed CSV releases (`schedules`, `stats_player`, `pbp`, and `stats_team`) with bounded compressed and expanded byte limits.
+- **`WeatherClient`**: Queries National Weather Service (`/points`, `forecastHourly`, `/alerts/active`) GeoJSON endpoints with strict coordinate validation, origin verification on returned forecast URLs, required `NWS_USER_AGENT` headers, indoor/dome bypasses, and kickoff-window alert filtering.
+- **`NewsClient`**: Searches **47 built-in 3-tier news sources** (15 official NFL, independent national, and fantasy outlets plus all 32 NFL team newsrooms), validates publication dates, indexes articles in SQLite FTS5 (`news_articles_fts`) for Porter-stemmed BM25 ranking, and clusters multi-publisher stories within a **36-hour** window via `corroboratedBy`. Before fetching feeds or publisher pages, `NewsClient` enforces an inline RFC 9309 `robots.txt` parser with per-origin crawl delays, response byte caps, and same-site redirect checks.
 
-Connector shutdown cancels all active reply signals.
+Every client accepts an injected `fetch` implementation for offline testing and wraps network I/O in `ResilientFetch` (exponential full-jitter backoff, `Retry-After` support, transient/Cloudflare `520–524, 529` retries, per-origin 30-second circuit breakers, and caller-scoped abort propagation that never penalizes shared circuit health on user cancellation).
 
-JSON and connector answers require a final `stop` event. Intermediate tool steps do not complete the answer.
+### Caching, snapshots, and canonical identities
 
-One-shot text answers retain partial ordinary text after a final output limit or tool-step limit and show a warning.
-Decision responses remain buffered. These limits withhold the action. Content filters, cancellation, and missing final events produce errors.
+`CachedResource` implements a **two-tier cache**: a bounded **128-entry L1 in-memory `Map`** sits in front of SQLite L2 (`.cache/seb.sqlite` in WAL mode with a 5-second busy timeout) so repeated player, schedule, and roster lookups inside multi-player projections avoid redundant SQLite reads and JSON parsing. Cache hits validate URL equality, source schema version, and SHA-256 payload checksums, recalculating freshness from stored retrieval timestamps. Concurrent callers in the same process share one in-flight refresh per key while retaining independent `AbortSignal` handles and stale-if-error fallbacks; `304 Not Modified` responses via `ETag` / `Last-Modified` extend freshness in place, and `/refresh` commands bump durable namespace generations without deleting historical snapshots.
 
-Interactive approval requests can pause with `tool-calls`. A denied tool clears its pending approval. Other incomplete interactive responses produce an error.
+Successful updates write versioned snapshots paired with JSON Pointer field-level provenance manifests (capped at 2,000 leaf paths before falling back to root lineage; inspectable via `seb snapshots` and `/provenance`). Cross-provider joins pass through `TeamIdentityRegistry` (`nfl-team:CODE`) and `PlayerIdentityRegistry` (`strict` name-position-team matching plus guarded active-player transfer fallback), persisted with SHA-256 checksums in `IdentityRepository`. See the [storage guide](STORAGE.md), [provenance guide](PROVENANCE.md), and [identity guide](IDENTITIES.md) for complete schemas.
 
-Capacity fallback runs only before visible output. Cancellation and timeout errors never trigger capacity fallback.
+## Deterministic analysis and Decision Gate
 
-Connector fallback uses the original request deadline and cannot start after cancellation.
+Plain TypeScript services compute player rolling/recency averages, target and air-yards shares, PPR volatility, team records and defensive positional points allowed, NWS kickoff weather risk, scoring-aware offensive/kicker/D/ST projections, intra-game covariance (`sameGameCorrelation`), full-roster combinatorial starter optimization (`optimizeRosterLineup`), trade lineup deltas (`analyzeTradeImpact`), waiver rankings (`rankWaiverTargets`), and Monte Carlo playoff odds (`simulatePlayoffOdds`). Local weekly learning (`learnCompletedWeek`) writes chronologically validated parameter revisions to `.cache/learning/` without modifying code or prompts; see the [analysis guide](ANALYSIS.md) and [evaluation guide](EVALUATION.md).
 
-The tools read remote sources. They never submit fantasy transactions.
-Local learning tools can write validated forecast revisions. Source clients also write local caches and snapshots.
+Whenever a user asks for a direct fantasy action (start/sit, lineup optimization, waiver add/drop, or trade verdict), Seb buffers the model's draft and evaluates the deterministic **Decision Gate** against actual executed tool inputs and outputs—never trusting model prose about which tools ran.
 
-The direct data tools cap large row results.
+```mermaid
+flowchart TD
+  REQ["Direct Fantasy Action Question"] --> REUSE["Collect Current-Turn Tool Receipts + Fresh Prior-Turn Evidence (up to 5 min)"]
+  REUSE --> CHECK["Evaluate Decision Gate (League, Identity, Scoped Status & News, Slot Legality, Min 3 Games)"]
+  CHECK --> PASS{"All Required Evidence Valid?"}
+  PASS -->|"Yes"| CONF["Release Buffered Recommendation (Cap Confidence if Supplemental Source Stale)"]
+  PASS -->|"No"| REFUSE{"Verified Inactive, Bye, or Illegal Slot Refusal?"}
+  REFUSE -->|"Yes (Advising Sit or Pass)"| CONF
+  REFUSE -->|"No"| RETRY{"First Pass & Recoverable Gap?"}
+  RETRY -->|"Yes"| PURGE["Purge Stale Sleeper, News, and Weather Caches if currentEvidence === 'stale'"]
+  PURGE --> REC["Run Single Recovery Pass (buildRecommendationRecoveryPrompt)"]
+  REC --> CHECK
+  RETRY -->|"No"| BLOCK["Withhold Action & Return Exact Missing Requirements"]
+```
 
-Summary tools can read a complete file internally and return a small result.
+Key Decision Gate behaviors across interactive chat, `seb ask` / `seb ask --json`, and all chat connectors include:
 
-The identity tools return ambiguity instead of a guessed source join.
+- **5-minute prior-turn evidence reuse**: Follow-up turns reuse verified tool evidence recorded within the last 5 minutes in the same session so conversational follow-ups do not needlessly re-fetch unchanged rosters, projections, or news.
+- **Scoped subject verification and legal refusals**: Status and current-news checks scope specifically to the recommended starters and compared action subjects rather than every bench player on a roster. When verified evidence proves a subject is Out, on IR, on bye, already kicked off, or ineligible for the requested slot, the gate permits explicit refusal advice (for example, advising to sit or avoid that player) without false blocking.
+- **Automatic single-retry recovery**: If an action draft fails the gate because required tool calls were skipped or returned stale current evidence (`currentEvidence === 'stale'`), Seb automatically purges stale Sleeper, news, and weather cache namespaces when needed, builds a targeted recovery instruction via `buildRecommendationRecoveryPrompt`, executes **one** recovery agent pass, and re-runs the gate before falling back to an explicit missing-evidence message.
 
-Each answer path records a tool input with its result.
+## Local usage analytics and tracing
 
-The decision gate never relies on the model's claim about which tool ran.
+Seb instruments every interactive, CLI, connector, setup, doctor, and contract run through AI SDK's telemetry interface:
 
-`seb ask --json` uses a separate agent with AI SDK `Output.object`.
-
-The first request gathers evidence and grounded source records.
-
-The second tool-free request converts that evidence into the validated schema.
-
-Both requests must finish successfully. The decision gate receives each executed tool input and result, including the requested league ID.
-
-Seb formats that object into the compatible `answer` field.
-
-The gate removes an ineligible recommendation after schema validation.
-
-## Interactive renderer and transport
-
-Seb controls the message loop and calls the custom AI SDK chat transport.
-
-Seb owns the terminal renderer.
-
-The renderer supplies prompt input, tool approval, stream display, and terminal cleanup.
-
-The runner starts the renderer before transport setup completes. Escape aborts the request and cancels its source reader.
-A late transport stream closes after cancellation. It cannot enter the next conversation turn.
-
-The renderer shows provider reasoning in a muted section and keeps it out of the copied answer.
-Progress labels follow the latest text, reasoning, or tool event. Timer updates preserve the current phase.
-The renderer combines rapid stream updates into frames at most once per animation interval.
-A completed answer preserves the reading position when the user scrolls away from the latest output.
-
-Seb supplies a custom `ChatTransport` around `DirectChatTransport`.
-
-The direct transport enables AI SDK source stream parts.
-
-The custom transport intercepts local slash commands before the model call.
-
-It selects an experience from normal question terms.
-
-Explicit `/explore`, `/fantasy`, and `/analyze` commands can select the same experiences.
-
-An inline `/skill NAME QUESTION` command selects the skill and sends the question to the model.
-
-It removes local command messages from later model context.
-
-It also supports a `/new` model-context boundary.
-
-The `/provider` and `/model` commands verify a new model before a switch.
-
-A successful switch replaces the agent and starts a fresh model context.
-
-The visible transcript remains available after the switch.
-
-A failed switch keeps the prior agent, model, and context.
-
-The transport records contextual actions for the renderer.
-
-The transport records a tool-selected player only when the user named that player.
-
-The transport also binds validated direct and web sources to the answer ID.
-
-This step uses no extra model request.
-
-The transport buffers a direct action answer until the decision gate finishes.
-
-An error or cancellation discards an unsupported partial action.
-
-The `/commands` search uses local command metadata.
-
-The `/complete` command ranks local command and argument candidates.
-
-The renderer opens a live palette when the input starts with `/`.
-
-The renderer calculates the palette, transcript, header, and prompt rows together.
-
-The renderer enables terminal mouse reporting for transcript scrolling.
-
-It renders each contextual action on a separate footer row.
-
-It shows these rows on the first prompt and after `/new` or `/clear`.
-
-Arrow keys change the selection. Tab fills the selected value.
-
-Seb owns the conversation runner and local renderer.
-
-The runner uses the public AI SDK chat transport and UI message contracts.
-
-The local renderer uses the public `readUIMessageStream` function.
-
-Pure editor, history, theme, and presentation modules contain most terminal behavior.
-A shared text sanitizer removes untrusted terminal commands. One-shot streaming preserves sanitizer state across model chunks.
-History writes use unique temporary files and a serial save queue. Bounded reads reject oversized local files.
-
-Tests can verify those modules without a live terminal or model request.
-
-## Session context
-
-The session stores these values in memory.
-
-- Active Explore, My Fantasy, or Analyze experience.
-- NFL season, phase, and display week.
-- Sleeper league season.
-- Sleeper username and user ID.
-- Every discovered league and owned roster.
-- Available trade, playoff, and waiver settings.
-- Optional focused league and roster.
-- NFL team.
-- Active NFL player.
-- Active skill.
-- Active model provider and model display state.
-- Token totals.
-- Model-context boundary.
-
-The agent receives trusted skill rules through dynamic call instructions.
-
-Seb limits each remote session string and serializes the session data as one JSON value.
-
-The agent adds that JSON to the current user message as untrusted runtime data.
-
-The model must not follow instructions inside a session value.
-
-A direct value in the user question overrides the active session value.
-
-## Account preferences
-
-Interactive chat loads one validated JSON profile before it starts the TUI.
-
-One-shot requests load the same profile before they call the agent.
-
-The top-level setup command accepts one optional Sleeper username.
-
-The profile stores only that username, the schema version, and the update time.
-
-League, roster, NFL state, and subject values remain in the in-memory session.
-
-It never stores an API key.
-
-The profile store uses a private temporary file and an atomic rename.
-
-The [setup guide](SETUP.md) defines path selection and file permissions.
-
-## Model provider configuration
-
-Seb supports Google Gemini, Anthropic, OpenAI, and OpenAI-compatible endpoints.
-
-The `seb configure` command uses private terminal prompts outside the chat transport.
-
-It masks each key and verifies the selected model before it writes either file.
-
-`credentials.json` stores saved keys. It binds a compatible key to one canonical base URL.
-
-`model-settings.json` stores models and the optional compatible base URL.
-
-Both stores validate a bounded schema and use an atomic file replacement.
-
-Environment credentials, models, and compatible base URLs take priority over saved values.
-
-An explicit command-line provider takes priority over the environment and saved active provider.
-
-An explicit qualified model can also select its provider.
-
-Seb otherwise uses the saved active provider.
-
-It then discovers Google, Anthropic, OpenAI, or OpenAI-compatible access in that order.
-
-Provider-specific model variables take priority over saved models.
-
-Hosted providers use documented defaults after saved values.
-
-An explicit command-line or slash model uses itself as the fallback.
-
-A provider-only override keeps that provider's configured fallback.
-
-The primary and fallback always use the same provider.
-
-Seb retries the fallback only after a capacity or rate-limit error.
-
-The compatible provider requires a base URL and a model. Its key remains optional.
-
-Remote compatible endpoints require HTTPS. HTTP compatible endpoints require a loopback host.
-
-The URL validator rejects credentials, queries, fragments, and individual completion endpoint paths.
-
-Compatible model and discovery requests reject redirects.
-
-Interactive configuration requires approval before it sends data to a remote compatible origin.
-
-CLI and connector startup load saved user settings before tracing and model initialization.
-They do not load a current-directory `.env` automatically.
-The registry in `src/setup/configuration-registry.ts` defines supported persistent settings and validates imports.
-Explicit imports cannot select a new compatible endpoint or redirect the configuration directory.
-
-Connector processes use environment provider settings only. They do not read the local provider files.
-
-## Source clients
-
-Each direct public source has one client class.
-
-- `SleeperClient` reads JSON endpoints.
-- `NflverseClient` reads compressed CSV releases.
-- `WeatherClient` reads NWS GeoJSON endpoints.
-- `NewsClient` reads feeds, news sitemaps, and supported publisher pages.
-
-The provider factory constructs one AI SDK model for the active provider.
-
-Google uses its standard `generateContent` model adapter.
-
-OpenAI and Anthropic use their matching AI SDK provider adapters.
-
-The OpenAI-compatible adapter uses the configured API base URL.
-
-Every production model receives the direct news tool.
-
-The Google model also receives two provider tools.
-
-- Gemini Google Search supplies secondary public coverage.
-- Gemini URL Context reads a user-supplied web page.
-
-`NewsClient` uses a built-in registry of official, independent, fantasy-impact, and team sources.
-
-It indexes discovered articles in SQLite FTS5 (`news_articles_fts`) for BM25 ranking and clusters multi-publisher stories via `corroboratedBy`.
-
-It validates publication dates before it returns an article.
-
-It validates parsed discovery arrays and article metadata before it stores them.
-
-It recommends broader coverage when direct results contain too few articles or publishers.
-
-Only the Google agent can act on that recommendation through Google Search.
-
-Each direct source client accepts an injected `fetch` function.
-
-Tests use that injection to avoid network requests.
-
-Each direct source client accepts a source observer.
-
-The observer records exact URLs, retrieval times, and cache outcomes.
-
-The source tracker records grounded HTTP and HTTPS source links.
-
-The interactive state stores one immutable source snapshot for each answer ID.
-
-`ResilientFetch` gives each client bounded retries and request timeouts.
-
-It applies full-jitter backoff and honors `Retry-After`.
-
-It opens a short circuit for the failing origin after repeated final failures. Other origins retain their own request state.
-
-A caller cancellation stops the active request and its retry delay.
-
-Caller cancellation does not add a source failure to the shared circuit.
-
-The news client checks each publisher's robots policy before it reads content.
-
-It also applies crawl delays, response size limits, and same-site redirect checks.
-
-## Cache design
-
-Seb stores normalized source values in `.cache/seb.sqlite`.
-
-Each cache record includes expiry times, source validators, a schema version, and a checksum.
-
-A cache hit also requires the stored source URL to match the requested source URL.
-
-The current client policy calculates freshness from the stored retrieval time.
-
-Seb persists the recalculated deadlines before a storage prune can delete the record.
-
-Clients send `If-None-Match` and `If-Modified-Since` when a source supplied validators.
-
-A successful `304` response renews the existing record.
-
-A source failure can use an eligible stale record.
-
-A caller cancellation never uses a stale record.
-
-An expired record never serves as a stale fallback.
-
-The SQLite store uses write-ahead logging and a five-second busy timeout.
-
-Concurrent reads in one Seb process use one source refresh per database file.
-
-Each caller can cancel its own wait without cancelling another caller.
-
-One shared refresh writes one cache record and one source snapshot.
-
-Each caller keeps its own eligible stale fallback when the shared refresh fails.
-
-Seb stops the shared refresh when every waiting caller cancels.
-
-The refresh commands delete only known source cache namespaces.
-
-They preserve all source snapshots.
-
-Read the [storage guide](STORAGE.md) for exact periods and retention counts.
-
-## Snapshot and provenance design
-
-A successful source update can create one versioned snapshot.
-
-The snapshot contains the normalized payload, source schema, checksum, and provenance manifest.
-
-The manifest assigns source IDs and freshness to exact JSON Pointer fields.
-
-Large payloads use root lineage after the configured field-path limit.
-
-Derived lineage can reference fields from other envelopes.
-
-The derivation records an operation name and calculation version.
-
-The `/provenance` command shows a stored manifest inside chat.
-
-The [provenance guide](PROVENANCE.md) defines each freshness state.
-
-## Identity design
-
-`TeamIdentityRegistry` maps aliases and provider codes to 32 canonical franchises.
-
-Each canonical team ID uses the `nfl-team:CODE` format.
-
-`PlayerIdentityRegistry` maps source IDs and normalized names to canonical players.
-
-Strict matching first requires the same name, position, and team.
-A transfer fallback requires one unique name-position candidate per provider and an explicitly active Sleeper profile.
-
-The registry reports ambiguous or conflicting candidates.
-
-The agent can call a team or player identity tool before it joins source data.
-
-`IdentityRepository` saves each resolved identity and its provider links in SQLite.
-
-The repository reuses the first canonical ID after a later cross-source match.
-
-It rejects source links that already point to conflicting canonical IDs.
-
-Read the [identity guide](IDENTITIES.md) for matching and persistence limits.
-
-## Weather safety
-
-The NWS point endpoint returns the hourly forecast URL.
-
-Seb verifies that the returned URL uses the configured NWS origin.
-
-Seb sends the required user agent with each NWS request.
-
-Seb validates coordinates before each request.
-
-Seb skips a direct weather effect for a closed roof or a dome.
-
-Seb labels past nflverse weather fields as historical conditions.
-
-Seb labels NWS values as forecasts.
-Only alerts with a verified time window containing kickoff change the game risk rating.
-Other current alerts remain visible as context.
-
-## Deterministic analysis
-
-Plain TypeScript functions calculate the following results.
-
-- Player averages and latest three-game averages.
-- Targets, touches, target share, and air-yards share.
-- Weekly PPR volatility.
-- Team records and scoring averages.
-- Team offense totals.
-- Defense PPR points and targets allowed by position.
-- Weather risk and its reason list.
-- Scoring-aware player projections, stack correlations, and eligibility.
-- Full-roster combinatorial lineup optimization (`optimizeRosterLineup`) and bench swap recommendations.
-- Stable waiver production, demand, need, and risk scores.
-- Trade production value and roster position changes.
-
-The model explains these results. It does not calculate hidden source facts.
-
-## Decision gate
-
-The gate activates when a question requests a direct fantasy action.
-
-It checks current source state, player identity, status, news, league scoring, and projection eligibility.
-
-The identity and league checks compare the question with the executed tool inputs and results.
-
-A start-sit action needs a projection with enough games and complete supported active scoring rules.
-
-The trade service rejects duplicate players and received players from several opposing rosters.
-
-The waiver service uses fixed production references and an absolute demand scale.
-
-The gate replaces a blocked action with exact missing requirements.
-
-It reduces confidence when fresh required evidence includes a stale supplemental source.
-
-## Local usage analytics
-
-Seb uses the AI SDK telemetry integration interface for local usage records.
-
-The production agent records the active provider and model for each model step.
-
-AI SDK supplies normalized model-step usage, performance values, and tool lifecycle events.
-
-Google usage adds provider totals, tool-use tokens, grounding counts, and service tier when available.
-
-Other providers can return different token classes and provider metadata.
-
-One model call in a report means one logical AI SDK model step.
-
-Provider HTTP retries can occur inside that step. Seb does not observe those retries.
-
-`SebUsageTelemetry` records runs, model steps, and tool calls across the interactive, command-line, and connector surfaces.
-
-It deduplicates repeated lifecycle events by run, step, and tool-call identifiers.
-
-The recorder writes input, cache-read, cache-write, output, text, reasoning, tool-use, and total token classes.
-
-It keeps an omitted metric as unknown. It never converts an omitted metric to zero.
-
-Seb keeps the AI SDK normalized total separate from the provider total. The two totals can use different provider accounting rules.
-
-The recorder also writes response time, time to first output, complete step time, and client tool duration.
-
-Tool records separate client execution from provider execution.
-
-Tool outcomes include returned, error, invalid, cancelled, and unresolved.
-
-Analytics calculate totals, token ratios, distributions, model groups, tool groups, repeated calls, and daily trends.
-
-They also calculate the successful run rate and failures after a returned client tool.
-
-The successful run rate measures agent runs, not complete user answers.
-
-Reports group failures by a bounded error category.
-
-Each ratio reports its matched-call count. A missing token class never becomes zero in a ratio.
-
-Model totals, daily totals, and cumulative client duration also report their measured-call coverage.
-
-A stored `running` status means the recorder received no terminal lifecycle event. Reports call this state `unfinished` because a stopped process can leave it behind.
-
-The interactive transport explicitly closes active usage runs when a user stops a stream.
-
-Terminal state precedence is aborted, failed, then completed.
-
-This order resolves AI SDK callback races without changing the first terminal timestamp.
-
-A repeated call is each extra call with the same tool name in one run. The analytics do not compare tool input.
-
-Reports include missing metrics, conflicting token fields, and truncated query state.
-
-Each report reads the 10,000 newest matching runs at most.
-
-Top-level JSON output uses schema version 1.
-
-The local reports do not query provider quota, credits, billing totals, or currency cost.
-
-The recorder disables input and output capture for local analytics.
-
-It stores identifiers, timestamps, numeric metrics, and bounded categories.
-
-It does not store prompts, answers, tool inputs, tool results, or raw errors.
-
-It also excludes keys, authorization headers, and compatible endpoint URLs.
-
-AI SDK DevTools uses a separate content-rich trace store.
-
-Read the [AI SDK guide](AI_SDK.md#5-local-usage-telemetry) for the event and provider basis.
-
-Read the [storage guide](STORAGE.md#usage-telemetry) for schema and retention details.
-
-## Local model inspection
-
-Seb can register AI SDK DevTools telemetry during local development.
-
-The feature stays disabled unless `SEB_DEVTOOLS` equals `true` or `1`.
-
-Seb rejects the feature when `NODE_ENV` equals `production`.
-
-The local viewer reads trace files from `.devtools/`.
-
-Read the [AI SDK guide](AI_SDK.md) before you enable trace recording.
-
-## Analysis and local learning
-
-The forecast engine combines historical scoring, exponential recency, and a bounded position prior.
-The lineup and trade optimizers assign legal starters exactly (`optimizeRosterLineup`, `analyzeTradeImpact`). Start-sit, matchup, and playoff simulations support intra-game stack correlations.
-Local weekly learning writes separate, versioned football revisions after chronological validation.
-Projections read compatible revisions only before the requested cutoff.
-The [analysis guide](ANALYSIS.md) defines the formulas, storage contracts, research basis, and measured limits.
-
-## Historical evaluation
-
-The replay runner converts nflverse weekly records into a versioned evaluation dataset.
-
-Each forecast period has an exact knowledge cutoff.
-
-Training requires an earlier period and an availability time before that cutoff.
-
-The replay rejects a target or outcome that reveals future information.
-
-The default baseline blends the complete history with the latest three results.
-
-Metrics cover point error, interval coverage, and weekly rank quality.
-
-The common metric library also supports probability calibration and decision regret.
-
-Read the [evaluation guide](EVALUATION.md) for exact rules and limits.
+- **Metadata-only SQLite analytics (`SebUsageTelemetry`)**: Records runs, logical model steps, token classes (input, cache-read, cache-write, output, text, reasoning, tool-use, AI SDK normalized total, and Google provider total/grounding/service-tier fields), step latencies, and client vs. provider tool durations in `.cache/seb.sqlite`. Missing metrics stay `NULL` rather than `0`, terminal status transitions enforce monotonic precedence (`aborted` > `failed` > `completed`) while preserving the first terminal timestamp, and `/usage` or `seb stats` aggregates up to the 10,000 newest runs (`schemaVersion: 1`). `SebUsageTelemetry` never stores prompts, answers, tool payloads, raw error messages, API keys, or endpoint URLs.
+- **Optional DevTools and Judgment OpenTelemetry tracing**: AI SDK's shared `recordInputs` and `recordOutputs` flags are `true` when **either** local AI SDK DevTools (`SEB_DEVTOOLS=true`, rejected when `NODE_ENV=production`, writing local traces to `.devtools/`) **or** optional Judgment OpenTelemetry tracing (`SEB_JUDGMENT_TRACING=true` in `src/ai/judgment.ts`) is active, and `false` when both are disabled. Even when shared input/output recording is enabled for DevTools or Judgment, `SebUsageTelemetry` discards content and writes metadata only. See the [AI SDK guide](AI_SDK.md#5-local-usage-telemetry) and [storage guide](STORAGE.md#usage-telemetry).
 
 ## Test design
 
-Vitest checks clients, SQLite storage, usage telemetry, analytics, identities, provenance, evaluation, commands, setup, weather, CLI behavior, and connectors.
+Vitest (`5.0.5`) exercises source clients, two-tier caching, SQLite migrations, usage telemetry, canonical identities, provenance manifests, projections, lineup optimization, historical replay, CLI commands, TUI rendering/sanitization, and Chat SDK (`4.43.0`) connectors without live network calls or paid model credentials—using `MockLanguageModelV4`, injected `fetch` mocks, and `@chat-adapter/tests`. Live verification commands complement unit tests: `npm run data:smoke` probes nflverse and NWS without a model key, `npm run news:smoke` audits all 47 built-in news sources, and `npm run doctor` verifies end-to-end source health plus one streaming local tool continuation (and grounded Google Search when Gemini is active).
 
-Provider tests cover resolution, provider construction, private storage, endpoint validation, setup prompts, and model switching.
-
-AI SDK `MockLanguageModelV4` checks complete agent tool loops without model cost or live provider credentials.
-
-Injected HTTP mocks check compatible model discovery without a live endpoint.
-
-Chat SDK test adapters check connector behavior without platform credentials.
-
-`npm run data:smoke` checks live nflverse and NWS data without a model provider.
-
-`npm run doctor` checks every source and one streaming local tool continuation with the active provider.
-
-The Google doctor check also requires one grounded Google Search source.
-
-Run the full local gate before each commit.
+Run the complete local verification suite before every commit:
 
 ```bash
 npm run check
@@ -630,21 +170,15 @@ npm run check
 
 ## Extension points
 
-Add a new source in this order.
+Add a new external data source in this order:
 
-1. Add a typed client with an injected fetch function.
-2. Add the shared resilient request policy.
-3. Add SQLite cache, stale-if-error, and snapshot rules.
-4. Add source tracking and field-level provenance.
-5. Add canonical identity mapping when the provider uses new identifiers.
-6. Add deterministic transformation functions.
-7. Add small read-only agent tools.
-8. Add client, storage, and tool-loop tests.
-9. Add doctor and smoke coverage.
-10. Document access, freshness, attribution, and failure behavior.
+1. Implement a typed client in `src/` that accepts an injected `fetch` function and `AbortSignal`.
+2. Wrap HTTP calls in `ResilientFetch` with bounded timeouts, byte limits, retries, and per-origin circuit breaking.
+3. Configure `CachedResource` (L1 + SQLite L2), `stale-if-error` windows, `/refresh` namespace registration, and snapshot retention.
+4. Emit source observer events and JSON Pointer field-level provenance manifests.
+5. Extend `TeamIdentityRegistry` or `PlayerIdentityRegistry` before joining records across providers.
+6. Implement pure, deterministic TypeScript analysis transformations separate from model prompts.
+7. Expose small Zod-validated read-only agent tools (with input examples and `toModelOutput` compaction if payloads are large).
+8. Add unit, SQLite, and `MockLanguageModelV4` tool-loop tests, then wire `doctor` and smoke checks and update `docs/`.
 
-Add a new skill in `src/interactive/skills.ts`.
-
-Give the skill one purpose, exact instructions, and useful suggestions.
-
-Do not give a skill authority to write league or platform data.
+To add a guided workflow skill, register it in `src/interactive/skills.ts` with a single focused purpose, explicit evidence rules, and starter follow-up suggestions—never granting authority to mutate external fantasy platforms.

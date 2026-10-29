@@ -1,46 +1,46 @@
 # Contributing to Seb
 
-Seb is a read-only NFL and fantasy football assistant. Contributions use the [Apache-2.0 license](LICENSE).
-Follow the [Code of Conduct](CODE_OF_CONDUCT.md). Send security reports through [SECURITY.md](SECURITY.md).
+Seb is a source-grounded, read-only NFL and fantasy football AI agent. All contributions are licensed under the [Apache-2.0 License](LICENSE). Please follow our [Code of Conduct](CODE_OF_CONDUCT.md) and report vulnerabilities through [SECURITY.md](SECURITY.md).
 
-## Local setup
+## Local Development Setup
 
-1. Install Node.js 22 or later and npm.
-2. Fork the repository and clone your fork.
-3. Run `npm ci` to install the locked dependencies.
-4. Run `npm link` to add the local `seb` command.
-5. Run `seb configure` for live model access. Unit tests use mocks and require no provider key.
-6. Run `npm run doctor -- --offline` to check local configuration.
+1. Install **Node.js 22+** and `npm`.
+2. Fork the repository, clone your fork, and install locked dependencies:
+   ```bash
+   npm ci
+   npm link
+   ```
+3. Run `seb configure` if you want live model access (unit tests use deterministic mocks and require no API keys).
+4. Verify your local setup offline:
+   ```bash
+   npm run doctor -- --offline
+   ```
 
-The native SQLite dependency can require a C++ compiler, Python, and platform build tools when npm cannot use a prebuilt binary.
-See [SETUP.md](docs/SETUP.md) for provider configuration.
+> [!NOTE]
+> `better-sqlite3` uses prebuilt binaries on supported platforms, falling back to `node-gyp` (Python 3 + C++ toolchain) when a prebuilt binary is unavailable. See [docs/SETUP.md](docs/SETUP.md) for full setup details.
 
-## Changes and tests
+## Making Changes & Running Verification
 
-Create a branch from current `main`. Use `fix/`, `feat/`, `docs/`, or `chore/` plus a short description.
-Use Conventional Commits, such as `fix(sleeper): filter the canonical player map`.
-Add regression tests under `test/` for each bug fix. Keep tests deterministic and independent of live credentials.
-Preserve source evidence, recommendation checks, cancellation, and credential privacy.
+Create a feature branch from `main` (`feat/...`, `fix/...`, `docs/...`, or `chore/...`) and use Conventional Commits (for example, `fix(sleeper): filter canonical player map`).
 
-Run these commands before you open a pull request:
+- Add deterministic regression tests under `test/` for every bug fix or behavioral change.
+- Preserve source provenance, Decision Gate verification, `AbortSignal` cancellation, and credential privacy.
+- Run the full CI verification suite locally before opening a pull request:
 
 ```bash
-npm run check
+npm run version:check
+npm run lint
+npm run typecheck
 npm run test:coverage
-npm run doctor
+npm audit --omit=dev
 ```
 
-`npm run check` checks version parity, lint, types, and tests. Coverage uses the thresholds in `vitest.config.ts`.
-Doctor calls live services and can fail when a provider key or source is unavailable. State the exact result in the pull request.
-Do not include keys, private league data, local databases, or raw provider errors in reports.
+Optionally run `npm run doctor` when live provider credentials and public APIs are reachable, and note the result in your pull request description. Never commit or paste API keys, `.cache/` databases, private league exports, or raw provider errors.
 
-## Pull requests
+## Pull Requests & Versioning
 
-1. Push your branch to your fork.
-2. Open a pull request against `main` with the repository template.
-3. Describe the problem, the resulting behavior, and the test results.
-4. Wait for the Linux and macOS checks to pass.
-5. Resolve review comments. A maintainer uses a squash merge after review.
+1. Push your branch to your fork and open a pull request against `main` using the repository template.
+2. Summarize the root cause, user-visible behavior change, and local verification results.
+3. Ensure both `ubuntu-latest` and `macos-latest` GitHub Actions CI checks pass before squash merge.
 
-Keep version values consistent across the package, lockfile, changelog, environment example, setup guide, and version guide.
-Run `npm run version:check` after any version change.
+When bumping the release version, keep version strings synchronized across `package.json`, `package-lock.json`, `CHANGELOG.md`, `.env.example`, `docs/SETUP.md`, `docs/VERSIONING.md`, `docs/DATA_SOURCES.md`, and the `README.md` badge, then verify with `npm run version:check`. GitHub releases must always be titled in exact `vX.Y.Z` format (for example, `v1.1.2`).

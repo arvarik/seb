@@ -1,362 +1,79 @@
 # Production operations
 
-This guide applies to the connector service.
+This guide covers deploying, scaling, monitoring, and operating Seb's multi-platform chat connector service (`npm run connectors` on Node.js 22+). Local interactive (`seb`) and one-shot CLI (`seb ask`) workflows run in-process without a resident HTTP server.
 
-The command-line agent does not need a resident server.
+## Runtime model and webhook routes
 
-## Runtime model
+Run `npm run connectors` behind a TLS-terminating reverse proxy or load balancer that forwards exact, unmodified raw request bodies to `HOST` and `PORT` so platform HMAC and Ed25519 signature checks succeed. Each webhook acknowledges receipt to the chat platform immediately and executes `ToolLoopAgent` + Decision Gate validation asynchronously under a shared **two-minute deadline** (canceling in-flight streams cleanly on `SIGINT` / `SIGTERM`).
 
-Run `npm run connectors` as a resident Node.js 22 service.
+| Route / transport | Platform | Delivery, formatting, and access rules | Horizontal HTTP scaling |
+| --- | --- | --- | --- |
+| `POST /webhooks/slack` *(or Socket Mode)* | **Slack** | HMAC-signed webhooks (production) or single-instance Socket Mode (dev); native streaming updates and Slack `mrkdwn`. | Yes (webhook mode + shared Redis) |
+| `POST /webhooks/discord` + Gateway | **Discord** | Ed25519-verified interaction webhooks plus **at most one** Gateway consumer per bot token; 2,000-character message chunking. | Webhooks: Yes; Gateway: **1 process per token** |
+| `POST /webhooks/telegram` *(or polling)* | **Telegram** | Secret-token webhook verification (or single-instance polling); 4,096-character chunking; optional `TELEGRAM_ALLOWED_USER_IDS` allowlist. | Webhooks: Yes; Polling: **1 process per token** |
+| `POST /webhooks/groupme` | **GroupMe** | Secret-verified callback (`GROUPME_WEBHOOK_SECRET`), bot post replies via `GROUPME_BOT_ID`, **1,000-character** chunking, and bot self-loop suppression. | Yes (with shared Redis) |
+| `GET /health` | Liveness check | Returns `200` JSON (`enabled` connectors, `state` backend, active background task count) without polling Redis, LLMs, or Sleeper. | All instances |
 
-The service listens on `HOST` and `PORT`.
+Do not restart instances solely on isolated LLM capacity errors—Seb automatically retries the configured fallback model within the active two-minute request budget.
 
-Place an HTTPS reverse proxy or load balancer before the service.
+## Shared Redis state, queueing, and SQLite caches
 
-The proxy must preserve the original webhook request body.
+Connector state uses **Redis 6+** whenever `REDIS_URL` is configured (key prefix `seb`) and falls back to ephemeral in-memory state when `REDIS_URL` is empty. Restrict memory state strictly to single-process local testing, as restarts drop subscriptions and duplicate-event claims and cannot coordinate multiple workers.
 
-The service returns platform acknowledgements before model work finishes.
+Redis coordinates thread subscriptions, distributed per-thread locks, overlapping-message queues, duplicate webhook claims, and short-lived Chat SDK adapter state. Under Chat SDK's `queue` concurrency policy, the first message in a thread starts immediately while overlapping follow-ups queue up to **10 messages per thread** (dropping the oldest item on overflow and expiring queued items after **90 seconds**, passing skipped intermediate messages as context on the next turn).
 
-Background tasks continue the agent request after each acknowledgement.
+Public football source caches, snapshots, canonical identities, FTS5 news indexes, and local usage telemetry remain in each worker's local `.cache/seb.sqlite` (fronted by a 128-entry in-memory L1 cache), **not** in Redis:
 
-## State
+- Grant the service user `0700`/`0600` read-write permissions on `.cache/`, or attach a dedicated local/block volume if snapshots should persist across container restarts.
+- Separate stateless replicas may safely maintain independent `.cache/seb.sqlite` files; **never** mount one SQLite database across network filesystems (such as NFS without POSIX lock guarantees) that break WAL locking.
 
-The connector selects Redis when `REDIS_URL` contains a value.
+## Configuration, secrets, and observability
 
-The connector selects memory state when `REDIS_URL` is empty.
+Store credentials in your deployment secret manager—never baked into container layers or printed in CI logs—and restart instances after rotating static tokens:
 
-Use memory state only for local tests.
+- **Model provider keys**: `GOOGLE_GENERATIVE_AI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY` (plus `SEB_MODEL_PROVIDER`, model overrides, and `https://` `OPENAI_COMPATIBLE_BASE_URL`—loopback-only for `http://`).
+- **Platform credentials & access controls**: Slack bot token & signing secret, Discord bot token / public key / application ID, Telegram bot token / webhook secret / optional `TELEGRAM_ALLOWED_USER_IDS`, and GroupMe `GROUPME_BOT_ID` & `GROUPME_WEBHOOK_SECRET`.
+- **Infrastructure & optional tracing**: `REDIS_URL`, `NWS_USER_AGENT`, and optional `SEB_JUDGMENT_TRACING`, `JUDGMENT_API_KEY`, and `JUDGMENT_ORG_ID`.
 
-Memory state loses subscriptions and duplicate claims after restart.
+> [!IMPORTANT]
+> **Connector environment & `~/.config/seb/` precedence** — At startup, `npm run connectors` runs `loadUserEnvironment(process.env, true)`, which populates unset settings from `~/.config/seb/` (`settings.json`, `credentials.json`, `model-settings.json`, `profile.json`) while giving explicit `process.env` variables priority (and never reading a working-directory `.env`). In production containers or shared hosts, declare explicit environment variables and set `SEB_CONFIG_HOME` to a dedicated empty or service-owned directory so local user files are never inherited unintentionally.
 
-Memory state cannot coordinate more than one service process.
+### Logs, DevTools, and optional Judgment tracing
 
-Redis stores these connector records.
+Connectors write startup/shutdown lifecycle events to `stdout`, error/retry diagnostics to `stderr`, and Chat SDK adapter logs via console streams; ship both streams without logging raw webhook bodies, API keys, `Authorization` headers, compatible base URLs, or SQLite snapshot payloads.
 
-- Thread subscriptions
-- Distributed locks
-- Overlapping-message queues
-- Duplicate event claims
-- Short-lived adapter caches
+When `SEB_JUDGMENT_TRACING=true` (with `JUDGMENT_API_KEY` and `JUDGMENT_ORG_ID`), Seb initializes Judgment OpenTelemetry tracing (`src/ai/judgment.ts`) before handling traffic and flushes pending spans cleanly during graceful shutdown.
 
-Use Redis 6 or a newer compatible service.
+> [!WARNING]
+> Keep `SEB_DEVTOOLS` disabled in production (`NODE_ENV=production` rejects it automatically). Remember that enabling `SEB_JUDGMENT_TRACING=true` sets AI SDK `recordInputs` and `recordOutputs` to `true` and exports prompts, completions, and tool I/O to Judgment's collector, whereas default local `SebUsageTelemetry` remains strictly metadata-only.
 
-Enable Redis persistence according to the service recovery target.
+Track these operational signals in dashboards and alerts:
 
-Restrict Redis network access to the Seb service.
+- Webhook acknowledgement latency, end-to-end agent reply latency, and queue-full drops
+- Successful agent-run rate, post-tool failure count, and bounded error categories (`seb stats --json`)
+- Upstream error rates, circuit-breaker openings, cache outcomes (`fresh`, `updated`, `not-modified`, `stale-if-error`), and NWS forecast age across Sleeper, nflverse, NWS, and newsrooms
+- SQLite write errors, `.cache/seb.sqlite` size, `seb.telemetry.write_failed` warnings, Redis connection errors, Discord Gateway reconnects, and platform post/edit failures
 
-Use a dedicated Redis key prefix or database for each environment.
+## Live contract checks, deployment, and upgrades
 
-The current code uses the `seb` key prefix.
-
-Redis does not store source caches or source snapshots.
-
-Each Seb process uses the local `.cache/seb.sqlite` file for those records.
-
-Give the service user read and write access to the `.cache` directory.
-
-Use one persistent volume when source snapshots must survive a deployment.
-
-Separate instances can use separate SQLite files.
-
-Those instances can download the same public source value independently.
-
-Do not place one SQLite file on a filesystem that breaks SQLite locking.
-
-## Overlapping messages
-
-Seb uses the Chat SDK `queue` strategy.
-
-The first message starts the agent request immediately.
-
-Later messages wait while the same thread remains busy.
-
-The queue keeps up to ten messages for each thread.
-
-The queue removes the oldest item when it becomes full.
-
-Queued messages expire after 90 seconds.
-
-The next agent turn receives skipped intermediate messages as context.
-
-## Service scaling
-
-Use Redis before you start a second HTTP instance.
-
-Slack and Telegram webhooks can use several HTTP instances with shared state.
-
-Run only one Discord Gateway loop for each Discord bot token.
-
-Run only one Slack Socket Mode connection during simple local development.
-
-Run only one Telegram polling process for each Telegram bot token.
-
-Prefer webhooks when several instances must receive traffic.
-
-## Health checks
-
-Use this liveness route.
-
-```text
-GET /health
-```
-
-The route returns `200` while the HTTP process can answer.
-
-The JSON response includes enabled connectors, state type, and background task count.
-
-This route does not call Redis, a model provider, Sleeper, or a platform API.
-
-Add a separate synthetic test when dependency health must affect alerts.
-
-Do not restart the service only because a model provider returns one capacity error.
-
-Seb already retries the configured fallback model.
-
-## Live contract commands
-
-Run these commands manually when you need to validate the external service contracts.
-
-The source contract calls Sleeper, nflverse, and the National Weather Service without local cache data.
-
-Run the same source contracts locally.
+Validate live external contracts before major rollouts or when investigating upstream drift:
 
 ```bash
-npm run contract:sources
+npm run contract:sources   # Sleeper, nflverse, and NWS without cache
+npm run contract:answer    # Gemini structured schema, local tool loop, and Google Search grounding
 ```
 
-The answer contract sends a fixed evidence object to Google Gemini.
-
-It also verifies one local tool result, one model continuation, and one grounded Google Search source.
-
-It requires `GOOGLE_GENERATIVE_AI_API_KEY` in the current environment.
-
-The command validates the structured answer schema, player identity, and recommendation limit.
-
-Run the same answer contract locally when the environment contains the key.
-
-```bash
-npm run contract:answer
-```
-
-Treat a contract failure as a provider or integration change until the evidence shows another cause.
-
-## Secrets
-
-Store these values in the deployment secret store.
-
-- `GOOGLE_GENERATIVE_AI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `OPENAI_API_KEY`
-- `OPENAI_COMPATIBLE_API_KEY` when the endpoint requires it
-- Platform bot tokens
-- Platform signing secrets
-- Webhook verification tokens
-- `REDIS_URL`
-
-Do not bake a secret into a container image.
-
-Do not print `.env` in a build log.
-
-Rotate a platform token after any suspected exposure.
-
-Restart every service instance after a non-dynamic secret rotation.
-
-The connector reads model provider values only from its process environment.
-
-Set `SEB_MODEL_PROVIDER`, the selected key or endpoint, and the model variables in the deployment configuration.
-
-Use HTTPS for every remote OpenAI-compatible endpoint. An HTTP endpoint must use a loopback host.
-
-Test the endpoint with `seb configure` before deployment.
-
-The configuration flow asks for approval before it sends data to a remote origin.
-
-## Logs
-
-The service writes startup and shutdown messages to standard output.
-
-The service writes failures and retry notices to standard error.
-
-The Chat SDK writes adapter lifecycle events through its console logger.
-
-Collect both streams in the deployment log service.
-
-Do not add complete request payloads to production logs.
-
-Do not log model keys, authorization headers, or compatible endpoint URLs.
-
-Do not print SQLite snapshot payloads in normal production logs.
-
-Keep `SEB_DEVTOOLS` disabled in every production environment.
-
-AI SDK DevTools stores complete prompts, model output, and tool data in local files.
-
-Add a request correlation ID at the proxy when cross-service tracing becomes necessary.
-
-Track these operational values.
-
-- Webhook response latency
-- Agent answer latency
-- Model provider error count by provider and safe category
-- Successful agent-run rate
-- Failed run count after a returned client tool
-- Safe model error count by category
-- Sleeper error count by endpoint
-- nflverse download failures by release file
-- NWS error count by endpoint
-- NWS forecast age at answer time
-- Cache result count by fresh, updated, not-modified, and stale-if-error outcomes
-- Open request circuit count by source
-- SQLite write errors and database size
-- Structured `seb.telemetry.write_failed` warning count
-- Platform post and edit failures
-- Discord Gateway reconnect count
-- Redis connection failures
-- Queue full events
-
-## Safe deployment sequence
-
-1. Run `npm ci` in a clean build environment.
-2. Run `npm run check` and `npm run test:coverage`.
-3. Start Redis and verify its network policy.
-4. Add the selected model provider and platform secrets.
-5. Start one Seb instance.
-6. Run `seb cache status` as the service user.
-7. Check `/health`.
-8. Send one test message from each enabled platform.
-9. Confirm one answer and one follow-up answer.
-10. Review logs for signature or permission errors.
-11. Add more HTTP instances only after shared-state verification.
-
-## Upgrade sequence
-
-1. Run `npm run deps:check`.
-2. Read release notes for AI SDK and Chat SDK.
-3. Update related Chat SDK packages together.
-4. Run `npm install` to update the lock file.
-5. Run `npm run check`.
-6. Test one tool call with `npm run test:harness`.
-7. Test one signed webhook per platform.
-8. Deploy to a development environment.
-9. Review streaming and duplicate event behavior.
-10. Promote the tested lock file to production.
-
-Do not update one Chat SDK adapter without checking the core `chat` version.
-
-Dependabot groups the Chat SDK packages and groups Vitest with its coverage packages.
-
-Check the Chat SDK test package peer requirements before a Vitest major upgrade.
-
-Version 1.0.0 uses Vitest 4 because `@chat-adapter/tests` 4.40.0 requires it.
-
-## Incident actions
-
-### The model provider fails
-
-Confirm `SEB_MODEL_PROVIDER`, its key or endpoint, and both model names.
-
-Check whether the fallback model also fails.
-
-Run `seb doctor` with the same environment as the service.
-
-Keep webhook acknowledgements active so platforms do not create a retry storm.
-
-### Current news fails
-
-Inspect the visible web source list in a local reproduction.
-
-Run the live direct source probe.
-
-```bash
-npm run news:smoke
-```
-
-Inspect the failed source ID, discovery URL, and publication date.
-
-Check the site's robots policy and required crawl delay.
-
-Retry the request after a temporary direct source error.
-
-When Google is active, also check for a Google Search error.
-
-Do not replace current reporting with model memory.
-
-Keep the answer unavailable when both direct and secondary coverage fail.
-
-### Sleeper fails
-
-Run `npm run sleeper:smoke` from the same network.
-
-Inspect the failed endpoint and status in the service log.
-
-Do not substitute model memory for current Sleeper data.
-
-### nflverse fails
-
-Run `npm run data:smoke` from the same network.
-
-Check the requested season and release file URL.
-
-Use `/refresh nflverse` in interactive mode after a source update.
-
-Use `seb cache clear` from the service directory when all cache namespaces need a refresh.
-
-Do not substitute model memory for a schedule or statistic.
-
-### The National Weather Service fails
-
-Confirm that `NWS_USER_AGENT` identifies the application.
-
-Run `npm run data:smoke` from the same network.
-
-Keep weather unavailable until the NWS request succeeds.
-
-Do not replace the forecast with model memory.
-
-### Seb reports stale source data
-
-Inspect `/sources` in an interactive reproduction.
-
-The result shows the failed refresh and cached retrieval time.
-
-Check source access before you clear the local cache.
-
-Seb stops using that value after its stale-if-error period expires.
-
-### SQLite fails
-
-Run `seb cache status` as the service user.
-
-Confirm the `.cache` directory owner and permissions.
-
-Confirm that the volume supports SQLite locks and atomic writes.
-
-Restore the database backup when historical snapshots matter.
-
-Read the [storage recovery guide](STORAGE.md) before you replace the file.
-
-### Redis fails
-
-Stop extra connector instances.
-
-Restore Redis before normal production traffic resumes.
-
-Do not switch a multi-instance service to memory state.
-
-### A platform token leaks
-
-Revoke or rotate the token in the platform console.
-
-Update the deployment secret.
-
-Restart the affected connector service.
-
-Review recent platform activity for unauthorized posts.
-
-### Duplicate answers appear
-
-Confirm that every instance uses the same Redis service.
-
-Confirm that the proxy does not change signed webhook bodies.
-
-Confirm that only one polling or Gateway process uses each bot token.
+### Safe deployment and upgrade checklist
+
+1. **Build & verify**: Run `npm ci`, `npm run check`, `npm run test:coverage`, and `npm audit --omit=dev` in a clean environment.
+2. **State & secrets**: Provision Redis 6+ with restricted network ACLs, set explicit provider/platform secrets and `SEB_CONFIG_HOME`, and start a single connector instance first.
+3. **Smoke check**: Verify `seb cache status`, `GET /health`, and one message plus one threaded follow-up on each enabled platform (Slack, Discord, Telegram, GroupMe) before scaling additional HTTP replicas.
+4. **Dependency upgrades**: Run `npm run deps:check`, update grouped Chat SDK packages (`chat` and `@chat-adapter/*`, currently `4.43.0`) together alongside grouped Vitest + `@vitest/coverage-v8` (`5.0.5`), run `npm run test:harness` and signed webhook checks in staging, and promote the verified `package-lock.json`.
+
+## Incident runbooks
+
+- **Model provider failure**: Verify `SEB_MODEL_PROVIDER`, API keys/endpoints, and primary + fallback model IDs; run `seb doctor` with the service environment while keeping HTTP webhook acknowledgements online to prevent platform retry storms.
+- **First-class or grounded news failure**: Run `npm run news:smoke` to pinpoint failing publisher IDs, `robots.txt` policies, or date changes (and check Google Search status if Gemini is active). Never substitute model memory when news sources fail.
+- **Sleeper, nflverse, or NWS outage**: Probe from the service network via `npm run sleeper:smoke` or `npm run data:smoke` (confirming `NWS_USER_AGENT` for weather). Inspect `/sources` if `stale-if-error` fallbacks activate, and preserve cached entries until upstream health recovers rather than wiping caches mid-outage.
+- **SQLite or Redis failure**: For SQLite errors, verify `.cache/` permissions and POSIX locking via `seb cache status` (see the [storage recovery guide](STORAGE.md)). For Redis outages, scale down to zero extra HTTP replicas and restore Redis before resuming traffic—never fail over a multi-instance cluster to memory state.
+- **Leaked token or duplicate replies**: Immediately revoke/rotate compromised platform or provider keys, update secrets, restart workers, and audit recent bot posts. If duplicate answers appear, verify every replica shares the same `REDIS_URL`, proxies preserve raw webhook bodies, and at most one Discord Gateway or Telegram polling worker runs per token.

@@ -6,6 +6,37 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-10-28
+
+### Added
+
+- **Self-Healing Decision Gate Recovery (`buildRecommendationRecoveryPrompt`)**: Automatically executes one recovery pass across interactive sessions, `seb ask`, and chat connectors when a recommendation is blocked by missing or stale context, clearing stale Sleeper, news, and weather caches first before withholding advice.
+- **Auto-Resolved Single-League Context & Slot Inference**: Automatically resolves league scoring settings when a queried player belongs to a single owned Sleeper league, infers the narrowest compatible flex slot (`WRRB_FLEX`, `REC_FLEX`, `WRTE_FLEX`, `FLEX`, `WRRBTE_FLEX`, `SUPER_FLEX`) in `compareStartSit`, and surfaces bench projections (`bench`) in compacted `optimizeRosterLineup` outputs.
+- **GroupMe Setup Guide (`docs/connectors/GROUPME.md`)**: Step-by-step setup documentation for GroupMe bots, `?secret=` webhook authentication, thread subscription, and 1,000-character chunking.
+
+### Changed
+
+- **Full Documentation Modernization**: Overhauled `README.md` and all guides under `docs/` with architecture and pipeline Mermaid diagrams, unified configuration/CLI/skill tables, accurate connector environment precedence, and updated storage, data-source, and forecasting specifications.
+- **Context Compaction & Tool-Call Receipts**: Replaced aggressive context drops with two-pass interactive turn compaction (preserving up to 3 uncompacted recent turns within the 120k-character budget) and `[Verified tool calls in this turn (outputs compacted): ...]` summaries so follow-up challenges retain prior grounding receipts.
+- **News Discovery Resilience**: Enforced bounded per-source (`8s`) and total search (`20s`) deadlines in `NewsClient`, single-attempt feed discovery, and a 30-category cap per RSS/Atom item so verbose feeds never fail schema validation.
+
+### Fixed
+
+- **Recommendation Eligibility Edge Cases**:
+  - Scope open-ended waiver checks (`rankWaiverTargets` + `getRosterPlayers`) to recommended targets rather than all existing rostered players, and treat successful zero-headline news searches as verified silence rather than missing coverage.
+  - Detect retired or teamless players (`team: null`) and illegal/nonexistent explicit slots (such as `Superflex` in single-QB leagues) so verified refusals pass cleanly without triggering `DECISION UNAVAILABLE`.
+- **Provider Fallbacks & Diagnostics**: Preserve provider-specific fallback model families (`gemini-flash-lite`, `claude-haiku`, `gpt-mini`) on provider-only overrides (`/provider`, `--provider`), and replace forced `toolChoice` in `seb doctor` when probing Anthropic thinking models.
+- **Connectors & Judgment Telemetry**:
+  - Preserve incoming user turn order in `buildPrompt` and monotonic `dateSent` timestamps in `createGroupMeAdapter` when coarse integer-second webhooks arrive within the same second as bot reply chunks, and strip `## Evidence` appendices from compacted connector history.
+  - Record single-turn root `input` payloads in Judgment interactive/connector traces and clamp Gemini hosted-search server-tool span timestamps within parent LLM spans.
+- **Environment Template Validation**: Use strict `'true'`/`'false'` boolean literals for `SEB_SESSIONS` and `SEB_HISTORY` in `.env.example` so `seb configure --import-env` succeeds without validation errors.
+
+### Dependencies
+
+- Upgrade `ai` to `7.0.156`, `@ai-sdk/anthropic` to `4.0.91`, `@ai-sdk/google` to `4.0.107`, `@ai-sdk/openai` to `4.0.104`, `@ai-sdk/openai-compatible` to `3.0.80`, `@ai-sdk/otel` to `1.0.156`, and `@ai-sdk/devtools` to `1.0.59`.
+- Upgrade `chat` and `@chat-adapter/*` (`discord`, `slack`, `telegram`, `state-memory`, `state-redis`, `tests`) to `4.43.0`.
+- Upgrade `judgeval` to `1.5.0`, `hono` to `4.13.14`, `oxlint` to `1.90.0`, and `@types/node` to `26.6.6`.
+
 ## [1.1.1] - 2026-10-15
 
 ### Added

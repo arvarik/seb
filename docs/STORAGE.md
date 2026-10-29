@@ -1,498 +1,152 @@
 # Storage, cache, and snapshot guide
 
-Seb uses one local SQLite database for source caches, historical snapshots, identities, and usage telemetry.
+Seb separates private user configuration and resumable transcripts (`~/.config/seb/`) from working-directory SQLite caches, snapshots, canonical identities, FTS5 news indexes, and metadata-only usage telemetry (`.cache/seb.sqlite`) as well as chronological football learning revisions (`.cache/learning/`).
 
-The default file is `.cache/seb.sqlite` under the current working directory.
+```mermaid
+flowchart TD
+  subgraph UserHome["User Configuration (~/.config/seb, mode 0700)"]
+    SET["settings.json (0600, Persistent Env Defaults)"]
+    CRED["credentials.json (0600, API Keys & Endpoint Bindings)"]
+    MOD["model-settings.json (0600, Provider & Primary/Fallback Models)"]
+    PROF["profile.json (0600, Optional Sleeper Username)"]
+    HIST["history.json (0600, Serialized Prompt History)"]
+    SESS["sessions/{id}.json (0600, SessionStore Transcripts)"]
+  end
 
-Run Seb from a consistent directory when you want one shared local cache.
+  subgraph WorkCache["Working-Directory Cache (.cache/, mode 0700)"]
+    L1["CachedResource L1 (128-entry In-Memory Map)"]
+    subgraph SQLite["seb.sqlite (mode 0600, WAL, Schema 6)"]
+      CE["cache_entries & cache_generations"]
+      SNAP["snapshots (Payloads + Provenance + SHA-256)"]
+      ID["identities & identity_links"]
+      FTS["news_articles_fts (FTS5 porter unicode61 BM25)"]
+      USE["usage_runs, usage_steps & usage_tool_calls"]
+    end
+    subgraph Learn["learning/"]
+      OVR["overrides.json & .update-lock/"]
+      REV["{season}-{hash}/{week}-{sha256}.json"]
+    end
+  end
 
-Run this command to confirm the active file.
+  DEV[".devtools/ (Dev-Only Traces when SEB_DEVTOOLS=true)"]
 
-```bash
-seb cache status
+  L1 -->|"Cache miss or namespace refresh"| CE
+  CE -->|"Hydrate L1 entry"| L1
 ```
 
-The command also shows the schema version, byte sizes, and record counts.
-
-The counts cover caches, snapshots, canonical identities, source links, usage runs, model steps, and tool calls.
-
-Text output names `Canonical identities` and `Identity source links`.
-
-JSON output uses `identities` and `identityLinks` for those counts.
-
-## File security
-
-Seb applies mode `0700` to the `.cache` directory on systems that support Unix permissions.
-
-Seb creates the database with mode `0600`.
-
-These modes restrict access to the current operating-system user.
-
-The repository ignores `.cache/`.
-
-Do not commit the database. It can contain league records and source responses.
-
-## Model configuration files
-
-Seb keeps model configuration outside the SQLite database.
-
-The default configuration directory contains these files.
-
-| File | Content |
-| --- | --- |
-| `profile.json` | The optional Sleeper username and update time. |
-| `credentials.json` | Saved keys and the endpoint binding for an OpenAI-compatible key. |
-| `model-settings.json` | The active provider, model IDs, fallback model IDs, and an optional compatible base URL. |
-
-The default directory is `~/.config/seb`.
-
-`SEB_CONFIG_HOME` or `XDG_CONFIG_HOME` can select another directory.
-
-`SEB_PROFILE_FILE` can select the complete profile path. The two provider files stay beside that path.
-
-`SEB_MODEL_SETTINGS_FILE` can select the complete model settings path.
-
-Seb gives a newly created configuration directory mode `0700` on Unix systems.
-
-Seb keeps the existing mode of a custom configuration directory.
-
-It writes each file with mode `0600` and uses an atomic replacement.
-
-Each provider file uses schema version `1` and has a 64 KiB limit.
-
-One saved key has a 16 KiB limit. Model IDs have a 200-character limit.
-
-The model settings file stores no key or authorization header.
-
-The compatible base URL is not a secret. It can reveal a service hostname.
-
-Do not commit any local configuration file.
-
-Environment values override the corresponding saved credentials and settings.
-
-Connector services read provider values from their environment only.
-
-## SQLite configuration
-
-Seb uses these SQLite settings.
-
-- Write-ahead logging supports readers during a write.
-- Normal synchronous mode reduces disk waits while it keeps transaction safety.
-- Foreign-key checks remain active.
-- A write waits up to five seconds for another writer.
-- Temporary tables remain in memory.
-
-Seb applies numbered schema migrations when it opens the database.
-
-Version 1.0.0 uses database schema `6`.
-
-Schema `6` rebuilds the usage tables as strict tables. It validates every saved row and preserves valid schema `5` telemetry.
-
-Seb rejects external links to usage tables and unexpected usage indexes when it opens schema `6`.
-
-Seb also rejects every database trigger because a cross-table trigger can change telemetry.
-
-Schema `5` adds local usage runs, model steps, and tool calls.
-
-Schema `4` added durable cache namespace generations.
-
-Schema `3` added a checksum for each provenance manifest.
-
-Schema `2` added canonical identities and provider source links.
-
-Seb upgrades older database schemas with numbered transactions.
-
-Seb stops when the database schema is newer than the application.
-
-Upgrade Seb before you open a database from a newer release.
-
-## Database tables
-
-The database contains eight application tables and one FTS5 virtual table.
-
-| Table | Purpose |
-| --- | --- |
-| `cache_entries` | Stores normalized source values and freshness times. |
-| `snapshots` | Stores historical source payloads and provenance. |
-| `identities` | Stores canonical player and team records. |
-| `identity_links` | Maps provider source IDs to canonical IDs. |
-| `cache_generations` | Tracks durable cache namespace revisions. |
-| `usage_runs` | Stores one local agent run and its final state. |
-| `usage_steps` | Stores one logical AI SDK model step. |
-| `usage_tool_calls` | Stores one client or provider tool call. |
-| `news_articles_fts` | SQLite FTS5 virtual table (`porter unicode61`) for BM25 full-text news indexing. |
-
-The identity link table uses a foreign key to its canonical identity.
-
-Deleting a canonical identity also deletes its source links.
-
-Each identity payload has a SHA-256 checksum and update time.
-
-Read the [identity guide](IDENTITIES.md) for stable canonical ID rules.
-
-## Usage telemetry
-
-Schema `6` stores local analytics in three strict, linked tables.
-
-`usage_runs` stores the run identifier, session identifier, surface, agent kind, timestamps, status, finish reason, and bounded error category.
-
-Terminal status can move from completed to failed or aborted.
-
-It can also move from failed to aborted.
-
-The database rejects a move in the opposite direction.
-
-This rule preserves late AI SDK validation and cancellation callbacks.
-
-The first terminal timestamp does not change during a status correction.
-
-`usage_steps` stores the provider, model, finish state, token classes, latency, service tier, and grounding counts.
-
-`usage_tool_calls` stores the tool identifier, tool name, execution location, outcome, duration, and dynamic flag.
-
-One model step can own many tool-call records.
-
-Foreign keys link model steps to runs and tool calls to model steps.
-
-Deleting a run also deletes its model steps and tool calls.
-
-Seb accepts at most 10,000,000,000 tokens in one stored metric.
-
-Seb accepts at most 365 days for one stored duration.
-
-Seb rejects larger, negative, or nonfinite values before each write.
-
-Usage timestamps use canonical ISO 8601 UTC text. Seb rejects impossible calendar dates.
-
-The database keeps an unavailable provider metric as `NULL`.
-
-This rule preserves the difference between unknown usage and reported zero usage.
-
-One model step represents one logical AI SDK call.
-
-Provider HTTP retries can occur inside that call. Seb cannot count those retries from local events.
-
-The tables store identifiers, timestamps, numeric metrics, and bounded categories.
-
-They do not store prompts, answers, tool inputs, tool results, or raw errors.
-
-They also exclude keys, authorization headers, and compatible endpoint URLs.
-
-AI SDK DevTools stores complete content separately under `.devtools/` when a developer enables it.
-
-## Cache records
-
-Each cache record stores these values.
-
-- A source namespace and cache key.
-- The normalized source value.
-- The retrieval, expiry, and stale-until times.
-- The source URL.
-- The source schema version.
-- The `ETag` and `Last-Modified` validators when the source supplies them.
-- A SHA-256 checksum of the stored value.
-
-Seb deletes a cache record when its checksum or JSON value is invalid.
-
-Seb ignores a cached value when its source schema version changes.
-
-Seb also ignores a cached value when its source URL does not match the request.
-
-Seb calculates freshness from the retrieval time and the current client policy.
-
-This rule lets a policy update take effect without a database migration.
-
-Seb writes the recalculated deadlines before a storage prune can delete the record.
-
-## Freshness periods
-
-The fresh period controls normal cache reads.
-
-The stale period controls the backup window after a refresh error.
-
-| Source value | Fresh period | Additional stale period |
-| --- | ---: | ---: |
-| Sleeper player catalog | 24 hours | 7 days |
-| Sleeper trends and filtered players | 1 minute | 10 minutes |
-| Sleeper matchups and transactions | 2 minutes | 1 day |
-| Other Sleeper records | 5 minutes | 1 hour |
-| nflverse schedules | 6 hours | 7 days |
-| nflverse weekly statistics | 6 hours | 7 days |
-| NWS point metadata | 7 days | 30 days |
-| NWS hourly forecasts | 10 minutes | 6 hours |
-| NWS active alerts | 2 minutes | 30 minutes |
-
-Seb returns a fresh cache record without a network request.
-
-Seb sends a conditional request after the fresh period ends.
-
-A `304 Not Modified` response renews the cache times without replacing the value.
-
-Seb uses an eligible stale record only after the refresh fails.
-
-Seb never uses an expired record.
-
-Seb never uses a stale record after the caller cancels the request.
-
-The `/sources` command marks a stale fallback and shows the refresh error.
-
-## Request resilience
-
-Each source client uses a bounded request policy.
-
-The default policy makes at most three attempts.
-
-It retries status `408`, `425`, `429`, `500`, `502`, `503`, and `504`.
-
-It also retries temporary network errors.
-
-The delay uses exponential backoff with full jitter.
-
-Seb honors a numeric or dated `Retry-After` value.
-
-The maximum retry delay is five seconds.
-
-A caller cancellation stops the active download and the retry delay.
-
-The cancellation does not count as a source failure.
-
-For nflverse, cancellation also stops file expansion and CSV parsing.
-
-Five consecutive final failures open the client circuit for 30 seconds.
-
-The circuit rejects new requests until that period ends.
-
-Sleeper and NWS requests use a 15-second timeout.
-
-nflverse requests use a 20-second timeout.
-
-The doctor can use shorter source-specific limits.
-
-Concurrent reads in one Seb process join one source refresh per database file.
-
-Each caller waits with its own cancellation signal.
-
-The shared refresh continues while another caller still waits for it.
-
-Seb cancels the shared refresh when no callers remain.
-
-One shared refresh writes one cache record and one source snapshot.
-
-Each caller keeps its own eligible stale fallback when the shared refresh fails.
-
-## Snapshots
-
-Seb creates a snapshot after a successful source update.
-
-It does not create a new snapshot after a fresh cache hit or a `304` response.
-
-Each snapshot stores these values.
-
-- A random snapshot ID.
-- The snapshot kind and entity key.
-- The snapshot and creation times.
-- The source timestamp when one exists.
-- The normalized source payload.
-- The field-level provenance manifest.
-- The source schema version.
-- A SHA-256 payload checksum.
-- A SHA-256 provenance checksum.
-
-One snapshot cannot exceed 32 MiB.
-
-One provenance manifest cannot exceed 32 MiB.
-
-Seb keeps total snapshot payload and provenance data under 512 MiB.
-
-Seb retains eight Sleeper player snapshots for the player catalog.
-
-Seb retains eight nflverse schedule snapshots for the schedule key.
-
-Seb retains four nflverse statistics snapshots for each season key.
-
-Other Sleeper streams retain eight or sixteen records for each key.
-
-NWS point streams retain eight records for each key.
-
-NWS forecast and alert streams retain sixteen records for each key.
-
-Snapshot creation errors do not hide a valid source response.
-
-List recent snapshots.
-
-```bash
-seb snapshots
-seb snapshots --kind nflverse-player-stats
-seb snapshots --entity player-stats-v1-2025
-seb snapshots --id SNAPSHOT_ID
-seb snapshots --id SNAPSHOT_ID --json
-seb snapshots --limit 100 --json
-```
-
-List mode returns snapshot metadata without source payloads.
-
-The `--id` option shows freshness and the tracked field paths.
-
-Add `--json` with `--id` to receive the complete provenance manifest.
-
-Use `/snapshots` inside chat to list the latest 20 records.
-
-Use `/provenance SNAPSHOT_ID` to inspect up to 50 field paths and source IDs.
-
-## Cache maintenance
-
-Show cache status.
+Run Seb from a consistent working directory when you want CLI invocations to share `.cache/seb.sqlite`, and inspect live storage counts and byte sizes at any time with:
 
 ```bash
 seb cache status
 seb cache status --json
 ```
 
-Prune expired cache rows and old snapshots.
+Both `.cache/` and newly created `~/.config/seb/` directories apply Unix mode `0700`, and individual SQLite, JSON config, session, history, and learning files are written with mode `0600` (using private temporary files and atomic renames for JSON stores). Never commit `.cache/`, `.devtools/`, or `~/.config/seb/` files to version control.
+
+## User configuration and session files (`~/.config/seb`)
+
+Seb keeps user preferences, credentials, prompt history, and interactive sessions outside SQLite under `~/.config/seb` by default (`SEB_CONFIG_HOME` or `XDG_CONFIG_HOME` selects an alternate root; `SEB_PROFILE_FILE` and `SEB_MODEL_SETTINGS_FILE` override specific file paths):
+
+| File | Schema & size bounds | Stored content |
+| --- | --- | --- |
+| `settings.json` | Validated via `configuration-registry.ts`, atomic `0600` | Non-secret persistent environment defaults (`NWS_USER_AGENT`, default Sleeper username, model/tracing toggles). |
+| `credentials.json` | Schema `1`, `<= 64 KiB` (`<= 16 KiB` per key), atomic `0600` | Provider API keys and canonical base-URL bindings for OpenAI-compatible keys. |
+| `model-settings.json` | Schema `1`, `<= 64 KiB` (`<= 200` chars per model ID), atomic `0600` | Saved active provider, primary/fallback model IDs, and optional compatible base URL (no secrets). |
+| `profile.json` | Schema `1`, bounded regular-file read, atomic `0600` | Optional default Sleeper username and update timestamp (never stores API keys). |
+| `history.json` | Bounded regular-file read, serialized atomic `0600` queue | Interactive prompt history across terminal runs. |
+| `sessions/<id>.json` | Bounded regular-file read, atomic `0600` (`SessionStore`) | Resumable interactive conversation transcripts and session metadata (`seb resume <id>`, `seb sessions`). |
+
+Both CLI commands and chat connector processes load saved `~/.config/seb/` defaults at startup via `loadUserEnvironment(process.env, true)` for any unset environment variables, while explicit `process.env` variables always override saved file values.
+
+## SQLite configuration and schema 6
+
+Seb opens `.cache/seb.sqlite` with `WAL` journaling, `synchronous = NORMAL`, enforced `foreign_keys = ON`, `temp_store = MEMORY`, and a `5,000 ms` `busy_timeout`. Numbered transactional migrations upgrade older databases through **schema `6`** (`2`: canonical identities; `3`: provenance checksums; `4`: durable cache namespace generations; `5`: usage tables; `6`: `STRICT` usage tables with row validation, unexpected-index/foreign-key rejection, and a zero-trigger policy so cross-table triggers cannot tamper with telemetry). If `.cache/seb.sqlite` carries a schema version newer than the installed Seb binary, startup halts safely rather than risking downgrade corruption.
+
+| Table | Type | Purpose |
+| --- | --- | --- |
+| `cache_entries` | Table | Normalized source values, `ETag`/`Last-Modified` validators, schema version, URL, TTLs, and SHA-256 checksums. |
+| `cache_generations` | Table | Durable per-namespace generation counters incremented on `/refresh` or `seb cache clear`. |
+| `snapshots` | Table | Historical source payloads, JSON Pointer provenance manifests, and dual SHA-256 checksums. |
+| `identities` | Table | Canonical NFL franchises and player profiles with SHA-256 checksums (see [identity guide](IDENTITIES.md)). |
+| `identity_links` | Table | Provider source-ID mappings with `ON DELETE CASCADE` foreign keys to `identities`. |
+| `usage_runs` | `STRICT` table | Agent run lifecycle records, surfaces, timestamps, and bounded error categories. |
+| `usage_steps` | `STRICT` table | Logical AI SDK model steps, token classes, latencies, grounding counts, and `ON DELETE CASCADE` to `usage_runs`. |
+| `usage_tool_calls` | `STRICT` table | Client and provider tool executions, outcomes, durations, and `ON DELETE CASCADE` to `usage_steps`. |
+| `news_articles_fts` | FTS5 virtual table | Porter-stemmed (`porter unicode61`) BM25 full-text index over validated first-class news articles. |
+
+## Usage telemetry
+
+Schema `6` persists local analytics across `usage_runs`, `usage_steps`, and `usage_tool_calls`. Terminal run statuses enforce monotonic precedence (`completed` $\rightarrow$ `failed` $\rightarrow$ `aborted`, or `failed` $\rightarrow$ `aborted`) without altering the initial terminal timestamp so late structured-output validation errors or stream aborts resolve deterministically. Numeric guards cap single token metrics at `10,000,000,000` and durations at `365 days`, canonical ISO 8601 UTC calendar dates are validated before write, and omitted provider metrics remain `NULL` rather than `0`.
+
+> [!IMPORTANT]
+> `usage_*` tables store identifiers, timestamps, numeric token/latency metrics, and bounded categories only—never prompts, answers, tool inputs/outputs, raw error strings, API keys, or compatible endpoint URLs. Optional full-content traces live strictly in `.devtools/` (dev-only) or opt-in Judgment OpenTelemetry exports.
+
+## Two-tier cache (`CachedResource`) and freshness periods
+
+Every cached source read passes through `CachedResource`, combining a **128-entry in-memory L1 `Map`** with SQLite L2 (`cache_entries`):
+
+- **L1 & L2 coherence**: Hot repeated lookups (such as schedule, roster, and season player-stat reads across a 40-player batch or combinatorial lineup solve) resolve directly from the 128-entry L1 `Map` without SQLite deserialization overhead, evicting oldest entries when full and clearing immediately on namespace invalidation.
+- **Validation & revalidation**: SQLite L2 hits verify matching source URLs, matching client schema versions, and valid SHA-256 checksums (deleting corrupted rows automatically) and recalculate fresh/stale deadlines from `retrievedAt` under current client TTL rules before pruning. Expired fresh windows send conditional `If-None-Match` / `If-Modified-Since` headers when validators exist (`304 Not Modified` renews TTLs without creating a duplicate snapshot).
+- **Single-flight refresh & `stale-if-error`**: Concurrent callers in one process share a single upstream refresh per database file and key while keeping independent `AbortSignal` handles (canceling the upstream fetch only if *every* waiter aborts). Refresh failures fall back to un-expired `stale-if-error` entries (flagged in `/sources`), whereas user cancellations never serve stale data.
+
+| Source namespace & value | Fresh period | Additional `stale-if-error` window |
+| --- | ---: | ---: |
+| Sleeper player catalog | 24 hours | 7 days |
+| Sleeper trending & filtered players | 1 minute | 10 minutes |
+| Sleeper matchups & transactions | 2 minutes | 1 day |
+| Other Sleeper endpoints (state, leagues, rosters, settings) | 5 minutes | 1 hour |
+| nflverse schedules (`schedules-v*`) | 6 hours (**15 minutes** during live active-week games awaiting final scores) | 7 days |
+| nflverse weekly player stats, PBP defense (`defense-v2-YEAR`), & team stats (`defense-team-v1-YEAR`) | 6 hours | 7 days |
+| NWS point metadata | 7 days | 30 days |
+| NWS hourly forecasts / active alerts | 10 minutes / 2 minutes | 6 hours / 30 minutes |
+| First-class news discovery (`nfl` sitemap, RSS, publisher pages) | 30 seconds – 20 minutes | Up to 1 day (PFF: none; see [data source guide](DATA_SOURCES.md)) |
+| Enriched news article metadata / `robots.txt` policies | 1 minute / 24 hours | 7 days / 30 days |
+
+## Request resilience and snapshots
+
+`ResilientFetch` caps upstream calls at **3 attempts** with full-jitter exponential backoff (`Retry-After` honored up to 5 seconds), retrying transient HTTP statuses (`408`, `425`, `429`, `500`, `502`, `503`, `504`), **Cloudflare origin errors (`520`, `521`, `522`, `523`, `524`, `529`)**, and temporary network errors. Five consecutive final failures open a **30-second per-origin circuit breaker** (`15 s` timeouts on Sleeper, NWS, and News; `20 s` on nflverse). Caller cancellation aborts active downloads, gzip expansion, CSV parsing, and retry waits without tripping shared circuit breakers.
+
+Successful fresh network updates write one immutable record to `snapshots` (`<= 32 MiB` payload, `<= 32 MiB` provenance manifest, `512 MiB` default total cap; snapshot write errors never mask a valid live response). Default per-key retention keeps **8** snapshots for Sleeper player catalogs, nflverse schedules, and NWS point metadata, **4** per season key for nflverse weekly player/defense/team statistics, and **8–16** for dynamic Sleeper and NWS forecast/alert keys:
 
 ```bash
-seb cache prune
-seb cache prune --max-size-mb 256 --max-age-days 90 --retain 8
+seb snapshots
+seb snapshots --kind nflverse-player-stats --entity player-stats-v1-2025
+seb snapshots --id SNAPSHOT_ID --json
 ```
 
-The default prune keeps sixteen snapshots per source key for 180 days.
+Inside chat, use `/snapshots` (latest 20) and `/provenance SNAPSHOT_ID` (up to 50 field paths).
 
-The default snapshot size limit is 512 MiB.
+## Cache, telemetry, and learning maintenance
 
-The prune command checkpoints SQLite and runs `VACUUM`.
-
-Clear source caches while you preserve every snapshot.
+Prune or clear caches from the CLI (where `prune` checkpoints WAL and runs `VACUUM`, defaulting to 16 snapshots/key, 180 days, and 512 MiB, while `clear` wipes `cache_entries` and `news_articles_fts` without touching snapshots, identities, or telemetry):
 
 ```bash
+seb cache prune --max-size-mb 256 --max-age-days 90 --retain 8
 seb cache clear
 ```
 
-The clear command also preserves canonical identities and source links.
-
-Interactive refresh commands clear one source namespace.
+Inside interactive chat, invalidate individual source namespaces (both L1 `Map` and SQLite L2) with:
 
 ```text
 /refresh sleeper
 /refresh nflverse
 /refresh weather
+/refresh news
 /refresh all
 ```
 
-The next source request downloads fresh data.
-
-When a shared database closes, Seb removes it from the shared registry.
-
-A later open creates a working database connection for the same file.
-
-### Usage retention
-
-Keep the latest 90 days and remove older usage runs.
-
-```bash
-seb stats prune
-```
-
-Select another retention period.
+Manage usage telemetry retention separately (`--include-unfinished` removes orphaned `running` rows once all other Seb processes are stopped):
 
 ```bash
 seb stats prune --retain-days 30
-seb stats prune --retain-days 30 --json
-seb stats prune --retain-days 30 --include-unfinished
-```
-
-The prune command deletes finished runs that started before the exclusive cutoff.
-
-SQLite also deletes each matching model-step and tool-call record.
-
-The default prune preserves unfinished runs. Another Seb process can still write to these rows.
-
-Stop every other Seb process before you use `--include-unfinished`.
-
-An active recorder can recreate its run after this command deletes the row.
-
-Remove all saved usage telemetry.
-
-```bash
 seb stats clear
-seb stats clear --json
-seb stats clear --include-unfinished
 ```
 
-The default clear command preserves unfinished runs. It deletes all other usage runs and their child records.
+Optional chronological football learning files live separately in `.cache/learning/` (scoring-profile directories, SHA-256 revisions, and `overrides.json`); see [Storage and privacy in the analysis guide](ANALYSIS.md#storage-and-privacy). If `.cache/seb.sqlite` ever fails to open due to disk corruption, check `0700`/`0600` ownership with `seb cache status`, restore from backup if historical snapshots are needed, or move the damaged file aside so Seb initializes a clean database.
 
-Use `--include-unfinished` to delete every usage run that exists during the command.
+<details>
+<summary>Legacy pre-1.0 JSON cache cleanup</summary>
 
-Stop every other Seb process first. An active recorder can recreate its run after deletion.
+Early `0.0.1` builds wrote flat JSON files such as `.cache/sleeper/players-nfl.json`. Current releases use `.cache/seb.sqlite` exclusively and ignore legacy `.cache/**/*.json` cache files (apart from `.cache/learning/`). After verifying `seb cache status` and `seb doctor`, inspect `find .cache -maxdepth 2 -type f -name '*.json'` (excluding `.cache/learning/`) before removing obsolete pre-1.0 files.
 
-This option also removes stale rows from interrupted processes.
-
-These commands act immediately. Back up the database first when you need the records.
-
-The commands preserve source caches, snapshots, canonical identities, and source links.
-
-`seb cache prune` does not delete usage telemetry.
-
-## Migration from version 0.0.1
-
-Version `0.0.1` stored the Sleeper player catalog in `.cache/sleeper/players-nfl.json`.
-
-Some development builds stored other source values as JSON files under `.cache/`.
-
-Version `0.0.10` does not import those JSON files.
-
-It creates `.cache/seb.sqlite` and downloads each source again when necessary.
-
-Use this migration sequence.
-
-1. Upgrade the dependencies.
-
-   ```bash
-   npm install
-   ```
-
-2. Start Seb once to create the SQLite database.
-
-   ```bash
-   seb cache status
-   ```
-
-3. Confirm that public sources work.
-
-   ```bash
-   seb doctor
-   ```
-
-4. List old JSON cache files.
-
-   ```bash
-   find .cache -type f -name '*.json' -print
-   ```
-
-5. Remove only the old Seb JSON files after you inspect the list.
-
-The old JSON files do not affect version `0.0.10` reads.
-
-Do not delete `.cache/seb.sqlite` when you need the stored snapshots.
-
-Deleting the database also deletes persistent identity mappings.
-
-It also deletes all local usage telemetry.
-
-## Recovery
-
-Run `seb cache status` when the database does not open.
-
-Check the directory and file permissions first.
-
-Restore a database backup when you need historical snapshots.
-
-Move an unreadable database to a safe backup path when snapshots do not matter.
-
-Start Seb again to create a new database.
-
-## Forecast learning
-
-Seb stores optional football learning in `.cache/learning`, separately from source caches and usage telemetry.
-Revisions use scoring-profile directories, content checksums, and a bounded correction history.
-The override file controls whether future forecasts use learned or manual parameters.
-Read the [learning storage guide](ANALYSIS.md#storage-and-privacy) before changing these files.
+</details>

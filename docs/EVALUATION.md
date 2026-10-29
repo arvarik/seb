@@ -1,191 +1,65 @@
 # Historical replay and metrics guide
 
-Seb can replay an nflverse season against a transparent fantasy-points baseline.
+Seb provides three deterministic walk-forward backtesting harnesses—`seb replay`, `seb evaluate`, and `scripts/benchmark-defense.ts`—so baseline reference metrics, production offensive projection ensembles, and team D/ST mixtures can be audited without leaking future game outcomes into historical forecasts.
 
-The replay measures past accuracy without using future results as model input.
-
-## Run a replay
-
-Select one completed or partially completed season.
-
-```bash
-seb replay --season 2025
+```mermaid
+flowchart LR
+  PRIOR["Completed Prior Weeks (Before Week W, Next-Day 12:00:00Z Availability)"] --> CUT["Week W Knowledge Cutoff (Earliest Week W Game Date 00:00:00Z)"]
+  CUT --> POOL["Eligible Target Pool (Known at or before Cutoff)"]
+  POOL --> MODEL["Walk-Forward Forecast (Baseline, Fixed Ensemble, or Adaptive Learner)"]
+  OUT["Observed Week W Outcomes (Available after Cutoff)"] --> SCORE["Point, Interval, Rank, Calibration & Regret Metrics"]
+  MODEL --> SCORE
+  OUT -.->|"Future period or post-cutoff availability in training"| ERR["Throw FutureLeakageError"]
 ```
 
-Limit the final week.
+## Choose an evaluation harness
+
+Because each harness targets a specific modeling layer and player pool, never compare headline MAE/RMSE numbers directly across different commands:
+
+| Harness | Command | Models compared | Positions & weeks | Scoring & target pool | Metrics emitted |
+| --- | --- | --- | --- | --- | --- |
+| **Reference rolling baseline** | `seb replay` (or `/replay`) | `0.7` full history + `0.3` last 3 games (position $\rightarrow$ global $\rightarrow$ `0` fallback; population-SD 80% interval) | `QB, RB, WR, TE, K`; Weeks `2–18` | Precomputed nflverse `fantasyPointsPpr`; targets = players appearing in the prior week | MAE, RMSE, bias, 80% coverage & width, Spearman & pairwise rank accuracy, per-week leakage audit |
+| **Production offensive forecast suite** | `seb evaluate` | `legacy` (narrow range), `ensemble` (`recentWeight=0.25, halfLife=4, priorGames=0.5`), and `adaptive` (chronological weekly learner) | `QB, RB, WR, TE`; Weeks `4–18` | Exact league-component PPR scoring; targets require $\ge 3$ prior regular-season appearances and an observed outcome | MAE, RMSE, bias, empirical 80% coverage & Winkler interval score, Spearman/pairwise rank, **synthetic neighbor-choice regret**, **Brier score & ECE calibration** |
+| **Team D/ST mixture benchmark** | `node --import tsx scripts/benchmark-defense.ts YEAR` | 3-way team/opponent/NFL mixture + 24-game TD prior vs. team-average and NFL-average baselines | Team `DEF` (`32` clubs); Weeks `5–18` | Sleeper D/ST component & points/yards-allowed tiers (`pbp` + `stats_team`) | MAE, RMSE, and descriptive 10th–90th percentile range coverage (`docs/benchmarks/defense-YEAR.json`) |
+
+See [Verify forecast quality in the analysis guide](ANALYSIS.md#verify-forecast-quality) and [Defense and special teams](DEFENSE_AND_SPECIAL_TEAMS.md) for recorded `2024` and `2025` benchmark tables.
+
+## CLI and interactive usage
+
+Run `seb replay` or `seb evaluate` from the command line:
 
 ```bash
-seb replay --season 2025 --through-week 10
-```
-
-Filter the positions with one comma-separated value.
-
-```bash
-seb replay --season 2025 --position QB,RB,WR,TE
-```
-
-Save the complete report.
-
-```bash
+# Reference baseline replay (supports position filtering)
+seb replay --season 2025 --through-week 10 --position QB,RB,WR,TE
 seb replay --season 2025 --output exports/replay-2025.json
-```
-
-Print compact JSON for a script.
-
-```bash
 seb replay --season 2025 --json
+
+# Production offensive model comparison (legacy vs. ensemble vs. adaptive)
+seb evaluate --season 2025 --through-week 18 --output exports/evaluation-2025.json
 ```
 
-The season must use `1999` through `2100`.
+| Option | Supported on | Validation rules & behavior |
+| --- | --- | --- |
+| `--season <YEAR>` | `seb replay`, `seb evaluate` | Integer season from `1999` through `2100`. |
+| `--through-week <WEEK>` | `seb replay`, `seb evaluate` | Final regular-season week (`2`–`18` for `replay`; `4`–`18` evaluated in `evaluate`). |
+| `--position <LIST>` | `seb replay` | Comma-separated subset of `QB`, `RB`, `WR`, `TE`, `K`. (`seb evaluate` always scores `QB,RB,WR,TE` with per-position breakdowns.) |
+| `--output <PATH>` | `seb replay`, `seb evaluate` | Writes canonical sorted JSON (`schemaVersion: 1`) via a private `0600` temp file and atomic rename. |
+| `--json` | `seb replay`, `seb evaluate` | Prints machine-readable JSON (`schemaVersion: 1`, rejecting non-finite numbers) to standard output. |
 
-The final week must use `2` through `18`.
+Inside interactive chat, `/replay [SEASON] [THROUGH_WEEK]` (for example, `/replay 2025 10`, defaulting to the previous season when omitted) runs the reference baseline summary directly in the transcript without `--position` or `--output` flags.
 
-The position filter accepts `QB`, `RB`, `WR`, `TE`, and `K`.
+## Strict non-leakage rules
 
-## Interactive replay
+Every forecast week `W` establishes a single deterministic **knowledge cutoff** at `00:00:00Z` on the earliest scheduled game date of week `W`, and marks each completed game's statistics as `availableAt` `12:00:00Z` (noon UTC) on the calendar day after its game date:
 
-Run a replay inside chat.
+1. **Training inputs** must come from an earlier week (`week < W`) *and* satisfy `availableAt <= cutoff`.
+2. **Forecast targets** must exist on or before `cutoff` (for `seb replay`, players who recorded an appearance in the preceding week; for `seb evaluate`, players with at least three completed prior appearances).
+3. **Target outcomes** must become available strictly after `cutoff` (`availableAt > cutoff`), with missing outcomes left missing rather than coerced to `0`.
 
-```text
-/replay 2025 10
-```
+Any violation immediately throws `FutureLeakageError`, and every JSON report embeds a per-week period audit tallying excluded late observations, future rows, and missing outcomes.
 
-The first argument selects the season.
+## Interpreting metrics and scope limits
 
-The second argument selects the final week.
-
-Seb uses the previous season when you omit the season.
-
-Interactive replay does not expose the position or output-file options.
-
-## Current dataset
-
-The runner reads nflverse regular-season weekly player statistics.
-
-It measures `fantasyPointsPpr` for the selected positions.
-
-It uses nflverse schedules to define weekly forecast boundaries.
-
-The dataset records a stable source URL and a schema version.
-
-## No-leakage rules
-
-Each replay period has one exact knowledge cutoff.
-
-The nflverse runner uses the earliest game date in the forecast week.
-
-It sets that cutoff to `00:00:00Z` on that date.
-
-The runner marks a game result as available at noon UTC on the next calendar day.
-
-This time is a deterministic availability assumption for the current baseline.
-
-Training requires an earlier season or week than the forecast period.
-
-Training also requires `availableAt` at or before the knowledge cutoff.
-
-A target must exist at or before the cutoff.
-
-The runner builds targets from players who appeared during the prior week.
-
-A target outcome must become available after the cutoff.
-
-Seb throws `FutureLeakageError` when an input breaks these rules.
-
-The audit records excluded late observations, future periods, and missing outcomes.
-
-## Baseline calculation
-
-The default baseline uses one player history after one prior observation.
-
-It gives the complete history a weight of `0.7`.
-
-It gives the latest three observations a weight of `0.3`.
-
-It falls back to a position prior when a player has no history.
-
-It then falls back to the global prior or zero.
-
-The prediction interval uses an 80 percent level and the population standard deviation.
-
-The report records each projection method and history count.
-
-## Baseline metrics
-
-The text summary reports these metrics.
-
-- Mean absolute error.
-- Root mean squared error.
-- Prediction interval coverage.
-- Pairwise rank accuracy.
-- Spearman rank correlation.
-
-The complete JSON report also contains these values.
-
-- Mean error, mean actual value, and mean predicted value.
-- Interval width and the rates above or below the interval.
-- Mean absolute rank error.
-- Sample counts for every metric group.
-- A period audit for each forecast week.
-
-The common metric library also supports Brier score and calibration bins.
-
-It supports expected calibration error for probability forecasts.
-
-It supports total, mean, and maximum regret for grouped decisions.
-
-The current nflverse baseline supplies no probability forecasts or decision groups.
-
-Those metric groups therefore have zero samples in this runner.
-
-## Interpret the results
-
-A lower MAE and RMSE indicate smaller point errors.
-
-RMSE gives larger misses more weight than MAE.
-
-Interval coverage should stay near the configured interval level.
-
-High coverage with a wide interval gives weak decision value.
-
-Pairwise accuracy measures the correctly ordered player pairs within each week.
-
-Spearman correlation measures the complete weekly ranking relationship.
-
-Compare models on the same dataset, periods, positions, and cutoffs.
-
-Do not compare two reports with different target rules as one direct model test.
-
-## Reproducible reports
-
-The report uses schema version `1`.
-
-The serializer sorts object keys and rejects nonfinite numbers.
-
-The output file uses a private `0600` temporary file before the final rename.
-
-Store the source snapshots with important reports.
-
-Record the Seb version and command beside each report.
-
-## Current limits
-
-The baseline does not read a Sleeper league scoring system.
-
-It measures nflverse PPR points only.
-
-The availability time uses a deterministic next-day assumption.
-
-It does not model injuries, depth charts, weather, or news.
-
-It does not use player correlations or roster constraints.
-
-Use this report as a reference baseline, not as a production projection model.
-
-## Compare the production forecast models
-
-The separate `seb evaluate --season YEAR` command tests the statistical forecast used by player projections.
-It compares the previous formula, fixed ensemble, and weekly adaptive ensemble using corrected league-style PPR scoring.
-It reports point error, interval quality, rank quality, and synthetic decision diagnostics.
-Its target pool differs from `seb replay`, so the headline values cannot serve as a direct comparison.
-Read the [analysis guide](ANALYSIS.md#verify-forecast-quality) for methods, measured results, and limitations.
+- **Point & rank accuracy**: Lower **MAE** measures average point miss, while **RMSE** penalizes large bust/boom misses more heavily. **Pairwise rank accuracy** and **Spearman correlation** measure intra-week ordering quality across peers.
+- **Intervals, calibration, and regret**: Nominal **80% interval coverage** should sit near `80%` without achieving coverage trivially via overly wide intervals (penalized by the interval score in `seb evaluate`). The shared metrics library also computes **Brier score**, **Expected Calibration Error (ECE)** across probability bins, and **mean/max/total decision regret**; those probability and regret fields are populated in `seb evaluate` (using adjacent-rank synthetic start/sit pairs) and remain zero-sample placeholders in `seb replay`, which emits point and interval baselines only.
+- **Historical data boundaries**: Both runners read revised regular-season nflverse CSVs with deterministic next-day availability timestamps. Neither harness reconstructs live pre-kickoff injury reports, practice participation, depth-chart announcements, NWS forecast snapshots, intra-game stack correlations, or Sleeper roster-slot constraints—treat backtest reports as controlled statistical benchmarks rather than live league win-rate guarantees.

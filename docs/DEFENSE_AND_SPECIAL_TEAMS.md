@@ -1,114 +1,60 @@
 # Defense and special teams
 
-Seb 1.0.2 projects team D/ST and individual special-teams scoring.
-Use a team name or code with `projectPlayer`, `projectPlayers`, or `compareStartSit`.
-`projectLeagueMatchup` includes D/ST starters automatically.
-The model returns expected points, a median, a range, and explicit scoring limits.
+Seb projects team D/ST (`DEF`) and individual special-teams scoring across `projectPlayer`, `projectPlayers`, `compareStartSit`, `optimizeRosterLineup`, `projectLeagueMatchup`, `analyzeTradeImpact`, and `rankWaiverTargets`. Pass any NFL team name, alias, or canonical code (such as `"Seattle Seahawks"` or `"SEA"`) to project a team defense; Seb returns expected points, a descriptive median and 10th–90th percentile range, model weights, and explicit scoring-scope limits.
 
-## Scoring rules and sources
+## Scoring rules and Sleeper unit boundaries
 
-Sleeper separates team special-teams scoring from individual special-teams scoring.
-Seb assigns each event to its correct unit. It does not apply a player's `st_td` setting to a team defense.
-See [Sleeper special-teams scoring](https://support.sleeper.com/en/articles/3278982-special-teams-scoring-options).
+Sleeper separates team D/ST special-teams events from individual player special-teams events, so Seb attributes each play to its exact scoring unit and never applies an individual player's `st_td` weight to a team defense (see [Sleeper special-teams scoring](https://support.sleeper.com/en/articles/3278982-special-teams-scoring-options) and [Sleeper scoring options](https://support.sleeper.com/en/articles/3998131-what-scoring-options-are-available)):
 
-Points allowed differ from an opponent's final score.
-Seb removes touchdowns against the offense, such as interception and offensive-fumble returns.
-It retains ensuing extra points and two-point conversions.
-Kickoff, punt, and blocked-punt return touchdowns remain points allowed.
-It excludes safeties against the offense.
-See [Sleeper points-allowed rules](https://support.sleeper.com/en/articles/4126495-how-are-points-allowed-calculated).
+- **Points allowed**: Computed per [Sleeper points-allowed rules](https://support.sleeper.com/en/articles/4126495-how-are-points-allowed-calculated) rather than raw scoreboard totals. Seb subtracts touchdowns scored directly against the team's offense (interception returns and offensive fumble-recovery returns) and safeties surrendered by the offense, while retaining ensuing PATs/two-point conversions and kickoff, punt, or blocked-kick return touchdowns allowed.
+- **Yards allowed**: Computed per [Sleeper yards-allowed rules](https://support.sleeper.com/en/articles/4126427-how-are-yards-allowed-calculated) from opponent net passing yards (including negative sack yardage) plus opponent rushing yards, excluding return yardage. Both mutually exclusive tier buckets and linear per-point/per-yard rules are supported.
+- **Defensive & special-teams events**: Team `DEF` projections cover sacks, interceptions, forced fumbles, opponent fumble recoveries, defensive TDs, safeties, blocked kicks, QB hits, tackles for loss, defensive 2-point returns, and team special-teams TDs, forced fumbles, recoveries, solo tackles, and return yards. Individual offensive/returner projections separately enrich `st_td`, `st_ff`, `st_fum_rec`, `st_tkl_solo`, and kick/punt return yardage. Unrecognized custom defense keys remain explicit `partial-scoring` omissions rather than zeros.
 
-Yards allowed use opponent passing yards, rushing yards, and negative sack yardage.
-Return yards do not enter that total.
-See [Sleeper yards-allowed rules](https://support.sleeper.com/en/articles/4126427-how-are-yards-allowed-calculated).
+## Data construction and source reconciliation
 
-The supported team settings cover sacks, interceptions, forced fumbles, opponent fumble recoveries, defensive touchdowns, safeties, blocked kicks, quarterback hits, tackles for loss, defensive two-point returns, and special-teams events.
-Special-teams settings cover touchdowns, forced fumbles, opponent recoveries, solo tackles, and return yards.
-Seb also supports points-allowed and yards-allowed tiers and linear scoring.
-Each total enters exactly one tier for its metric.
-Unknown active defense settings remain explicit omissions. They prevent a complete-score claim.
-See [Sleeper scoring options](https://support.sleeper.com/en/articles/3998131-what-scoring-options-are-available).
+Official weekly stat summaries preserve stat corrections and multi-player sack/TFL accounting that raw play-by-play flags can miss, whereas play-by-play rows distinguish offensive turnovers from special-teams and defensive scoring plays. Seb reconciles three nflverse releases (documented in [nflfastR `calculate_stats`](https://nflfastr.com/reference/calculate_stats.html) and [`calculate_stats.R`](https://github.com/nflverse/nflfastR/blob/master/R/calculate_stats.R)):
 
-## Data construction
+| Metric group | Authoritative nflverse release | Cache key & reconciliation rule |
+| --- | --- | --- |
+| Sacks, interceptions, QB hits, tackles for loss, safeties, blocked kicks, team return yards, and net passing/rushing yards allowed | `stats_team/stats_team_week_YEAR.csv.gz` | Cached under `defense-team-v1-YEAR`. Uses opponent `sacks_suffered` so uncredited team sacks are retained alongside official weekly stat corrections. |
+| Completed-game boundaries, offensive-turnover TD & safety exclusions from points allowed, defensive 2PT returns, and team vs. player special-teams TDs, forced fumbles (`st_ff`), recoveries (`st_fum_rec`), and solo tackles (`st_tkl_solo`) | `pbp/play_by_play_YEAR.csv.gz` | Stream-projected to required columns only and cached as compact aggregates under `defense-v2-YEAR`. Completed games without matching ST plays record verified `0`s; missing games throw an error rather than substituting `0`. |
+| Individual player kick and punt return yardage (`kr_yd`, `pr_yd`) and offensive stats | `stats_player/stats_player_week_YEAR.csv.gz` | Cached under `player-stats-v*-YEAR`. Official weekly player return-yard totals take precedence over play-level return yardage attribution. |
 
-The client reads two nflverse releases for the analysis season:
+`NflverseClient` shares concurrent downloads, bounds compressed and decompressed byte sizes, honors caller `AbortSignal` cancellation during decompression and parsing, filters strictly to regular-season games with verified end-of-game rows, and rejects duplicate plays, duplicate team-weeks, missing columns, or non-finite final scores.
 
-- `pbp/play_by_play_YEAR.csv.gz` identifies completed games, possession, special-teams plays, touchdowns, and fumbles.
-- `stats_team/stats_team_week_YEAR.csv.gz` supplies official weekly sacks, interceptions, hits, tackles for loss, net-yardage components, returns, safeties, and blocked kicks.
+### Integration across lineup, correlation, trade, and waiver tools
 
-Official weekly totals retain corrections and unusual plays that simple play flags can miss.
-The full-season comparison found differences in quarterback hits, tackles for loss, and net yardage.
-Seb therefore uses weekly totals for those fields.
-It uses opponent sacks suffered to retain team sacks without individual player credit.
-The [nflfastR statistics documentation](https://nflfastr.com/reference/calculate_stats.html) explains the official-stat calculation.
-The [source implementation](https://github.com/nflverse/nflfastR/blob/master/R/calculate_stats.R) shows its event mappings.
-
-Player projections join special-teams forced fumbles, recoveries, and tackles by game and player identifier.
-Official player return-yard fields take precedence over play-level return attribution.
-A completed game with no matching special-teams event supplies a verified zero.
-A missing completed game supplies an error, not a zero.
-Weekly learning uses the same enrichment for leagues with these settings.
-
-The client projects only required play columns into memory.
-It caches compact aggregates, shares concurrent loads, limits download and expansion sizes, and retains request cancellation.
-It rejects duplicate plays, duplicate team games, missing columns, invalid numbers, and missing final scores.
-Only regular-season games with an end-game record enter training.
+- **Same-game covariance (`sameGameCorrelation`)**: In `compareStartSit` and `projectLeagueMatchup`, pairing an offensive player or kicker (`QB`, `RB`, `WR`, `TE`, `K`) with the opposing team's `DEF` in the same scheduled game applies $\rho = -0.25$ (verified via a mutual scheduled-opponent check) to capture negative game-script, sack, turnover, and points-allowed coupling.
+- **Lineup optimization & matchups**: `optimizeRosterLineup` evaluates `DEF` starter slots and bench defenses alongside offensive and kicker slots (locking kicked-off defenses in place), and `projectLeagueMatchup` substitutes verified completed Sleeper `DEF` scores once a game finishes.
+- **Trades, waivers, and weekly learning**: `TradeImpactService` (`analyzeTradeImpact`), `WaiverAssistantService` (`rankWaiverTargets`), and `learnCompletedWeek` apply the same play-by-play special-teams (`st_ff`, `st_fum_rec`, `st_tkl_solo`) and official return-yardage enrichment whenever a league activates those scoring rules.
 
 ## Forecast method
 
-Seb scores each historical game with the selected league's rules before it calculates the forecast.
-This preserves nonlinear scoring tiers and the relationship between sacks, turnovers, and points allowed within a game.
-Scoring average points allowed would produce a different and misleading result.
+Because points-allowed and yards-allowed tiers are nonlinear and covary within a game with sacks and turnovers, Seb scores every historical team-game under the league's exact rules **before** aggregating—avoiding the distortion of plugging average points allowed into a tier table.
 
-The ordinary scoring component uses a weighted mixture of three samples:
+Non-touchdown D/ST points blend three historical pools:
 
-1. Team history receives weight `0.5 × teamGames / (teamGames + 8)`.
-2. Games against the scheduled opponent receive weight `0.5 × opponentGames / (opponentGames + 8)`.
-3. All NFL team games receive the remaining weight.
+1. **Team defense history**: Weight `0.5 * teamGames / (teamGames + 8)`
+2. **Scheduled opponent offenses faced**: Weight `0.5 * opponentGames / (opponentGames + 8)`
+3. **League-wide NFL team-game baseline**: Remaining weight `1 - teamWeight - opponentWeight`
 
-Defensive and special-teams touchdowns use a stronger prior.
-Their expected points combine the team's recorded touchdowns with 24 games at the NFL average.
-This reduces the effect of rare touchdown streaks.
-The returned model parameters describe these weights directly.
-
-The median and range use the weighted historical score distribution.
-The range starts at its 10th and 90th percentiles and expands if necessary to include expected points.
-It is a descriptive range. Seb does not claim calibrated future coverage.
-
-Week 1 defaults to the previous season.
-Later weeks use only earlier completed weeks.
-An automatic request can fall back when current-season team data does not exist.
-An explicit analysis-season request keeps its selected season and reports missing data.
-A missing or started kickoff produces a historical baseline.
-Matchup totals accept verified completed Sleeper scores in place of those baselines.
+High-variance defensive and special-teams return touchdowns shrink separately toward a stronger **24-game NFL-average prior** so brief pick-six or return streaks do not dominate projections. The returned descriptive `median` and `[low, high]` interval use the weighted historical game-score distribution's 50th, 10th, and 90th percentiles (expanded if needed to bracket `expectedPoints`). Week 1 (and automatic windows when current-season team files are not yet published) falls back to the prior regular season, whereas explicit season overrides report missing files directly and started or unscheduled games return `historical-baseline`.
 
 ## Recorded benchmark
 
-From a source checkout, run the rolling benchmark with public nflverse data:
+Run the walk-forward regular-season D/ST benchmark (Weeks 5–18, using strictly prior weeks in each season) from a repository checkout:
 
-```sh
+```bash
 node --import tsx scripts/benchmark-defense.ts 2024
 node --import tsx scripts/benchmark-defense.ts 2025
 ```
 
-The benchmark starts in Week 5. Each forecast uses only earlier weeks from its season.
-It compares standard D/ST scoring with team-average and NFL-average baselines.
-The fixed model weights did not change between these evaluations.
-
-| Season | Forecasts | Model mean absolute error | Team-average error | NFL-average error | Range coverage |
+| Season | Team-week forecasts | Seb D/ST MAE | Team-average MAE | NFL-average MAE | 10th–90th range coverage |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 2024 | 416 | 4.29 | 4.56 | 4.42 | 81.25% |
-| 2025 | 416 | 4.30 | 4.54 | 4.39 | 83.89% |
+| 2024 ([JSON](benchmarks/defense-2024.json)) | 416 | **4.29** | 4.56 | 4.42 | 81.25% |
+| 2025 ([JSON](benchmarks/defense-2025.json)) | 416 | **4.30** | 4.54 | 4.39 | 83.89% |
 
-The model improves both error measures in both recorded seasons.
-These results use revised public data. They do not reconstruct each historical publication time or prove future accuracy.
-The JSON reports also contain root mean squared error:
-[2024 results](benchmarks/defense-2024.json), [2025 results](benchmarks/defense-2025.json).
+Fixed mixture weights beat both team-mean and league-mean baselines across MAE and RMSE in both seasons without tuning between years, though revised public CSVs cannot reconstruct real-time stat latencies or guarantee future live coverage.
 
-## Remaining limits
-
-Current defensive injuries, coaching changes, and weather do not alter the numerical D/ST model.
-Seb can discuss verified news separately. It must not invent a numerical news adjustment.
-Rare multi-possession plays can still expose limits in play-level fumble attribution.
-Individual defender projections and unsupported custom scoring rules remain unavailable.
-Seb labels these limits instead of treating missing components as zero.
+> [!NOTE]
+> Defensive injuries, coordinator changes, and game weather do not automatically alter numerical D/ST points; Seb surfaces verified injury and weather context alongside the projection without inventing ad-hoc point adjustments, and rare multi-turnover plays remain bounded by upstream nflfastR play-by-play attribution.

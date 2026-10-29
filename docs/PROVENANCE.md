@@ -1,148 +1,78 @@
 # Field-level provenance guide
 
-Provenance states where a value came from and when the source supplied it.
+Field-level provenance records which upstream endpoint supplied each value, when that observation or retrieval occurred, whether the data was fresh or stale, and which deterministic calculation produced any derived metric. Every successful source refresh in Seb writes a versioned snapshot paired with a SHA-256-verified provenance manifest in `.cache/seb.sqlite` (see the [storage guide](STORAGE.md)).
 
-Seb stores provenance manifests with source snapshots.
+## Envelope and source schema
 
-## Envelope structure
+In memory, a provenance envelope wraps an application value with its contributing sources, JSON Pointer field lineage, and aggregate freshness assessment; when persisted inside `snapshots`, SQLite stores the manifest without duplicating the snapshot's `payload` column. Conflicting definitions sharing the same source `id` within one envelope are rejected.
 
-A provenance envelope contains these values.
+| Source record field | Required | Description |
+| --- | :---: | --- |
+| `id` | Yes | Stable source identifier within the envelope (referenced by field lineage entries). |
+| `provider` | Yes | Upstream family (`sleeper`, `nflverse`, `weather`, `news`, or derived source namespace). |
+| `label` | Yes | Human-readable source description (treated as untrusted display text). |
+| `retrievedAt` | Yes | Canonical ISO 8601 UTC timestamp when Seb received or validated the payload. |
+| `url` | No | Sanitized public `http://` or `https://` URL without credentials or secret tokens. |
+| `observedAt` | No | Upstream measurement or event timestamp when distinct from publication/retrieval time. |
+| `publishedAt` | No | Upstream feed, sitemap, or release publication timestamp. |
+| `version` | No | Client schema or parser revision identifier. |
+| `freshnessPolicy` | No | Fresh and `stale-if-error` TTL bounds plus future-drift tolerance (`maxFutureDriftMs`). |
 
-- A schema version and envelope ID.
-- The envelope creation time.
-- The complete value.
-- The contributing source definitions.
-- A lineage record for each tracked field.
-- One aggregate freshness assessment.
+## JSON Pointer field paths and derived lineage
 
-A stored snapshot keeps the same manifest without a duplicate value field.
+Seb addresses tracked fields using RFC 6901 JSON Pointer paths (such as `/player/name` or `/points`). Direct cache snapshots automatically generate leaf-field lineage up to **2,000 field paths** per payload; payloads exceeding 2,000 leaf paths record root lineage (`/`) to bound snapshot serialization size and CPU cost.
 
-The snapshot already stores the source value as its payload.
+| Field lineage property | Role |
+| --- | --- |
+| `path` | RFC 6901 JSON Pointer (`/` for root fallback or exact leaf path such as `/expectedPoints`). |
+| `sourceIds` | Contributing source `id` references merged from direct or upstream inputs. |
+| `freshness` | Per-field freshness evaluation (`fresh`, `stale`, `expired`, `future`, or `unknown`). |
+| `derivation` *(optional)* | Records `operation` (e.g., `weighted-player-mean`), semantic `version` (bumped whenever formula logic changes), and `inputs` (`{ envelopeId, path }` pointers into validated parent envelopes). |
 
-## Source records
+Every `derivation.inputs` reference must resolve to an existing tracked path, allowing an end-to-end audit from any derived projection or summary back to its exact upstream source fields.
 
-Each source definition contains an ID, provider, label, and retrieval time.
+## Timestamp selection and freshness precedence
 
-It can also contain these values.
-
-- A source URL.
-- The observation or publication time.
-- A source version.
-- A freshness policy.
-
-Seb rejects conflicting definitions that use the same source ID.
-
-## Field paths
-
-Seb identifies fields with standard JSON Pointer paths.
-
-These examples identify a player name and a point total.
+To evaluate a source's age and clock skew at assessment time, Seb selects the most authoritative available timestamp via the deterministic fallback chain:
 
 ```text
-/player/name
-/points
+effectiveTimestamp = observedAt ?? publishedAt ?? retrievedAt
 ```
 
-Each field record lists its source IDs and freshness assessment.
+Timestamps more than **5 minutes** ahead of the evaluation clock (the default `maxFutureDriftMs` tolerance) classify as `future`. Across multiple sources on a field—or across all tracked fields in an envelope—Seb assigns the **least reliable (worst) state** using strict precedence:
 
-A derived field also lists the operation, calculation version, and input field references.
+```text
+future  ->  expired  ->  unknown  ->  stale  ->  fresh
+(worst / least reliable)                      (best / usable)
+```
 
-The references contain an envelope ID and a JSON Pointer field path.
+| State | Condition | Usable in live answers? |
+| --- | --- | :---: |
+| `future` | `effectiveTimestamp` exceeds evaluation time by more than `maxFutureDriftMs` (default `5m`). | No |
+| `expired` | Age exceeds both the fresh TTL and the `stale-if-error` window. | No |
+| `unknown` | Missing valid timestamp or missing freshness policy bounds. | No |
+| `stale` | Age exceeds the fresh TTL, remains within `stale-if-error`, and serves after a refresh failure. | Yes (flagged; caps action confidence) |
+| `fresh` | Age is within the configured fresh TTL. | Yes |
 
-This structure supports an audit from a result to every input field.
+Refresh logic can recompute freshness assessments against current policy windows without mutating immutable snapshot payloads.
 
-## Direct source manifests
+## Inspecting sources and manifests
 
-Cache snapshots create direct lineage for each leaf field.
-
-The default limit is 2,000 field paths for one value.
-
-Seb assigns the root path when the value exceeds that limit.
-
-This limit bounds snapshot size and creation time.
-
-## Freshness states
-
-| State | Meaning | Usable |
-| --- | --- | --- |
-| `fresh` | The source age remains inside the fresh period. | Yes |
-| `stale` | The source age remains inside the stale-if-error period. | Yes |
-| `expired` | The source age exceeds the complete allowed period. | No |
-| `future` | The source time exceeds the allowed future tolerance. | No |
-| `unknown` | A timestamp or freshness policy is missing. | No |
-
-The default future tolerance is five minutes.
-
-Seb uses the observation time before the publication or retrieval time.
-
-An envelope uses the least reliable state from its tracked fields.
-
-Refresh logic can recalculate freshness without changing the stored value.
-
-## Derived lineage
-
-Use derived lineage for any calculated value.
-
-The operation name must describe the exact calculation.
-
-The version must change when the calculation behavior changes.
-
-For example, a rolling average can name `weighted-player-mean` and version `1.0.0`.
-
-Each input reference must point to a field with existing lineage.
-
-Seb merges the source definitions from all referenced fields.
-
-## User-visible source status
-
-Run `/sources` after an interactive answer.
-
-Seb shows the source link, cache outcome, and retrieval time.
-
-It also shows a warning when the client used stale data after an error.
-
-One-shot JSON output includes the source list and retrieval information.
-
-Run `seb snapshots --json` to inspect snapshot metadata.
-
-Inspect one provenance summary.
+After an interactive answer, run `/sources` to view every grounded URL, cache outcome (`fresh`, `updated`, `not-modified`, or `stale-if-error`), and retrieval timestamp; `seb ask --json` emits the same validated `sources` array alongside `analysis`. To inspect stored snapshots and field-level lineage directly:
 
 ```bash
+# List recent snapshot metadata without large payloads
+seb snapshots --json
+
+# Inspect a human-readable provenance summary or full JSON manifest
 seb snapshots --id SNAPSHOT_ID
-```
-
-Return the complete manifest as JSON.
-
-```bash
 seb snapshots --id SNAPSHOT_ID --json
 ```
 
-Inspect one snapshot inside chat.
+Inside interactive chat, `/snapshots` lists the 20 newest snapshots and `/provenance SNAPSHOT_ID` renders up to 50 JSON Pointer paths with their contributing source IDs. Programmatic callers can load verified snapshots via `SebDatabase.getSnapshot()`.
 
-```text
-/provenance SNAPSHOT_ID
-```
-
-The interactive command shows up to 50 field paths and their source IDs.
-
-Developers can read a snapshot by ID through `SebDatabase.getSnapshot()`.
-
-## Validation and serialization
-
-Seb validates every source, field path, derivation, and freshness policy.
-
-The serializer sorts object keys for stable JSON output.
-
-The parser validates the envelope structure and the application value.
-
-Do not trust a stored provenance file without this validation.
-
-## Security rules
-
-Do not put an API key or platform token inside a source URL.
-
-Do not store request authorization headers inside provenance.
-
-Use public source URLs when a report can show the link.
-
-Treat source labels and descriptions as untrusted display text.
+> [!WARNING]
+> **Provenance & snapshot security rules**
+> - Never embed API keys, webhook secrets, or user credentials inside `source.url`, and never record `Authorization` or cookie headers in provenance manifests.
+> - Always validate stored envelopes through Seb's Zod parser and SHA-256 payload/manifest checksum checks before reading values—canonical key sorting guarantees deterministic hashes, and tampered rows fail closed.
+> - Treat upstream `label` and publisher strings as untrusted display text passed through Seb's terminal/output sanitizer.

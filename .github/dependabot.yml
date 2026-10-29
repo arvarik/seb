@@ -9,11 +9,6 @@ updates:
       timezone: "America/Los_Angeles"
     open-pull-requests-limit: 5
     rebase-strategy: auto
-    ignore:
-      - dependency-name: "vitest"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@vitest/*"
-        update-types: ["version-update:semver-major"]
     groups:
       dependencies:
         patterns:

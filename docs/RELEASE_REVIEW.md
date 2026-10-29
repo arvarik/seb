@@ -1,87 +1,54 @@
 # Version 1.0.0 release review
 
-Review date: 2026-09-08. Runtime: Node.js 22.23.2 on macOS.
-This record describes the final local review. GitHub records the merge checks and release commit separately.
+> [!NOTE]
+> **Historical `v1.0.0` Release Sign-Off Record (`2026-09-08`)** — This document preserves the original `v1.0.0` engineering audit recorded on Node.js `22.23.2` (macOS). Subsequent `1.0.x` and `1.1.x` releases through **`v1.1.2`** expanded the built-in newsroom registry from 44 to **47** sources (with SQLite FTS5 and 36-hour event corroboration), upgraded to **Vitest `5.0.5`** and **Chat SDK `4.43.0`**, shipped **GroupMe**, **team D/ST** and individual special-teams projections, **`optimizeRosterLineup`** and **`sameGameCorrelation`**, **Decision Gate single-retry auto-recovery**, and automated public publishing to **npm (`@arvarik/seb`)** and **GHCR (`ghcr.io/arvarik/seb`)**. See [CHANGELOG.md](../CHANGELOG.md), [Versioning and releases](VERSIONING.md), and [Version 1 scope and roadmap](V1.md) for current `v1.1.2` status.
 
-## Scope
+## Audit scope (`v1.0.0`)
 
-The review covered agent completion, cancellation, provider selection, evidence gates, source clients, caches, and local storage.
-It also covered scoring, forecasts, historical standings, playoff simulations, learning, trades, waivers, weather, terminal output, and connector delivery.
-The documentation review compared commands, defaults, limits, and storage behavior with the implementation.
+The pre-`1.0.0` release audit inspected agent completion, `AbortSignal` cancellation, provider resolution, Decision Gate enforcement, source clients, SQLite caches/migrations, scoring tiers, projections, historical standings, playoff Monte Carlo simulations, weekly learning, trade/waiver calculators, NWS weather safety, terminal sanitization, and Chat SDK connectors. Verification combined static source inspection, deterministic regression suites, live source/provider contracts, a clean `--omit=dev` tarball install, and interactive macOS terminal testing (while noting that external public feeds and LLM prose always warrant normal user review).
 
-The review used source inspection, deterministic regression tests, live source contracts, a clean production install, and a terminal check.
-No review can prove the absence of every possible defect. External sources and model explanations still need normal user review.
-
-## Confirmed findings and fixes
+## Confirmed findings and fixes (`v1.0.0`)
 
 | Finding | Correction | Regression evidence |
 | --- | --- | --- |
-| Invalid calendar values could roll into another valid kickoff | Validate calendar fields and reject ambiguous or nonexistent Eastern wall times | Invalid dates, leap day, midnight, daylight-saving gap and repeated hour |
-| Incomplete historical opponent pairs could count as complete history | Require every roster and exactly two scores per matchup | Missing, null, and unpaired matchups, duplicate rosters, nonfinite scores |
-| Playoff ties skipped points against | Rank by record, points scored, higher points against, then a seeded random tie | Equal records and points with different points against |
-| Remaining schedules could skip an entire week | Require contiguous weeks after the historical cutoff | A missing middle week rejects the simulation |
-| Current weather alerts could change a later game's risk | Apply alert risk only when its verified window contains kickoff | Expired, future, unknown, and matching alert windows |
-| Malformed scoring weights could silently become zero | Reject nonnumeric and nonfinite weights and score overflow | String, boolean, NaN, infinity, and overflow cases |
-| One-shot model text could emit terminal commands | Use a shared sanitizer that retains state across chunks | Clipboard, hyperlink, screen, C1, and unfinished control sequences |
-| Local file limits could apply after an unbounded read | Use bounded regular-file reads for profile, history, and learning | Oversized files, non-file paths, and preserved invalid history |
-| Concurrent history saves could share one temporary file | Serialize saves and use unique private temporary files | Concurrent add, clear, and add operations persist the final history |
+| Invalid calendar dates could roll over into another valid kickoff | Validated calendar fields and rejected nonexistent or ambiguous Eastern DST wall times | Invalid dates, leap days, midnight, and DST spring-forward / fall-back transitions |
+| Incomplete historical opponent pairs could pass as complete history | Required every league roster and exactly two finite scores per matchup | Missing, null, unpaired, duplicate-roster, and non-finite matchup fixtures |
+| Playoff tiebreakers skipped points against | Ranked seeds by record $\rightarrow$ points for $\rightarrow$ points against $\rightarrow$ seeded tiebreak | Identical records and points-for with distinct points-against totals |
+| Remaining playoff schedules could skip an entire middle week | Required contiguous regular-season weeks after the historical cutoff | Missing interior schedule weeks fail validation explicitly |
+| Active weather alerts could elevate risk on a later week's game | Restricted alert risk upgrades to alerts whose verified window intersects kickoff | Expired, future, unknown, and kickoff-overlapping alert windows |
+| Malformed league scoring weights could silently coerce to `0` | Rejected non-numeric, non-finite, and overflowing scoring weights | String, boolean, `NaN`, `Infinity`, and numeric overflow test cases |
+| Streamed one-shot prose could pass terminal escape sequences | Shared a stateful ANSI/OSC/C1 sanitizer across streamed text chunks | Clipboard, OSC-8 hyperlink, alt-screen, C1, and split control sequences |
+| Local file size caps ran after unbounded file reads | Read profile, history, and learning files via bounded regular-file descriptors | Oversized files, FIFOs/directories, and preserved prior history on error |
+| Concurrent prompt-history saves could collide on one temp path | Serialized saves through a write queue using unique `0600` temporary files | Concurrent add/clear/add sequences persist deterministic final state |
 
-The review also corrected stale provider defaults, identity transfer rules, connector streaming descriptions, and completion rules.
-The old V1 design now separates implemented features from possible future work.
-The changelog contains one consolidated 1.0.0 section and the package version matches all checked documents.
+The review also aligned provider fallback defaults, guarded active-player transfer matching, connector streaming docs, and consolidated `CHANGELOG.md` and `npm run version:check` targets for `1.0.0`.
 
-## Dependency PR review
+## Dependency PR review (`2026-09-08` snapshot)
 
-The release review checked all seven open dependency PRs.
+At `v1.0.0` sign-off, all seven open Dependabot PRs were evaluated:
 
-| PR | Outcome |
+| PR | `v1.0.0` disposition (`2026-09-08`) |
 | --- | --- |
-| [#18](https://github.com/arvarik/seb/pull/18) | Update `actions/checkout` to v7 |
-| [#19](https://github.com/arvarik/seb/pull/19) | Update `actions/setup-node` to v7 |
-| [#20](https://github.com/arvarik/seb/pull/20) | Update `@chat-adapter/tests` to 4.40.0 |
-| [#21](https://github.com/arvarik/seb/pull/21) | Update the Discord adapter to 4.40.0 |
-| [#22](https://github.com/arvarik/seb/pull/22) | Update the OpenAI-compatible provider to 3.0.44 |
-| [#23](https://github.com/arvarik/seb/pull/23) | Update the Telegram adapter to 4.40.0 |
-| [#24](https://github.com/arvarik/seb/pull/24) | Defer Vitest 5 because the latest Chat SDK test package requires Vitest 4 |
+| [#18](https://github.com/arvarik/seb/pull/18) & [#19](https://github.com/arvarik/seb/pull/19) | Merged `actions/checkout` v7 and `actions/setup-node` v7 |
+| [#20](https://github.com/arvarik/seb/pull/20), [#21](https://github.com/arvarik/seb/pull/21), [#23](https://github.com/arvarik/seb/pull/23) | Aligned Chat SDK core, Slack, Discord, Telegram, state, and `@chat-adapter/tests` on `4.40.0` |
+| [#22](https://github.com/arvarik/seb/pull/22) | Merged `@ai-sdk/openai-compatible` `3.0.44` (with empty tool-call chunk reasoning regression test) |
+| [#24](https://github.com/arvarik/seb/pull/24) | Deferred Vitest 5 in `v1.0.0` due to `@chat-adapter/tests` `4.40.0` peer range *(subsequently resolved; `v1.1.2` runs Vitest `5.0.5` and Chat SDK `4.43.0`)* |
 
-The release also updates the Chat SDK core, Slack, and state adapters to 4.40.0 to keep one shared SDK version.
-Vitest and its coverage package remain on 4.1.11. The Vitest 5 PR failed dependency installation on both CI platforms.
-The release uses normal dependency resolution without peer overrides or forced installation.
-A provider regression verifies continuous reasoning when streamed chunks contain empty tool-call arrays.
-Dependabot now groups Chat SDK updates and groups Vitest with its coverage packages.
-A future Vitest 5 update must first resolve the Chat SDK test package compatibility requirement.
+## Point-in-time verification matrix (`v1.0.0`)
 
-The CLI statistics test starts four Node.js commands in sequence.
-Its test timeout now allows all four cold starts on slower CI machines, while each command retains its own timeout and assertions.
-
-## Local verification
-
-| Check | Result |
+| Check | Recorded `v1.0.0` result (`2026-09-08`) |
 | --- | --- |
-| `npm run check` | Passed. 71 test files and 964 tests, plus version, lint, and type checks |
-| `npm run test:coverage` | Passed. Statements 83.00%, branches 73.41%, functions 89.27%, lines 85.15% |
-| `npm audit --omit=dev` | Zero reported vulnerabilities |
-| `npm audit` | Zero reported vulnerabilities, including development dependencies |
-| `npm run doctor` | Passed local checks, Sleeper, nflverse, NWS, and a live Google tool continuation with grounded search |
-| `npm run contract:sources` | Passed live source response contracts |
-| `npm run contract:answer` | Passed live structured output, player identity, recommendation restriction, and Google tool continuation |
-| `npm run news:smoke` | All 44 built-in sources returned valid dated articles |
-| Package inspection | No credentials, caches, traces, tests, or coverage files in the archive |
-| Production installation | Installed the archive with development dependencies omitted. Version, help, and SQLite-backed statistics commands passed |
-| Terminal check | Startup, help, Page Down, and Ctrl+C passed in a real terminal session. Exit restored the cursor and terminal screen |
-| Documentation links | All checked relative file links and heading links resolve |
-| Credential scan | No matches in local Git history for high-confidence Google, GitHub, OpenAI, Slack, or private-key patterns |
+| `npm run check` | Passed: 71 test files, 964 tests, version check, ESLint, and TypeScript (`tsc --noEmit`) |
+| `npm run test:coverage` | Passed: Statements `83.00%`, Branches `73.41%`, Functions `89.27%`, Lines `85.15%` |
+| `npm audit --omit=dev` & `npm audit` | Zero reported vulnerabilities across production and development trees |
+| `npm run doctor` | Passed offline checks, Sleeper, nflverse, NWS, and live Gemini tool continuation + Google Search grounding |
+| `npm run contract:sources` & `contract:answer` | Passed live public-source schemas, structured JSON output, identity checks, and recommendation gating |
+| `npm run news:smoke` | All 44 `v1.0.0` built-in sources returned valid dated articles *(expanded to 47 in `v1.1.x`)* |
+| Archive, `--omit=dev` install & secret scan | Clean tarball with zero secrets/caches/tests; production CLI & SQLite stats verified; zero high-confidence secret matches |
+| Interactive terminal & doc links | Real macOS TTY startup, `/help`, `Page Down`, `Ctrl+C` screen restoration, and all relative Markdown/anchor links verified |
 
-The credential scan supplements package inspection. It is not a general secret-detection guarantee.
-The [performance report](benchmarks/analysis-performance.json) records fresh measurements and verifies complete lineups and total playoff allocation.
-The [analysis guide](ANALYSIS.md) explains historical forecast accuracy and its limits.
+See the [performance benchmark](benchmarks/analysis-performance.json), [analysis guide](ANALYSIS.md), and [Version 1 scope guide](V1.md) for current numerical benchmarks and architectural boundaries.
 
-## Verification limits
+## Verification boundaries (`v1.0.0`)
 
-Live model checks used Google Gemini. Provider mocks cover Anthropic, OpenAI, and compatible endpoints.
-Connector tests use SDK test adapters. This review did not send messages to live Slack, Discord, or Telegram accounts.
-The local terminal check used macOS. CI separately checks Linux and macOS on Node.js 22.
-Windows has no CI coverage.
-
-The release does not change repository visibility or publish an npm registry package.
-The [scope guide](V1.md) documents unsupported scoring, official injury data, custom playoff seeding, and future work.
+Live LLM contract runs at `v1.0.0` sign-off executed against Google Gemini while Anthropic, OpenAI, and OpenAI-compatible adapters ran deterministic `MockLanguageModelV4` suites, and connector verification used `@chat-adapter/tests` rather than live production workspaces. At `v1.0.0`, packages were distributed from GitHub releases only; automated npm (`@arvarik/seb` with SLSA provenance) and GHCR (`ghcr.io/arvarik/seb`) publishing launched in subsequent `1.1.x` releases.

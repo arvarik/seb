@@ -3,33 +3,34 @@
 **The source-grounded NFL & fantasy football AI agent. One terminal.**
 
 [![CI](https://github.com/arvarik/seb/actions/workflows/ci.yml/badge.svg)](https://github.com/arvarik/seb/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@arvarik/seb?logo=npm)](https://www.npmjs.com/package/@arvarik/seb)
+[![Version](https://img.shields.io/badge/version-1.1.2-informational.svg)](package.json)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-339933?logo=node.js&logoColor=white)](package.json)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Node.js](https://img.shields.io/badge/Node.js->=22-339933?logo=node.js&logoColor=white)
-[![Version](https://img.shields.io/badge/version-1.1.1-informational.svg)](package.json)
 
-Seb unifies real-time NFL news, live Sleeper leagues, nflverse statistics, and kickoff weather into a single conversational agent. 
+Seb unifies real-time NFL beat reporting, live Sleeper leagues, nflverse play-by-play statistics, and National Weather Service stadium forecasts into a single terminal agent and group-chat bot.
 
-Unlike generic chatbots that guess player stats or hallucinate lineups, Seb uses **deterministic math** for projections and rankings, safeguarding your start-sit, trade, and waiver decisions with verified evidence.
+Unlike generic chatbots that guess stats or hallucinate lineups, Seb computes projections, optimal starter assignments, trade impacts, and FAAB tiers with **deterministic math**—and enforces a verification gate before recommending any roster move.
 
 ```text
-Show Derrick Henry's recent production and latest verified news.
-Look deeper into his usage.
-Compare him with Saquon Barkley for this week's matchup and weather.
+Compare Jayden Daniels and Jared Goff for Week 8 in my league.
+Optimize my full Game of Throws lineup and check bench upside.
+Rank the top WR waiver targets this week and suggest FAAB bids.
 ```
 
 ---
 
 ## Why Seb?
 
-| Feature | What Seb Delivers |
+| Capability | What Seb Delivers |
 | --- | --- |
-| 🏈 **47+ Built-In Newsrooms** | Direct reporting from all 32 NFL team beat sources, official NFL feeds, transaction wires, and fantasy analysts. |
-| 🏆 **Instant Sleeper Sync** | Discovers your leagues, rosters, scoring settings, and weekly matchup needs automatically. |
-| 🛡️ **Grounded Decisions** | Deterministic projections, legal trade validation, FAAB waiver tiers, and playoff simulations. |
-| 📈 **Weekly Learning** | Learns local player performance trends and forecast accuracy after completed games. |
-| 🌦️ **Kickoff Weather** | Live game-day forecasts and active severe weather alerts from the National Weather Service. |
-| 🤖 **Multi-Provider AI** | Bring your own model: Google Gemini, Anthropic Claude, OpenAI, or local/compatible LLMs. |
-| 🔒 **Privacy First** | Read-only league access. Local usage records exclude prompts and answers. Remote Judgment tracing is optional and off by default. |
+| **47 Curated Newsrooms** | 3-tier priority network across all 32 official NFL team feeds, national wires, and fantasy analysts with 36-hour cross-source corroboration and local SQLite FTS5 search. |
+| **Instant Sleeper Sync** | Read-only discovery of your leagues, rosters, custom scoring settings, waiver budgets, and active matchup needs—automatically resolving league context when you own a player in one league. |
+| **Deterministic Decisions** | Scoring-aware projections (`QB`, `RB`, `WR`, `TE`, `K`, and team `D/ST`), full-roster combinatorial lineup optimization, same-game stack covariance, legal trade validation, FAAB tiers, and Monte Carlo playoff odds. |
+| **Self-Healing Evidence Gate** | Verifies player identity, injury status, league slot legality, and fresh news before allowing advice—automatically refreshing stale or missing sources once before ever withholding a call. |
+| **Kickoff Weather & Learning** | Live National Weather Service stadium wind/precip/alert checks plus chronological post-week forecast calibration stored locally. |
+| **Multi-Provider BYOK** | Run on Google Gemini, Anthropic Claude, OpenAI, or local/OpenAI-compatible endpoints (`Ollama`, `vLLM`, `LM Studio`) with automatic model-family discovery and capacity fallback. |
+| **Privacy by Default** | Read-only Sleeper access, `0600` local credential files, metadata-only SQLite usage analytics, and opt-in-only OpenTelemetry tracing. |
 
 ---
 
@@ -37,196 +38,161 @@ Compare him with Saquon Barkley for this week's matchup and weather.
 
 ### 1. Install
 
-Requires Node.js 22+:
+Requires **Node.js 22+**:
 
 ```bash
-# Clone the repository
-git clone https://github.com/arvarik/seb.git
-cd seb
-npm ci
+# Install globally from npm
+npm install -g @arvarik/seb
 
-# Option A: Run directly from source
-npm run seb
-
-# Option B: Install globally from source (available anywhere as `seb`)
-npm install -g .
+# Or run immediately without installing
+npx @arvarik/seb
 ```
 
 <details>
-<summary>🐳 <strong>Run with Docker (no local Node.js required)</strong></summary>
+<summary><strong>Run with Docker (no local Node.js required)</strong></summary>
 
 ```bash
+# Pull the prebuilt image from GitHub Container Registry
+docker run -it --rm -v ~/.seb:/root/.seb ghcr.io/arvarik/seb:latest
+
+# Or build locally from source
 docker build -t seb .
 docker run -it --rm -v ~/.seb:/root/.seb seb
 ```
 </details>
 
-### 2. Configure
-
-Run the interactive setup to securely configure your AI provider:
+<details>
+<summary><strong>Install from Source</strong></summary>
 
 ```bash
+git clone https://github.com/arvarik/seb.git
+cd seb
+npm ci
+npm install -g .
+```
+</details>
+
+### 2. Configure Your Model & Sleeper Account
+
+```bash
+# Configure your AI provider and masked API key (~/.config/seb/)
 seb configure
+
+# Optional: connect your Sleeper username (read-only)
+seb setup your-sleeper-username
 ```
-*Keys are masked in the terminal and stored in a private local credentials file.*
 
-### 3. Connect Sleeper
-
-Link your Sleeper username for personalized fantasy intelligence:
+### 3. Launch
 
 ```bash
-seb setup your-sleeper-name
-```
-*Seb only reads league data; it never modifies lineups, trades, or settings.*
-
-### 4. Launch
-
-```bash
+# Start the interactive terminal UI
 seb
-```
 
-Or ask a one-shot question directly from your shell:
-
-```bash
-seb ask "Compare my flex options for this week"
+# Or run a one-shot query from your shell (add --json for structured output)
+seb ask "Optimize my Week 8 lineup and highlight any injury risks"
 ```
 
 ---
 
-## Three Connected Modes
+## Three Connected Experiences
 
-Switch seamlessly between modes using `/explore`, `/fantasy`, and `/analyze`:
+Switch experiences anytime with `/explore`, `/fantasy`, and `/analyze`—your active player, team, league, and week carry seamlessly across turns.
 
-### 🔍 Explore (NFL Intelligence)
-Deep NFL research without needing a fantasy account.
-* *"Show Baltimore's recent offensive trends and red zone usage."*
-* *"What changed in the latest verified Seahawks injury report?"*
-* *"Compare rushing usage and snap share for these two running backs."*
-
-### 🏆 My Fantasy (Multi-League Overview)
-Connect your Sleeper account to monitor all your leagues in one view.
-* *"What needs my attention across my leagues this week?"*
-* *"Show urgent news for players across my active rosters."*
-* *"Which of my leagues has the weakest running back depth?"*
-
-### 📊 Analyze (Protected Decisions)
-Turn research into winning start-sit, trade, and waiver actions.
-* *"Compare my flex options for Week 2 in full PPR."*
-* *"Rank these waiver targets and recommend FAAB bid ranges."*
-* *"Review this trade proposal for my Dynasty league."*
+| Experience | Command | Example Prompts |
+| --- | --- | --- |
+| **Explore** *(NFL Intelligence)* | `/explore` | *"Show Baltimore's red-zone rushing trends."* · *"What changed on Seattle's latest injury report?"* |
+| **My Fantasy** *(Multi-League Hub)* | `/fantasy` | *"What needs my attention across all my leagues this week?"* · *"Which league has my thinnest RB depth?"* |
+| **Analyze** *(Protected Decisions)* | `/analyze` | *"Optimize my starting lineup for Week 8."* · *"Evaluate trading Garrett Wilson for De'Von Achane."* |
 
 ---
 
-## CLI & Bot Connectors
+## Interactive Terminal, CLI & Chat Bots
 
-### Command-Line Tools
+### Interactive Terminal Highlights
 
-| Command | Description |
+- **Slash Palette & Shortcuts**: Press `/` or `Ctrl+K` to search commands, `Ctrl+G` to inspect active league/player context, and `/about [topic]` to inspect Seb's live architecture, projection math, or storage schema.
+- **Inspectable Tool Rows**: Click any purple tool row in the transcript to expand its exact JSON inputs and outputs; click grouped rows to inspect individual calls and latencies.
+- **Saved & Resumable Sessions**: Exiting prints `seb resume <session-id>`. Run `seb sessions` anytime to list and restore saved conversations, tool details, and source evidence.
+
+### Command-Line Reference
+
+| Command | Purpose |
 | --- | --- |
-| `seb` | Launch the full interactive terminal interface. |
-| `seb ask "..."` | Ask one-shot questions from scripts or shell (supports `--json`). |
-| `/about [topic]` | Inside chat, inspect Seb's architecture, projection formulas, storage schemas, and design principles. |
-| `seb doctor` | Validate active model provider, local cache, and public APIs. |
-| `seb usage / stats`| Inspect local token usage, response latency, and run success rates. |
-| `seb learn` | Review adaptive forecast accuracy and completed-week parameter updates. |
-| `seb cache clear` | Manage or prune the local SQLite cache. |
+| `seb` / `seb chat` | Launch the interactive terminal UI (supports `--provider` and `--model`). |
+| `seb ask "<question>"` | Run a single grounded query from scripts or shell (`--json` supported). |
+| `seb configure` | Configure providers, models, or import settings (`--import-env <file>`). |
+| `seb setup [username]` | Guided first-run setup or Sleeper username sync. |
+| `seb sessions` / `seb resume <id>` | List or restore saved interactive conversations. |
+| `seb doctor` | Run all 9 health checks across Node, config, SQLite, permissions, model, and APIs. |
+| `seb usage` / `seb stats` | View local token consumption, latency percentiles, and run success rates. |
+| `seb learn` | Inspect or update local post-week forecast calibration. |
+| `seb evaluate` / `seb replay` | Run historical projection benchmarks and non-leakage walk-forward backtests. |
+| `seb cache` / `seb snapshots` | Inspect, refresh, or prune `.cache/seb.sqlite` and SHA-256 source snapshots. |
+| `seb completion <shell>` | Generate shell completions for `zsh`, `bash`, or `fish`. |
 
-### League Chat Bots
+### League Group-Chat Bots
 
-Deploy Seb directly into your league's group chat! Seb includes built-in read-only connectors for:
-* **Slack** (Socket Mode & Webhooks)
-* **Discord** (Bot client & Interactions)
-* **Telegram** (Bot polling & Webhooks)
-* **GroupMe** (Bot webhooks)
+Run `npm run connectors` to host Seb inside your league's group chat with shared Hono + Chat SDK adapters, 12k-character compacted thread memory, and optional Redis state:
 
-See the [Chat Connectors Guide](docs/CONNECTORS.md) for step-by-step bot setup.
+- **Slack** — Socket Mode & Events API webhooks ([Slack Guide](docs/connectors/SLACK.md))
+- **Discord** — Gateway bot & HTTP interactions ([Discord Guide](docs/connectors/DISCORD.md))
+- **Telegram** — Long polling & secret-verified webhooks ([Telegram Guide](docs/connectors/TELEGRAM.md))
+- **GroupMe** — Secret-verified group webhooks with 1,000-char smart chunking ([GroupMe Guide](docs/connectors/GROUPME.md))
 
 ---
 
 ## How Seb Protects Your Decisions
 
-Generic AI models often hallucinate injury reports or miscalculate fantasy points. Seb prevents this through a 4-step safety architecture:
+```mermaid
+flowchart LR
+  A["1. Resolve Identity & League"] --> B["2. Gather Live Sources"]
+  B --> C["3. Compute Deterministic Math"]
+  C --> D{"4. Decision Gate"}
+  D -->|Verified| E["Grounded Recommendation + Evidence"]
+  D -->|Missing or Stale| F["Auto-Refresh & Single Retry"]
+  F --> D
+```
 
-1. **Resolve**: Resolves the exact player, team, roster, and league scoring rules.
-2. **Gather**: Pulls live facts from Sleeper, nflverse, NWS weather, and 47+ newsrooms.
-3. **Compute**: Deterministic functions compute projections, trade impacts, and ranking scores.
-4. **Validate**: A safety gate verifies that all facts match the requested player and league. If facts are missing or conflicting, Seb withholds the action rather than guessing.
+1. **Resolve**: Maps nicknames and abbreviations to canonical player/team IDs and loads exact Sleeper league roster slots and scoring weights.
+2. **Gather**: Queries Sleeper, nflverse play-by-play/weekly CSVs, NWS kickoff forecasts, and 47 curated NFL newsrooms.
+3. **Compute**: Runs deterministic ensembles for player/kicker/D/ST projections, same-game covariance, maximum-weight lineup optimization, FAAB scoring, and playoff simulations.
+4. **Validate**: Verifies active roster/slot legality, injury status, and fresh news for recommended starters. If context is stale or incomplete, Seb automatically refreshes caches and retries once—withholding the call rather than guessing if evidence remains unavailable.
 
 ### Transparent Limits
-* **Supported Positions**: Projections and lineup comparisons support offensive skill positions (QB, RB, WR, TE, K) and team D/ST (with individual special-teams return scoring).
-* **Public Latency**: News and nflverse game logs rely on public feeds and can lag breaking live game events.
-* **Weather Coverage**: NWS weather forecasts cover United States venues only.
+
+- **Supported Positions**: Projections and lineup optimization cover offensive skill positions (`QB`, `RB`, `WR`, `TE`), kickers (`K`), and team `D/ST` (including individual `kr_yd`, `pr_yd`, `st_ff`, and `st_fum_rec` rules). Individual defensive player (`IDP`) projections are not yet modeled.
+- **Public Feed Cadence**: Public RSS/sitemap newsrooms and nflverse weekly releases can lag live in-game broadcast events.
+- **Weather Venues**: National Weather Service forecasts cover United States venues; international neutral-site games are flagged explicitly.
 
 ---
 
 ## Documentation
 
+| Category | Guides |
+| --- | --- |
+| **Getting Started** | [Documentation Hub](docs/README.md) · [Setup Guide](docs/SETUP.md) · [Persistent Configuration](docs/CONFIGURATION.md) · [Model Providers](docs/MODELS.md) |
+| **CLI & Terminal** | [CLI Reference](docs/CLI.md) · [Interactive Guide](docs/INTERACTIVE.md) · [Terminal UI](docs/TERMINAL_UI.md) · [Experiences](docs/EXPERIENCES.md) · [Skills](docs/SKILLS.md) |
+| **Chat Connectors** | [Connectors Overview](docs/CONNECTORS.md) · [Slack](docs/connectors/SLACK.md) · [Discord](docs/connectors/DISCORD.md) · [Telegram](docs/connectors/TELEGRAM.md) · [GroupMe](docs/connectors/GROUPME.md) · [Custom Adapters](docs/connectors/CUSTOM_ADAPTER.md) |
+| **Architecture & Science** | [System Architecture](docs/ARCHITECTURE.md) · [AI SDK & Telemetry](docs/AI_SDK.md) · [Forecasting & Analysis](docs/ANALYSIS.md) · [Defense & Special Teams](docs/DEFENSE_AND_SPECIAL_TEAMS.md) · [Evaluation](docs/EVALUATION.md) |
+| **Data, Storage & Ops** | [Data Sources](docs/DATA_SOURCES.md) · [Identities](docs/IDENTITIES.md) · [Provenance](docs/PROVENANCE.md) · [Storage & Privacy](docs/STORAGE.md) · [Operations](docs/OPERATIONS.md) · [Versioning](docs/VERSIONING.md) |
+
 ### Optional Judgment tracing
 
-Seb works without a Judgment account. Tracing stays off unless you explicitly enable it.
-When tracing is off, Seb does not load the Judgment SDK or send data to Judgment.
-Adding credentials alone does not enable tracing.
-
-To enable tracing, add these values to a dotenv file for explicit import, or to your service environment:
+Seb runs completely offline from Judgment by default (`SEB_JUDGMENT_TRACING=false`) and never loads the `judgeval` exporter unless explicitly enabled. To export OpenTelemetry traces for CLI runs, interactive sessions, and chat connectors to your Judgment `seb` project, import these settings via `seb configure --import-env /path/to/.env`:
 
 ```dotenv
 SEB_JUDGMENT_TRACING=true
-JUDGMENT_API_KEY=<your saved Judgment API key>
-JUDGMENT_ORG_ID=<your Judgment organization ID>
+JUDGMENT_API_KEY=<your-judgment-api-key>
+JUDGMENT_ORG_ID=<your-judgment-organization-id>
 ```
 
-Git ignores `.env` and its variants, such as `.env.local`. The repository tracks only `.env.example`.
-
-Import the file once with `seb configure --import-env /absolute/path/to/.env`.
-Review the setting names and confirm the import. Seb masks secrets in the preview.
-Saved settings apply from any directory. Seb does not load a current-directory `.env` automatically.
-Use `seb configure` to edit Gemini credentials, models, Judgment settings, and other supported settings.
-See [Persistent configuration](docs/CONFIGURATION.md) for storage, security, and override rules.
-Use your own organization ID. Seb sends traces to the `seb` project in that organization.
-Seb loads the environment before it initializes tracing once per process.
-Every span in a traced request carries the same `judgment.session_id`, including model calls, tool calls, and streaming work.
-Missing credentials or initialization failures produce a warning, and Seb continues without tracing.
-
-**Enabling tracing exports conversation content.** Judgment receives prompts, answers, model calls, tool inputs and outputs, and error information.
-This content can include league data and personal information that appears in a conversation or tool result.
-Seb does not pass its environment or credential configuration to trace wrappers.
-Local usage records keep their existing metadata-only format.
-
-Tracing covers CLI questions, structured answers, interactive agent turns, and connector replies.
-Each interactive conversation and connector thread groups related traces into a session.
-Model and tool spans come from the AI SDK integration. Stream roots remain open until consumption ends or the consumer cancels.
-Seb records up to 128,000 characters of final text on each root. Child spans can contain additional content.
-Seb flushes completed roots and shuts down tracing when the CLI or connector service stops normally.
-An immediate forced exit, including a broken output pipe, can lose queued traces.
-
-Set `SEB_JUDGMENT_TRACING=false` or remove it, then restart Seb, to disable tracing.
-`JUDGMENT_MONITORING=false` also disables tracing at startup.
-
-After installing dependencies, verify one normal request and one cancelled request in Judgment.
-Check the `seb` project, session grouping, model and tool children, final output, and trace health results.
-An initialization message alone does not prove that export works.
-See the [Judgment tracing guide](https://docs.judgmentlabs.ai/documentation/tracing)
-and [AI SDK integration](https://docs.judgmentlabs.ai/documentation/integrations/agent-frameworks/vercel-ai-sdk).
-
-### Guides
-
-* **Getting Started**: [Setup Guide](docs/SETUP.md) · [Terminal UI Guide](docs/TERMINAL_UI.md) · [Model Configuration](docs/MODELS.md)
-* **Features**: [Interactive Experience](docs/INTERACTIVE.md) · [CLI Reference](docs/CLI.md) · [Skills Guide](docs/SKILLS.md)
-* **Integrations**: [Chat Connectors](docs/CONNECTORS.md) · [Slack Guide](docs/connectors/SLACK.md) · [Discord Guide](docs/connectors/DISCORD.md)
-* **Architecture & Science**: [Architecture Guide](docs/ARCHITECTURE.md) · [Analysis & Accuracy](docs/ANALYSIS.md) · [Data Sources](docs/DATA_SOURCES.md) · [Provenance](docs/PROVENANCE.md)
+> [!WARNING]
+> Enabling Judgment tracing exports conversation prompts, model completions, and tool inputs/outputs (which may include league and roster data) to Judgment. Local SQLite usage analytics (`seb usage` / `seb stats`) always remain metadata-only. See [Persistent Configuration](docs/CONFIGURATION.md) and [AI SDK & Telemetry](docs/AI_SDK.md#5-local-usage-telemetry) for full session-grouping, shutdown-flush, and opt-out details.
 
 ---
 
 ## Contributing & License
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md), our [Code of Conduct](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md).
+Contributions are welcome! Please review [CONTRIBUTING.md](CONTRIBUTING.md), our [Code of Conduct](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md).
 
 Licensed under the [Apache-2.0 License](LICENSE).
-
-### Saved conversations and tool details
-
-After `/exit`, Seb prints `seb resume <session-id>`. Run `seb sessions` to list saved conversations.
-Resume restores questions, answers, completed tool details, and answer evidence. It refreshes the current NFL calendar.
-Click a purple tool row to inspect its input and result. Click a grouped row to list its calls, then click a call for details.
-
-Seb now projects team D/ST with league scoring and opponent history. See [the model and benchmark](docs/DEFENSE_AND_SPECIAL_TEAMS.md).

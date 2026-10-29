@@ -81,8 +81,9 @@ export function renderAnalysisText(
   width = 100,
 ): string {
   const enhanced = text
-    .replace(/^(Confidence:\s*)(?:low|medium|high)?\s*\(?([0-9]{1,3})%\)?\.?$/gimu,
-      (_match, label: string, score: string) => `${label}${score}% ${bar(Number(score), 10, theme)}`)
+    .replace(/^(Confidence:\s*)(low|medium|high)?\s*\(?([0-9]{1,3})%\)?\.?$/gimu,
+      (_match, label: string, tier: string | undefined, score: string) =>
+        `${label}${tier ? `${tier} (${score}%)` : `${score}%`} ${bar(Number(score), 10, theme)}`)
     .replace(/^(Win probability:\s*)([0-9]{1,3})%\.?$/gimu,
       (_match, label: string, score: string) => `${label}${score}% ${bar(Number(score), 20, theme)}`)
     .replace(/^(Weekly points|Usage trend|Schedule difficulty):\s*((?:-?\d+(?:\.\d+)?\s*,\s*)*-?\d+(?:\.\d+)?)$/gimu,

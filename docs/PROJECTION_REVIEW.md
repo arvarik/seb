@@ -1,87 +1,48 @@
 # Projection and conversation review
 
-Review date: September 10, 2026.
+> [!NOTE]
+> **Historical Engineering Review (`2026-09-10`, v1.0.2)** — This document preserves the point-in-time post-mortem and verification record from the `v1.0.2` cycle. For live `v1.1.2` behavior—including the reduction of `MAX_AGENT_STEPS` from `32` to **`16`** in `v1.1.0`, `toModelOutput` compaction, full-roster lineup optimization, intra-game correlations, and automatic Decision Gate recovery—see the [Analysis and weekly learning guide](ANALYSIS.md), [Defense and special teams guide](DEFENSE_AND_SPECIAL_TEAMS.md), and [Architecture guide](ARCHITECTURE.md).
 
 ## Why the reported turns failed
 
-The two reported interactive turns ended at the 12-step research limit with `tool-calls` as their finish reason.
-They did not end with a completed answer.
-The terminal described that condition as a Gemini failure, which hid the actual cause.
+Two interactive research turns terminated at the earlier 12-step model limit with `finishReason: "tool-calls"` rather than a completed user-facing answer, and the terminal surfaced that incomplete stop as a generic Gemini provider failure. Recorded usage telemetry showed 47 individual `projectPlayer` calls (46 returned, 1 failed) plus two `predictMatchup` calls that failed legitimately in Week 1 because historical roster-score matchup prediction requires completed weekly team scores. Those telemetry records confirmed that the underlying projection calculations succeeded while step exhaustion and context pruning broke conversation completion.
 
-The recorded tool metadata contained 47 individual player projection calls.
-Of those calls, 46 returned results and one failed.
-Both historical matchup calls failed because that model needs completed roster scores.
-Week 1 has no such scores.
-These observations distinguish successful calculations from a failed conversation.
+At the same time, aggressive message pruning dropped early tool results after six history messages, forcing the model to repeat prior player lookups and discarding provider thought signatures mid-turn. On the final allowed step, passing an empty tool array also caused the Google Gemini adapter to omit `functionCallingConfig`, leaving tool calling implicitly active instead of sending an explicit `NONE` directive.
 
-The agent also removed early research after six messages.
-That removal encouraged repeated requests and discarded provider continuation state.
-On the final step, the empty tool list caused the Google adapter to omit the function-calling configuration.
-The request therefore did not explicitly disable further function calls.
+## Corrections recorded in v1.0.2
 
-## Corrections
-
-| Defect | Resulting behavior | Regression coverage |
+| Defect | Resulting behavior (at review time) | Regression coverage |
 | --- | --- | --- |
-| Research limit ended without an answer | Allow 32 model steps and reserve the final step for an answer. Keep function declarations so Gemini receives `NONE`. | `gemini-model.test.ts`, `agent-harness.test.ts` |
-| Early tool results disappeared | Preserve the active turn and its provider signatures. Prune older conversation history only. | `ai-sdk-features.test.ts`, `gemini-model.test.ts` |
-| Repeated single-player projections consumed steps | Project up to 40 players in a batch with four concurrent requests. Preserve successful results when one player lacks data. | `projection-batch.test.ts` |
-| The model added a live roster subtotal incorrectly | Calculate both rosters from verified weekly starters. Add completed and projected points exactly once. Keep missing and partial scores explicit. | `projection-matchup.test.ts` |
-| Kicking data disappeared during parsing | Preserve kicking counts and distance lists. Calculate league points from those fields. | `nflverse-client.test.ts`, `projection-review.test.ts` |
-| New distance rules blocked offensive projections | Recognize 50–59 and 60-plus kicking rules alongside the older 50-plus rule. | `projection-review.test.ts` |
-| Name punctuation and suffixes hid player history | Use the same player-name normalization for source searches and identity resolution. | `nflverse-client.test.ts`, `sleeper-client.test.ts` |
-| Rams source codes hid scheduled games | Map nflverse `LA` to `LAR` in schedules, player teams, opponents, and source identities. Refresh the affected cache versions. | `nflverse-client.test.ts`, `identity.test.ts` |
-| A missing new-season file prevented automatic fallback | Use the prior season for an automatic window after HTTP 404. Preserve explicit windows and other errors. | `projection-review.test.ts` |
-| Current injuries and later teams changed historical estimates | Exclude current profiles from forecasts for past weeks and seasons. | `projection-review.test.ts` |
-| Defense codes matched unrelated player names | Recognize team identities before player research. Explain the unsupported defense projection. | `projection-review.test.ts` |
-| Partial scoring looked like a complete batch | Expose `scoreScope`. A complete batch requires a weekly estimate for every player. | `projection-batch.test.ts` |
-| Duplicate opponent weeks inflated defensive scoring | Reject duplicate player-week rows before the opponent adjustment. | `projection-review.test.ts` |
-| Invalid comparison values produced invalid probabilities | Require finite points and a range that contains the estimate. | `projection-review.test.ts` |
-| Invalid saved learning produced a generic provider error | Explain the local forecast-data failure without exposing file contents. | `projection-review.test.ts` |
-| Failed questions disappeared from conversation context | Keep the question and discard unfinished assistant and approval continuations. Resolve repeated natural-language retries. | `interactive-tui.test.ts`, `recommendation-eligibility.test.ts` |
-| The editor stopped accepting text during research | Accept drafts during a response. Enter queues the draft. Editing removes it from the queue. Failure or cancellation preserves it for review. | `interactive-renderer.test.ts`, `interactive-tui.test.ts` |
-| Detailed evidence escaped the collapsed display | Recognize embedded evidence headings and show one evidence line per answer. Preserve full text for sources, copy, and export. | `interactive-renderer.test.ts` |
-| The input touched the status line | Add one terminal row below the editor and adjust small-window layout limits. | `interactive-renderer.test.ts` |
+| Research limit ended without an answer | Raised the step ceiling (32 steps in `v1.0.2`, later streamlined to **16 steps** in `v1.1.0` alongside batching and `toModelOutput` compaction) and reserved the final step for tool-free synthesis while keeping declarations so Gemini receives `NONE`. | `gemini-model.test.ts`, `agent-harness.test.ts` |
+| Early tool results disappeared mid-turn | Preserved the entire active turn and provider continuation signatures, pruning only prior-turn history. | `ai-sdk-features.test.ts`, `gemini-model.test.ts` |
+| Repeated single-player projections consumed steps | Added `projectPlayers` for up to 40 names per call (4 concurrent projections), preserving valid results when individual players lack data. | `projection-batch.test.ts` |
+| Model summed live roster subtotals inaccurately | Added `projectLeagueMatchup` to sum verified weekly starters, completed scores, and remaining projections deterministically once per slot while keeping missing/partial scores explicit. | `projection-matchup.test.ts` |
+| Kicking counts and distances were dropped during CSV parsing | Preserved FG/PAT counts and attempt distance arrays in `NflverseClient` and scored league kicking settings from component stats. | `nflverse-client.test.ts`, `projection-review.test.ts` |
+| Split distance tiers blocked offensive projections | Recognized `50–59` and `60+` FG rules alongside the legacy `50+` rule. | `projection-review.test.ts` |
+| Punctuation and name suffixes hid historical player logs | Unified player-name normalization across source searches and `PlayerIdentityRegistry`. | `nflverse-client.test.ts`, `sleeper-client.test.ts` |
+| Rams `'LA'` source codes hid scheduled games | Mapped nflverse `'LA'` deterministically to `'LAR'` across schedules, player stats, opponents, and source links, bumping cache schema versions. | `nflverse-client.test.ts`, `identity.test.ts` |
+| Unpublished new-season CSVs blocked automatic fallback | Fell back to the prior regular season on automatic windows after HTTP `404` while keeping explicit season errors visible. | `projection-review.test.ts` |
+| Current injuries and transfers altered historical backtests | Excluded live Sleeper status and current-day team overrides when projecting completed historical weeks or seasons. | `projection-review.test.ts` |
+| Team defense codes matched unrelated player names | Resolved canonical NFL team codes before player search so D/ST requests route cleanly instead of matching player substrings. | `projection-review.test.ts` |
+| Partial scoring appeared indistinguishable from full projections | Added `scoreScope` (`weekly-estimate`, `partial-scoring`, `historical-baseline`) and required `weekly-estimate` across every batch item for `complete: true`. | `projection-batch.test.ts` |
+| Duplicate opponent-week rows inflated positional defense adjustments | Rejected duplicate `(player, week)` records before computing opponent positional allowances. | `projection-review.test.ts` |
+| Malformed comparison intervals produced `NaN` win probabilities | Required finite expected points and uncertainty bounds containing the point estimate. | `projection-review.test.ts` |
+| Corrupted local learning files surfaced as provider failures | Reported safe, file-content-free local forecast-data errors directly. | `projection-review.test.ts` |
+| Failed turns dropped the user's question from session context | Retained the user question while discarding unfinished assistant/approval state so natural-language retries resolve cleanly. | `interactive-tui.test.ts`, `recommendation-eligibility.test.ts` |
+| Terminal editor locked input during streaming | Allowed live draft typing and `Enter` queuing during active streams, preserving drafts on cancellation or error. | `interactive-renderer.test.ts`, `interactive-tui.test.ts` |
+| Embedded evidence headings leaked past collapsed transcript mode & touched footer | Collapsed embedded evidence blocks to a single summary line (retaining full text for copy/export) and added a spacer row above the status bar. | `interactive-renderer.test.ts` |
 
-## Scoring checks
+## Scoring verification
 
-The live 2025 regular-season dataset contains 543 kicker game rows.
-All 543 rows produced finite scores under each tested league's kicking rules.
-The tests check made-distance boundaries, missed-distance boundaries, blocked attempts, yardage scoring, zero attempts, and incomplete source fields.
+Against the live 2025 nflverse regular-season dataset ([`stats_player_week_2025.csv.gz`](https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2025.csv.gz)), all **543 kicker game rows** and **6,037 offensive player-game rows** produced finite component-derived scores across tested [Sleeper scoring profiles](https://support.sleeper.com/en/articles/3998131-what-scoring-options-are-available), covering distance boundaries, blocked kicks, yardage tiers, zero-attempt games, and [special-teams fumble rules](https://support.sleeper.com/en/articles/4056849-why-did-my-player-lose-points-for-a-special-teams-fumble). Because nflverse's precomputed `fantasy_points_ppr` column cannot represent arbitrary custom league weights, Seb always computes weekly fantasy totals from raw component columns.
 
-The review also scored 6,037 offensive game rows.
-The source's precomputed PPR field does not encode an arbitrary Sleeper league's rules.
-Special-teams touchdowns and special-teams fumble penalties can differ between those definitions.
-Seb therefore calculates points from the league settings and component statistics.
-It does not substitute the source's precomputed fantasy score.
+## Model scope evolution since this review
 
-Sources:
+The initial review pass left team D/ST and play-level individual special-teams events (`st_ff`, `st_fum_rec`, `st_tkl_solo`) unsupported; `v1.0.2` subsequently shipped both via play-by-play (`play_by_play_YEAR.csv.gz`) and official weekly team totals (`stats_team_week_YEAR.csv.gz`), documented in [Defense and special teams](DEFENSE_AND_SPECIAL_TEAMS.md). Individual defensive player (`IDP`) projections remain unsupported, kicker forecasts continue to use fixed default or manual-override parameters rather than offensive learned weights, and opponent/weather/availability adjustments remain disclosed bounded heuristics.
 
-- [nflverse 2025 weekly player data](https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2025.csv.gz)
-- [Sleeper scoring options](https://support.sleeper.com/en/articles/3998131-what-scoring-options-are-available)
-- [Sleeper special-teams fumble rules](https://support.sleeper.com/en/articles/4056849-why-did-my-player-lose-points-for-a-special-teams-fumble)
+## Point-in-time verification snapshot (`2026-09-10`)
 
-## Remaining model limits
-
-The initial review left defense and individual special-teams projections unsupported.
-Version 1.0.2 adds both through play-level data and official weekly totals.
-See [Defense and special teams](DEFENSE_AND_SPECIAL_TEAMS.md) for the implementation and verification.
-Individual defender projections remain unsupported.
-
-Kicker projections use historical results and default forecast parameters, or an explicit manual override.
-They do not reuse learned offensive parameters.
-The existing offensive forecast benchmark does not validate kicker accuracy.
-Opponent, availability, and weather adjustments remain disclosed heuristics.
-Current news supplements the estimate and does not change the numerical model automatically.
-
-## Verification
-
-- `npm run check`: 78 files and 1,085 tests passed.
-- `npm run test:coverage`: 1,085 tests passed. All coverage thresholds passed.
-- `npm audit --omit=dev`: zero vulnerabilities.
-- `npm run doctor`: all required checks passed, including live source access, Gemini local-tool continuation, and grounded search.
-- A real terminal smoke test verified typing, queuing, follow-up submission, transcript retention, collapsed evidence, and normal exit.
-- Direct live matchup calculations verified all four roster subtotals, including a completed offensive player and a completed defense.
-
-The source checks establish calculation and integration behavior.
-They do not establish the accuracy of a future fantasy score.
+- **`npm run check` & `npm run test:coverage`**: 78 test files and 1,085 tests passed with all coverage thresholds satisfied.
+- **`npm audit --omit=dev`**: Zero production dependency vulnerabilities.
+- **`npm run doctor`**: Live Sleeper, nflverse, NWS, Gemini streaming local-tool continuation, and Google Search grounding checks passed.
+- **Interactive & live matchup smoke checks**: Verified draft queuing, follow-up submission, collapsed evidence rendering, clean terminal restoration, and exact four-roster live matchup subtotals across completed and remaining offensive/defense starters.

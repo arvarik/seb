@@ -1,22 +1,20 @@
 # Explore, My Fantasy, and Analyze
 
-Seb supports three connected experiences.
+[Documentation Hub](README.md) · [Interactive Guide](INTERACTIVE.md) · [Skill Guide](SKILLS.md) · [Analysis & Learning](ANALYSIS.md)
 
-Users can ask normal questions without selecting an experience first.
+Seb organizes interactive research around three connected experiences—**Explore**, **My Fantasy**, and **Analyze**—that share a single live session context. You can ask natural questions immediately without picking a mode first; `/explore`, `/fantasy` (`/my`), and `/analyze` switch the visible experience header and contextual suggestions cleanly without keyword-guessing behind your back.
 
-The `/explore`, `/fantasy`, and `/analyze` commands change the visible experience.
-
-Seb does not change that selection from a keyword in a question.
+```mermaid
+flowchart LR
+  Explore["Explore (NFL Facts, Stats & News)"] --> Ctx["Shared Session Context (Player, Team, League & Roster)"]
+  Fantasy["My Fantasy (Sleeper Leagues & Rosters)"] --> Ctx
+  Ctx --> Analyze["Analyze (Projections, Lineups, Waivers & Trades)"]
+  Analyze --> Ctx
+```
 
 ## Explore
 
-Explore answers NFL information questions.
-
-It covers players, teams, league-wide facts, statistics, schedules, results, and verified news.
-
-Explore needs no Sleeper account.
-
-Example questions:
+**Explore** answers NFL information questions across players, franchises, league-wide statistics, schedules, game results, and verified reporting from Seb's 47 built-in NFL newsrooms (plus grounded web search when Google Gemini is active). It requires **no Sleeper account** and stays objective rather than injecting unrequested fantasy lineup advice:
 
 ```text
 Show Derrick Henry's current profile and recent game log.
@@ -26,27 +24,14 @@ Show the strongest rushing offenses this season.
 
 ## My Fantasy
 
-My Fantasy adds personal Sleeper context.
+**My Fantasy** layers personal Sleeper context onto live NFL data once you link a username via `/connect <USERNAME>` or `seb setup <USERNAME>`. Seb stores only your Sleeper username locally and refreshes everything else dynamically at session startup:
 
-The user connects one username with `/connect USERNAME` or `seb setup USERNAME`.
+1. Fetches the live NFL season, phase, display week, and Sleeper league season (separating the NFL calendar from Sleeper's league year when they differ during the offseason).
+2. Discovers every current-season NFL league for your account and identifies every roster you own or co-own.
+3. Reads league scoring rules, roster slots, waiver budgets/schedules, playoff weeks, and trade deadlines.
+4. Flags open starter slots, injured or bye-week starters, and nearby waiver or trade windows.
 
-Seb stores only that username.
-
-At startup, Seb completes these actions:
-
-1. It reads the current NFL state from Sleeper.
-2. It separates the NFL season from the Sleeper league season.
-3. It uses Sleeper's display week as the current user-facing week.
-4. It discovers every NFL league for the current league season.
-5. It finds every roster that the user owns or co-owns.
-6. It reads available trade, playoff, and waiver settings.
-7. It checks open starter slots, player status signals, and nearby deadlines.
-
-Seb keeps an account-wide view when several leagues remain relevant.
-
-It selects one league only when one owned league clearly matches the current season.
-
-Example questions:
+When you belong to multiple leagues, Seb maintains an **account-wide view** by default so broad questions scan all of your rosters at once—and **auto-resolves a single league's context automatically** whenever you ask about a player you own in only one league:
 
 ```text
 What needs my attention across my leagues?
@@ -54,49 +39,20 @@ Show urgent news for players on my rosters.
 Which league has the weakest running back depth?
 ```
 
-Sleeper can use custom daily waiver schedules.
-
-Seb shows the available settings and states when Sleeper owns the exact live countdown.
+> [!NOTE]
+> Sleeper leagues can use custom daily waiver processing schedules where Sleeper's backend owns the exact live clearance countdown. Seb displays your league's configured waiver type, budget, and schedule fields transparently and notes whenever exact live countdowns live inside Sleeper.
 
 ## Analyze
 
-Analyze turns an active subject into a decision or comparison.
+**Analyze** turns the active player, team, or connected fantasy roster into concrete, scoring-aware comparisons and lineup decisions:
 
-It can combine statistics, recent usage, matchup strength, weather, news, and fantasy roster fit.
+- **Player & team D/ST projections**: Generates scoring-aware median, floor, ceiling, confidence, matchup/weather adjustments, and explicit modeling limits across offensive skill positions, kickers, **and team D/ST units** (sacks, turnovers, defensive TDs, blocked kicks, safeties, and points/yards allowed tiers—see [Defense and special teams](DEFENSE_AND_SPECIAL_TEAMS.md)).
+- **Special-teams return scoring & same-game stack correlations**: Accounts for active league kick/punt return yardage and return touchdown rules, and models **same-game stack correlations** (such as positive QB/pass-catcher ceiling correlation or negative correlation against an opposing D/ST) when evaluating upside vs. floor.
+- **Head-to-head start/sit & full-roster lineup optimization**: Compares 2–6 candidates directly (`compareStartSit`) or optimizes your **entire starting lineup** (`optimizeRosterLineup`) across offensive slots, flex/superflex, kicker, and team D/ST—recommending highest-impact bench-for-starter swaps.
+- **Auto-league context resolution**: If you belong to multiple leagues and ask a start/sit, projection, or trade question about a player rostered on **only one** of your teams, Seb automatically applies that league's scoring settings and roster context without requiring `/league <ID>` first.
+- **Calibrated waivers & trade impact**: Ranks unrostered waiver targets using fixed positional production and platform-wide logarithmic demand (`0`–`1,000` adds) reference scales—so changing the candidate pool never distorts scores—alongside FAAB bid ranges and two-sided trade production, usage, volatility, and positional depth comparisons.
 
-Scoring-aware projections show a median, floor, ceiling, confidence, adjustments, and limits.
-
-The waiver assistant ranks unrostered targets and shows a transparent FAAB range when the league uses FAAB.
-
-Its production and demand scores use fixed reference scales.
-
-The candidate list cannot change those reference values.
-
-The trade impact tool compares recent scoring value and roster position changes on both sides.
-
-## Decision safeguards
-
-Seb checks each requested player and the selected league against the executed tool inputs and results.
-
-Seb requires current sources, resolved player identity, player status, current news, and league scoring before it displays an action.
-
-A start-sit action also needs an eligible projection.
-
-The projection becomes ineligible when it lacks enough games or finds an unsupported active scoring rule.
-
-It also becomes ineligible for an unavailable player, an unsupported position, or missing required scoring data.
-
-A trade package must contain unique players on each side.
-
-Every received player must belong to one opposing roster in the selected league.
-
-Seb replaces an unsupported action with a clear list of missing evidence.
-
-The terminal, JSON output, and chat connectors use the same safeguards.
-
-Seb keeps the active player from the previous answer.
-
-Therefore, a follow-up can use a pronoun without repeating the player name.
+Because session context persists across turns, natural pronoun follow-ups work effortlessly from Explore straight into Analyze:
 
 ```text
 Show Derrick Henry's player information.
@@ -104,54 +60,25 @@ Look deeper into his statistics.
 Compare him with Saquon Barkley for the upcoming matchup.
 ```
 
-Advanced workflows remain available through `/skills` and `/skill`.
+## Decision safeguards
 
-Most users do not need to select a workflow.
+Every terminal session, `--json` CLI call, and chat connector enforces the same **Decision Gate** before presenting a start/sit, lineup swap, waiver, or trade recommendation:
 
-## Progressive disclosure
+- **Verified tool lineage**: Every named player and target league must match executed tool inputs and outputs in the current turn (or fresh session tool evidence verified within the last 5 minutes), covering player identity, active status, current news, and league scoring rules.
+- **Projection & trade eligibility**: Start/sit and lineup recommendations require an eligible projection (sufficient completed games, available player status, supported position including K and team D/ST, complete stat inputs, and zero unsupported active scoring rules). Trade evaluations require unique players on each side with all incoming players belonging to a single opposing roster in that league.
+- **Transparent fallback**: If required evidence remains incomplete even after Seb's automatic recovery check, Seb withholds the recommendation and lists the exact missing requirements instead of guessing.
 
-The home screen shows urgent weekly actions before the three experiences when a Sleeper account is connected.
+## Progressive disclosure and state persistence
 
-The command palette shows common experience and account actions first.
-
-It places manual season, week, league, roster, team, and workflow controls under Advanced.
-
-Use those controls for historical research or a narrow league focus.
-
-Do not use them as normal setup steps.
-
-## Saved and automatic values
+Seb surfaces urgent weekly actions and the three primary experiences first, keeping manual overrides (`/season`, `/week`, `/league`, `/roster`, `/team`, and `/skill` workflows) tucked cleanly under **Advanced** in the command palette (`Ctrl+K`) for historical research or single-league deep dives.
 
 | Value | Source | Persistence |
 | --- | --- | --- |
-| Sleeper username | User preference | Saved locally |
-| Model provider and models | Model configuration | Saved locally or supplied by the environment |
-| NFL season and phase | Current Sleeper state | Refreshed per request or session |
-| Display week | Current Sleeper state | Refreshed per request or session |
-| Sleeper league season | Current Sleeper state | Refreshed per request or session |
-| Leagues | Connected Sleeper account | Rediscovered automatically |
-| Owned rosters | League roster records | Rediscovered automatically |
-| Active player or team | Current conversation | Current session |
-| Focused league | User override or clear automatic match | Current session |
+| Sleeper username | `seb setup` or `/connect` | Saved in `profile.json` |
+| Model provider, families, and keys | `seb configure` or environment | Saved in `model-settings.json` / `credentials.json` or `process.env` |
+| NFL season, phase, week, & league year | Sleeper `/v1/state/nfl` | Refreshed per session or one-shot request |
+| Leagues, settings, & owned rosters | Sleeper user/league APIs | Rediscovered automatically from username |
+| Active player, team, or skill workflow | Conversation turns or slash command | Current session (and saved in `sessions/<id>.json` for `seb resume`) |
+| Focused league | Automatic single-league ownership match or `/league <ID>` | Current session (and restored on `seb resume`) |
 
-The account preferences file never stores a key, league ID, roster ID, NFL team, season, or week.
-
-`seb configure` stores saved keys in the separate private credential file.
-
-## Failure behavior
-
-Explore and Analyze remain available when account refresh fails.
-
-The header keeps the account name and shows a refresh warning.
-
-Seb resolves leagues, rosters, weeks, deadlines, and player identities from tool evidence. Review the evidence when a model explanation appears inconsistent.
-
-Run `/connect USERNAME` to retry the complete account refresh.
-
-Run `/disconnect` to remove the account preference.
-
-Sleeper publishes the current state, user leagues, and roster endpoints in its [API documentation](https://docs.sleeper.com/).
-
-Sleeper explains trade deadline timing in its [trade deadline guide](https://support.sleeper.com/en/articles/2435411-when-is-my-trade-deadline).
-
-Sleeper explains custom waiver schedules in its [waiver guide](https://support.sleeper.com/en/articles/3978868-waivers-for-regular-season-playoffs).
+If Sleeper account discovery fails temporarily at startup, **Explore** and **Analyze** remain fully usable while the header keeps your username with a refresh warning—run `/connect <USERNAME>` to retry or `/disconnect` to clear it. For upstream platform details, see the [Sleeper API docs](https://docs.sleeper.com/), [Sleeper trade deadline guide](https://support.sleeper.com/en/articles/2435411-when-is-my-trade-deadline), and [Sleeper custom waiver guide](https://support.sleeper.com/en/articles/3978868-waivers-for-regular-season-playoffs).

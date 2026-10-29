@@ -1,24 +1,60 @@
-# Persistent configuration
+# Persistent Configuration
 
-Run `seb configure` in a terminal. Select one of these actions:
+[Documentation Hub](README.md) · [Setup Guide](SETUP.md) · [Model Selection](MODELS.md) · [Storage](STORAGE.md)
 
-1. **Model provider setup** verifies a provider key and saves model choices.
-2. **Saved settings and credentials** edits supported settings by group. Secret prompts hide typed values.
-3. **Import a dotenv file** previews supported setting names and asks before saving.
+Seb stores user-level configuration, model preferences, and credentials outside project repositories so your setup works from any directory without risking accidental git commits.
 
-You can open the import directly:
+## Interactive configuration and dotenv imports
+
+Run `seb configure` in an interactive terminal to manage persistent configuration through three guided flows:
+
+1. **Model provider setup** — Prompts privately for an API key (or OpenAI-compatible base URL), resolves model families, runs a 30-second live verification request, and saves only after verification succeeds.
+2. **Saved settings and credentials** — Edits supported settings organized by functional group (providers, Judgment tracing, terminal UI, data preferences, and chat connectors) while masking secret inputs.
+3. **Import a dotenv file** — Previews recognized variable names from a `.env` file and asks for confirmation before writing them to `~/.config/seb`.
+
+You can also invoke the dotenv importer directly from the command line:
 
 ```bash
 seb configure --import-env /absolute/path/to/.env
 ```
 
-Imports skip empty values and unsupported variables. Imports do not contact model providers.
-Seb never executes shell expressions in dotenv values.
-Edit or import again when you change a file. Seb does not watch the file or load files from its launch directory.
+The importer parses values statically without evaluating shell expressions (`$(...)` or variable interpolation), skips empty values and unrecognized keys (such as `PATH` or `NODE_OPTIONS`), and does not contact external model APIs. Boolean variables strictly require `'true'` or `'false'`, and conflicting alias values (such as mismatched `GOOGLE_GENERATIVE_AI_API_KEY` and `GEMINI_API_KEY` entries) fail validation cleanly. Because Seb never watches dotenv files or auto-loads `.env` from your working directory, re-run `seb configure --import-env` whenever you want to apply changes from a file.
 
-## Gemini and Judgment
+> [!NOTE]
+> For security, the dotenv importer intentionally skips storage-path overrides (`SEB_CONFIG_HOME`, `SEB_PROFILE_FILE`, `SEB_MODEL_SETTINGS_FILE`, `SEB_HISTORY_FILE`), generic single-run overrides (`SEB_MODEL`, `SEB_FALLBACK_MODEL`), and `OPENAI_COMPATIBLE_*` endpoint variables. Configure OpenAI-compatible endpoints through **Model provider setup** in `seb configure` so Seb can verify streaming/tool support and bind the optional key to one canonical base URL, and use provider-specific variables (`GEMINI_MODEL`, `ANTHROPIC_MODEL`, `OPENAI_MODEL`) in imported dotenv files.
 
-This example keeps the Gemini model on its stable family and enables optional Judgment tracing:
+## Configuration precedence
+
+Across interactive chat (`seb`), one-shot CLI commands (`seb ask`), diagnostics (`seb doctor`), and the chat connector server (`seb connectors`), Seb resolves settings in strict priority order from highest to lowest:
+
+1. **Explicit CLI options** (such as `--provider`, `--model`, or `--offline`).
+2. **Process environment variables (`process.env`)** exported in your shell, container, or service manager.
+3. **Saved `~/.config/seb/` files**, loaded at startup (before telemetry/tracing initialization) as defaults for any unset environment variables.
+4. **Built-in application defaults**.
+
+Exporting an environment variable for one shell session overrides your saved configuration temporarily without mutating any file on disk.
+
+## Storage layout and security (`~/.config/seb`)
+
+By default, Seb stores persistent user data in `~/.config/seb`. You can relocate this directory in your shell environment via `SEB_CONFIG_HOME` or `XDG_CONFIG_HOME` (`$XDG_CONFIG_HOME/seb`), or override specific files with `SEB_PROFILE_FILE`, `SEB_MODEL_SETTINGS_FILE`, and `SEB_HISTORY_FILE`.
+
+| Artifact | Purpose and stored contents |
+| --- | --- |
+| `settings.json` | Non-secret application settings (theme, icon mode, history/session toggles, `NWS_USER_AGENT`, Judgment tracing flags/org ID, and non-secret connector settings). |
+| `model-settings.json` | Active model provider, primary and fallback model families or pinned IDs, and optional OpenAI-compatible base URL. |
+| `credentials.json` | Provider API keys, `JUDGMENT_API_KEY`, and chat connector secrets (with compatible keys bound to their verified base URL). |
+| `profile.json` | Optional Sleeper username, schema version, and last-updated timestamp. |
+| `history.json` | Private prompt history (up to 200 unique prompts; disabled when `SEB_HISTORY=false`). |
+| `sessions/<id>.json` | Resumable interactive conversation snapshots containing prompts, answers, tool calls/results, and source evidence (disabled when `SEB_SESSIONS=false` or `SEB_HISTORY=false`). |
+
+Seb creates new configuration directories with permission mode `0700` and writes every file atomically with owner-only permission mode `0600`. The repository `.gitignore` excludes `.env` and `.env.*` (other than `.env.example`).
+
+> [!WARNING]
+> `credentials.json` and `sessions/<id>.json` rely on OS file permissions (`0600`) and are **not encrypted at rest**. Any process running under your OS user account can read them—never commit `~/.config/seb` files to version control or include them in shared backups.
+
+## Judgment OpenTelemetry tracing
+
+Seb supports optional OpenTelemetry trace export to [Judgment](https://judgmentlabs.ai) for evaluating multi-step agent runs, tool trajectories, and recommendation quality. Here is an example `.env` snippet pairing Gemini family defaults with Judgment tracing (replace `00000000-0000-0000-0000-000000000000` with `<your-judgment-org-id>`):
 
 ```dotenv
 GOOGLE_GENERATIVE_AI_API_KEY=your-gemini-key
@@ -26,44 +62,18 @@ GEMINI_MODEL=gemini-flash
 GEMINI_FALLBACK_MODEL=gemini-flash-lite
 SEB_JUDGMENT_TRACING=true
 JUDGMENT_API_KEY=your-judgment-key
-JUDGMENT_ORG_ID=0c94b0c2-564b-4a5f-81d3-0363118f3bd4
+JUDGMENT_ORG_ID=00000000-0000-0000-0000-000000000000
 ```
 
-`GEMINI_API_KEY` is an alias for `GOOGLE_GENERATIVE_AI_API_KEY`.
-Conflicting alias values cause an import error.
-Judgment tracing stays off unless you enable it. Saving a Judgment key alone does not enable tracing.
-Tracing exports prompts, answers, and tool data to the configured Judgment organization in project `seb`.
-Set `SEB_JUDGMENT_TRACING=false` to disable it. `JUDGMENT_MONITORING=false` also disables monitoring.
+Key tracing behaviors and controls:
 
-## Storage and security
+- **Explicit opt-in**: Judgment tracing is **off by default**. Saving `JUDGMENT_API_KEY` or `JUDGMENT_ORG_ID` alone never activates export—tracing starts only when `SEB_JUDGMENT_TRACING=true` (and both `JUDGMENT_API_KEY` and `JUDGMENT_ORG_ID` are present). Set `SEB_JUDGMENT_TRACING=false` to turn tracing off, or set `JUDGMENT_MONITORING=false` to disable Judgment monitoring spans.
+- **Session grouping and payload cap**: Seb exports spans to project `seb` under your configured `JUDGMENT_ORG_ID`, tags multi-turn interactive and resumed conversations with `judgment.session_id` so related turns group cleanly, and caps root span output payloads at **128,000 characters** (`128k`).
+- **Startup order**: Both CLI entrypoints and `seb connectors` load saved `~/.config/seb` settings before initializing the OpenTelemetry tracer, so saved Judgment settings apply seamlessly without extra wrapper scripts.
 
-Seb uses its user configuration directory, normally `~/.config/seb`:
+> [!IMPORTANT]
+> **Privacy notice**: Enabling `SEB_JUDGMENT_TRACING=true` exports full user prompts, model responses, and tool inputs/outputs to your configured Judgment organization. Leave `SEB_JUDGMENT_TRACING=false` whenever conversations must remain strictly local.
 
-| File | Contents |
-| --- | --- |
-| `settings.json` | Supported application settings |
-| `model-settings.json` | Active provider and model choices |
-| `credentials.json` | Provider keys and other secret settings |
+## Extending supported settings
 
-Seb creates files with owner-only read and write permissions, mode `0600`.
-It creates new configuration directories with mode `0700`.
-The credential file is **not encrypted**. Programs that run as your user can read it.
-Do not commit these files or include them in shared backups.
-The repository ignores `.env` and `.env.*`, except `.env.example`.
-
-Shell variables override saved values. Command options override corresponding shell values.
-Saved values override application defaults. Changing a shell variable does not change the saved file.
-CLI and connector startup load saved values before tracing initialization.
-
-Use `SEB_CONFIG_HOME`, `XDG_CONFIG_HOME`, or `SEB_PROFILE_FILE` in the shell to select a different configuration location.
-The importer skips these variables. It also skips arbitrary variables such as `PATH` and `NODE_OPTIONS`.
-Configure OpenAI-compatible endpoints and their keys through model provider setup.
-The importer skips those endpoint variables to preserve endpoint verification and key binding.
-Use provider-specific model settings instead of importing `SEB_MODEL` or `SEB_FALLBACK_MODEL`.
-
-## Adding settings
-
-The registry in `src/setup/configuration-registry.ts` supplies editor choices, validation, and import recognition.
-Add each supported variable there with its group, value type, and secret classification.
-The editor and importer then include it automatically. Arbitrary new dotenv variables do not become global settings.
-Settings cover hosted model providers, Judgment, terminal preferences, data preferences, and connectors.
+Supported configuration keys, editor groups, value validators, and secret classifications are defined centrally in `src/setup/configuration-registry.ts`. Registering a setting there automatically exposes it in `seb configure` and allows `seb configure --import-env` to validate and import it across hosted model providers, Judgment tracing, terminal preferences, data preferences, and chat connectors.

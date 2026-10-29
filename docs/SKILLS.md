@@ -1,223 +1,92 @@
-# Skill guide
+# Skill Guide
 
-A skill gives Seb focused instructions for one advanced NFL or fantasy workflow.
+[Documentation Hub](README.md) · [Interactive Guide](INTERACTIVE.md) · [Experience Model](EXPERIENCES.md) · [Analysis & Learning](ANALYSIS.md)
 
-Most requests do not need a selected skill.
-
-Ask naturally or use Explore, My Fantasy, and Analyze first.
-
-Select a skill with `/skill NAME` inside interactive chat.
-
-Run a skill immediately with `/skill NAME QUESTION`.
+Skills give Seb focused domain instructions for specialized NFL research, fantasy decision-making, and forecast evaluation workflows without hiding any read-only data tool. Most questions need no explicit skill—ask naturally or use **Explore**, **My Fantasy**, and **Analyze** first, and reach for `/skills` or `/skill <NAME> [QUESTION]` when you want a structured specialist workflow:
 
 ```text
+/skills
 /skill player-info Lamar Jackson
+/skill start-sit Optimize my starting lineup for this week
 ```
 
-Seb selects `player-info` and sends `Lamar Jackson` as the question.
+Seb includes **19 skills** across the three categories displayed by `/skills` (**NFL information**, **Fantasy**, and **Research**), with `general` active by default.
 
-The default skill is `general`.
+## 1. NFL information skills (3)
 
-The `/skills` command groups skills by NFL information, fantasy decisions, and research.
+These three skills focus on objective NFL facts, schedules, game logs, and verified news without adding fantasy advice unless you ask for it:
 
-## NFL information skills
-
-These skills answer non-fantasy questions by default.
-
-| Skill | Purpose | Main evidence |
+| Skill | Title | Purpose and primary evidence |
 | --- | --- | --- |
-| `player-info` | Shows one NFL player profile and recorded statistics. | Sleeper profiles, nflverse game logs, and verified news. |
-| `team-info` | Shows one NFL team, player set, schedule, and results. | Team identity, Sleeper player records, and nflverse data. |
-| `nfl-stats` | Answers general NFL schedule and statistics questions. | Sleeper NFL state and nflverse records. |
+| `player-info` | Player information | Separates one player's live Sleeper profile from nflverse weekly/season game logs and verified news (`findPlayers`, `resolvePlayerIdentity`, `getPlayerWeeklyStats`, `searchFirstClassNews`). |
+| `team-info` | Team information | Summarizes franchise identity, active Sleeper player records (explicitly distinguished from an official 53-man NFL roster), schedule, results, team efficiency, and news. |
+| `nfl-stats` | NFL facts and stats | Answers league-wide schedule, result, player, and team statistical queries while stating the exact season and week window for every metric. |
 
-The `player-info` skill separates a current profile from game statistics and news.
+## 2. Fantasy skills (10 — `general` default + 9 specialized)
 
-The `team-info` skill does not call Sleeper records an official NFL roster.
+These skills power lineup optimization, projections, waivers, trades, matchups, and multi-week playoff planning:
 
-The `nfl-stats` skill states the season and week range for each statistic.
-
-These skills add fantasy advice only when the user requests it.
-
-## Fantasy skills
-
-| Skill | Purpose | Main evidence |
+| Skill | Title | Purpose and primary evidence |
 | --- | --- | --- |
-| `general` | Routes a broad fantasy question. | The smallest useful tool set. |
-| `start-sit` | Compares lineup choices. | Opportunity, production, opponent, venue, and weather. |
-| `waiver-scout` | Ranks available targets. | Sleeper demand, nflverse usage, output, and schedule. |
-| `matchup` | Compares two fantasy rosters. | Sleeper scores and selected NFL context. |
-| `trade-review` | Compares both trade sides. | Production, usage, volatility, roster fit, and risk. |
-| `league-audit` | Ranks every roster. | Sleeper records, scores, consistency, and recent form. |
-| `projection-explainer` | Builds a transparent player range. | Baseline, matchup, weather, and uncertainty. |
+| `general` *(default)* | Fantasy assistant | Routes broad fantasy football questions to the smallest accurate set of data and analysis tools. |
+| `start-sit` | Start and sit | Compares 2–6 lineup candidates (`compareStartSit`) or optimizes your **full starting lineup and bench swaps** (`optimizeRosterLineup`) across offensive skill slots, kickers, flex/superflex, **and team D/ST projections**. |
+| `waiver-scout` | Waiver scout | Combines platform-wide Sleeper add demand with nflverse opportunity, recent output, roster need, and FAAB ranges (`rankWaiverTargets`). |
+| `matchup` | Fantasy matchup | Compares two opposing Sleeper rosters side by side with live projections, stack correlations, and win probabilities. |
+| `trade-review` | Trade review | Evaluates both sides of a proposed or recorded trade across production, usage shares, weekly volatility, roster depth fit, and current news. |
+| `league-audit` | League audit | Ranks every roster in a Sleeper league by scoring power, consistency, recent form, and positional strengths/weaknesses. |
+| `projection-explainer` | Projection explainer | Breaks down a player or team D/ST range into baseline rate/volume, matchup, venue/weather adjustments, return scoring, and uncertainty. |
+| `defense-matchup` | Defense by position | Measures fantasy points, targets, and efficiency allowed per game by a specific NFL defense against one offensive position. |
+| `playoff-planner` | Playoff planner | Evaluates player and team schedules, opponent strength, and outdoor weather exposure across future fantasy playoff weeks. |
+| `boom-bust` | Boom and bust | Contrasts floor safety against ceiling upside using opportunity share, target depth/TD variance, same-game stacks, and weekly scoring volatility. |
+
+## 3. Research skills (6)
+
+These skills support deeper statistical, environmental, newsroom, and post-week model calibration workflows:
+
+| Skill | Title | Purpose and primary evidence |
+| --- | --- | --- |
+| `weekly-learning` | Weekly learning | Reviews completed-week forecast errors, player/team residuals, and updates validated local learning parameters (`getNflState`, `inspectLearning`, `learnCompletedWeek`). |
+| `weather-watch` | Weather watch | Screens single games or an entire NFL week for wind, precipitation, extreme temperatures, and NWS alerts (`getGameWeather`, `getWeekWeather`, `getStadiumForecast`). |
+| `schedule-scout` | Schedule scout | Audits upcoming opponents, home/road splits, roof types, rest edges, and multi-week schedule difficulty. |
+| `usage-trends` | Usage trends | Detects rising or falling targets, carries, route/snap market shares, red-zone usage, and efficiency shifts. |
+| `game-environment` | Game environment | Synthesizes both teams' pace and efficiency with spread/total fields, stadium roof status, and kickoff weather. |
+| `news-briefing` | Source-safe briefing | Cross-checks dated reporting from all 47 built-in NFL newsrooms (`searchFirstClassNews`, plus `searchCurrentNews` on Google) against Sleeper and nflverse records. |
 
 ## Decision safeguards
 
-Seb matches the executed tool evidence to the requested player and selected league.
+Seb validates every direct fantasy action against executed tool inputs and outputs for the requested players and target league before showing a recommendation:
 
-The `start-sit` skill needs an eligible projection before it gives an action.
+- **Start/sit & full-roster lineup optimization (`start-sit`)**: Whether comparing 2–6 players (`compareStartSit`) or optimizing an entire roster (`optimizeRosterLineup`), Seb requires eligible scoring-aware projections—at least three completed games for player baselines (or valid team defensive inputs for **team D/ST**), available player status, complete stat coverage, and full support for every active league scoring rule (including special-teams return rules when enabled). Unsupported active scoring rules block the recommendation and report the exact gap under `Decision unavailable`.
+- **Trade evaluations (`trade-review`)**: Requires both sides of the trade with unique players on each side, every incoming player rostered on the **same opposing team** in the selected league, nflverse usage/volatility evidence, and current news verification (the numerical trade score never issues an accept/decline verdict without news support, never invents arbitrary trade-chart values, and labels rest-of-season projections explicitly as assumptions).
+- **Waiver rankings (`waiver-scout`)**: Filters Sleeper trending adds against all rostered players in the target league and scores candidates against **fixed positional production benchmarks** and an **absolute logarithmic demand scale (`0`–`1,000` platform-wide adds)** so rankings never shift based on which other candidates appear in the query.
 
-The projection needs at least three completed games and at least one supported active scoring rule.
+## Weather, newsroom, and weekly learning rules
 
-Every active player scoring rule must have a supported nflverse calculation.
+### Weather watch (`weather-watch`)
 
-The player must also be available and have a supported position and complete scoring data.
+Seb resolves the current NFL season, week, and season type (`REG` or `POST`) automatically, checks the nflverse stadium `roof` field first (skipping direct field-weather adjustments for domes and closed roofs), and matches outdoor US kickoffs to the closest NWS hourly period (~7-day horizon):
 
-Seb lists the missing requirement when the final gate blocks an action.
+- **Risk thresholds**: Wind reaches **medium** risk at `15 mph` and **high** risk at `25 mph`; precipitation probability reaches **medium** at `35%` and **high** at `75%`; severe/extreme NWS alerts trigger **high** risk; extreme cold or heat adds a temperature signal.
+- **Preseason & neutral-site limits**: Because nflverse schedule files omit preseason rows and NWS covers US coordinates only, Seb labels preseason team home-stadium outlooks explicitly as unmatched to kickoff/venue and never applies a home stadium's coordinates to an international or neutral-site game.
 
-## Trade review skill
+### Source-safe news briefing (`news-briefing`)
 
-The `trade-review` skill needs both trade sides.
+`news-briefing` searches Seb's **47 built-in first-class NFL newsrooms** across every model provider (falling back to grounded Google Search when Google Gemini is active and newsroom coverage is thin). Every parsed discovery item and article timestamp is validated before storage, and conflicting or unconfirmed beat reports are flagged explicitly rather than stated as settled fact.
 
-Seb resolves each player through Sleeper.
+### Weekly learning (`weekly-learning`)
 
-Seb compares prior production, opportunity, recent form, and volatility through nflverse.
+Use `/skill weekly-learning` after an NFL week finishes to inspect forecast errors, review player or team trends, and trigger validated parameter updates for your league scoring profile. `learnCompletedWeek` rejects updates until every game in that week is final and the 24-hour post-kickoff reporting buffer has elapsed, validates candidate revisions before saving, and never runs background cron jobs or writes LLM-guessed weights. Read the [analysis guide](ANALYSIS.md#update-local-learning) for the complete calibration workflow.
 
-Set a league and roster when roster fit affects the decision.
+## Choosing the right skill and data boundaries
 
-Seb reads an identified Sleeper transaction only when the request refers to that transaction.
+| When your question focuses on... | Recommended skill |
+| --- | --- |
+| One lineup slot or optimizing your whole starting lineup (including K & D/ST) | `start-sit` |
+| Unbiased player bio/game log, franchise overview, or league-wide NFL stats | `player-info`, `team-info`, or `nfl-stats` |
+| Changing snap/target/carry share or opponent positional vulnerability | `usage-trends` or `defense-matchup` |
+| Outdoor wind/rain/alert screening or full game script + Vegas lines | `weather-watch` or `game-environment` |
+| Understanding projection math/ranges or choosing floor vs. ceiling | `projection-explainer` or `boom-bust` |
+| Full-league power rankings, playoff week prep, or post-week model tuning | `league-audit`, `playoff-planner`, or `weekly-learning` |
 
-Each player can appear only once on each trade side.
-
-Every received player must belong to the same opposing roster.
-
-Seb labels rest-of-season expectations as assumptions.
-
-Seb does not invent a trade-chart value or a market value.
-
-The trade calculation never creates a final accept or decline action by itself.
-
-Current news must support that final action.
-
-## Waiver scout skill
-
-The `waiver-scout` skill starts with Sleeper trending adds.
-
-It removes every player who appears on a roster in the selected league.
-
-Recent production uses fixed reference points for each position.
-
-Sleeper demand uses an absolute logarithmic scale from zero to 1,000 adds.
-
-These scales do not depend on the other candidates in one request.
-
-The final score combines production, roster need, Sleeper demand, and risk.
-
-The result states that Sleeper demand covers the complete Sleeper platform.
-
-## nflverse skills
-
-| Skill | Purpose | Main evidence |
-| --- | --- | --- |
-| `schedule-scout` | Reviews future opponents and rest. | nflverse schedule and result rows. |
-| `usage-trends` | Finds changing opportunity. | Targets, carries, market share, scoring, and recent averages. |
-| `game-environment` | Reviews one complete NFL game. | Both teams, venue, line fields, and weather. |
-| `defense-matchup` | Measures one defense against a position. | PPR points and targets allowed per game. |
-| `playoff-planner` | Compares future playoff paths. | Schedule, prior results, and outdoor venues. |
-| `boom-bust` | Compares floor and upside. | Average PPR output, opportunity, and weekly volatility. |
-
-## Weather skill
-
-The `weather-watch` skill finds wind, rain, cold, heat, and active alerts.
-
-It can screen every outdoor game in one NFL week.
-
-Seb loads the current season, week, and season type from Sleeper automatically.
-
-Run `/week current` only to retry or override that automatic value.
-
-The weather tools use `REG` or `POST` to select the correct nflverse schedule.
-
-nflverse schedule releases do not include preseason game rows.
-
-During preseason, Seb can show the selected team home-stadium forecast.
-
-Seb states that this outlook is not matched to the game venue or kickoff.
-
-Seb first checks the nflverse roof field.
-
-Seb skips direct field effects when the roof is closed or the venue is a dome.
-
-Seb then matches the kickoff with the closest NWS hourly forecast period.
-
-The risk rules stay transparent.
-
-- Wind at 15 mph creates a medium signal.
-- Wind at 25 mph creates a high signal.
-- Precipitation at 35 percent creates a medium signal.
-- Precipitation at 75 percent creates a high signal.
-- Severe or extreme alerts create a high signal.
-- Very cold or hot conditions add a temperature signal.
-
-These rules provide analysis context. They do not create an official projection.
-
-## Source-safe briefing skill
-
-The `news-briefing` skill prevents false current-news claims.
-
-It searches the built-in first-class news sources with every model provider.
-
-It can use Google Search for insufficient coverage when Google is active.
-
-It includes validated publisher links and publication dates.
-
-Seb validates every parsed discovery record and article metadata value before it stores the value.
-
-The live source probe checks all 47 built-in sources.
-
-It uses Sleeper for league facts and nflverse for historical statistics.
-
-Seb has no licensed publisher feed or official injury-report feed.
-
-## Skill selection guidance
-
-Use `start-sit` for one lineup decision.
-
-Use `player-info` for a non-fantasy player profile or game log.
-
-Use `team-info` for a non-fantasy team profile, player set, schedule, or results.
-
-Use `nfl-stats` for a general NFL schedule, result, or statistical question.
-
-Use `usage-trends` when the decision depends on changing opportunity.
-
-Use `defense-matchup` when the opponent is the main question.
-
-Use `weather-watch` when the kickoff falls within the NWS forecast window.
-
-Use `game-environment` when several game factors interact.
-
-Use `projection-explainer` when the user wants a range and assumptions.
-
-Use `boom-bust` when the user must choose between floor and upside.
-
-Use `league-audit` before a broad roster improvement plan.
-
-## Data limits
-
-Skills do not create unavailable facts.
-
-Seb has no licensed publisher feed, official projection feed, or official injury-report feed.
-
-Current web reporting can contain incomplete or conflicting claims.
-
-The `news-briefing` skill identifies that uncertainty.
-
-The NWS supports United States points only.
-
-Seb does not apply a home-stadium coordinate to a neutral-site game.
-
-Seb does not claim a preseason kickoff forecast without a reliable schedule row.
-
-The NWS hourly forecast covers about seven days.
-
-nflverse weekly player files can lag the latest game while a release updates.
-
-Run `/sources` after an answer to inspect the source URLs.
-
-## Weekly learning
-
-Use `/skill weekly-learning` to review completed-week errors and local player or team trends.
-Add a request to update the selected league after all games finish and the reporting buffer passes.
-The tool validates parameters before it saves a revision.
-The skill does not start a background schedule or edit files from language-model guesses.
-Read the [analysis guide](ANALYSIS.md#update-local-learning) for the complete workflow.
+> [!IMPORTANT]
+> Skills never fabricate unavailable feeds: Seb uses public Sleeper, nflverse, NWS, and validated publisher endpoints rather than proprietary injury wires or licensed projection feeds, and nflverse weekly stat releases can lag briefly right after games end. Run `/sources` after any answer to inspect exact URLs and retrieval timestamps.

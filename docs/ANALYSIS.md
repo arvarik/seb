@@ -1,36 +1,39 @@
 # Analysis and weekly learning
 
-Seb estimates fantasy production from recorded NFL results and the selected league scoring rules.
-The forecast exposes its expected points, uncertainty, input weeks, parameter choices, and evidence limits.
-The language model explains these calculations. It does not invent the numerical forecast or edit learned parameters.
+Seb estimates fantasy production from recorded NFL play-by-play and weekly statistics scored directly under the active Sleeper league's rules. Every projection exposes expected points, empirical uncertainty bounds, input game weeks, parameter provenance, intra-game correlations, and eligibility limits so the language model explains verified math rather than inventing numbers or editing learned weights.
+
+```mermaid
+flowchart LR
+  SRC["nflverse Weekly, PBP & Team Releases (LA to LAR)"] --> SCORE["League-Rule Per-Game Scoring (Offensive, K, ST & D/ST)"]
+  RULES["Sleeper League Scoring & Roster Slots"] --> SCORE
+  LEARN["Chronological Revision (.cache/learning/)"] --> BASE["Statistical Base Forecast (Mean + Recency + Leave-One-Out Prior)"]
+  SCORE --> BASE
+  BASE --> ADJ["Bounded Context Adjustments (Opponent, NWS Weather, Availability)"]
+  ADJ --> INT["Empirical 80% Residual Interval (Pooled Positional Errors)"]
+  INT --> COV["Same-Game Covariance (sameGameCorrelation rho)"]
+  COV --> SOLVE["Exact Lineup & Matchup Engines (compareStartSit, optimizeRosterLineup, projectLeagueMatchup)"]
+```
 
 ## Choose an analysis
 
 | Request | Tool | Numerical method |
 | --- | --- | --- |
-| Project one player | `projectPlayer` | Season mean, exponential recency, and a small position prior |
-| Compare two through six starters | `compareStartSit` | Expected points, legal slot checks, and correlated scoring probabilities |
-| Optimize a full starting lineup | `optimizeRosterLineup` | Full-roster combinatorial slot solver and bench swap recommendations |
-| Find waiver targets | `rankWaiverTargets` | League availability, production, roster need, demand, and budget constraints |
-| Compare a trade | `analyzeTradeImpact` | Best legal offensive lineup before and after the trade |
-| Project several starters | `projectPlayers` | Up to 40 names, league scoring, explicit missing projections |
-| Predict matchup scores | `projectLeagueMatchup` | Verified starters, completed points, calculated subtotals, and missing scoring |
-| Compare fantasy rosters | `predictMatchup` | Completed roster scores and a stated probability heuristic |
-| Estimate playoff qualification | `simulatePlayoffOdds` | Repeated simulations against the actual remaining fantasy schedule |
-| Review season learning | `inspectLearning` | Saved validation results and public player or team summaries |
-| Update season learning | `learnCompletedWeek` | Chronological training, separate validation, and bounded parameter selection |
+| Project one player or D/ST | `projectPlayer` | League-scored game history, exponential recency, and leave-one-out position prior (or 3-way D/ST mixture) |
+| Project a batch | `projectPlayers` | Up to 40 names (4 concurrent), league scoring, explicit per-player missing/partial scope |
+| Compare 2–6 starters | `compareStartSit` | Expected points, automatic flex-slot inference or explicit slot check, and correlated win probabilities |
+| Optimize a full starting lineup | `optimizeRosterLineup` | Exact combinatorial solver across up to 12 non-bench slots and 60 candidates, locking kicked-off players |
+| Predict a live league matchup | `projectLeagueMatchup` | Verified starters, completed Sleeper scores, remaining projections, and covariance-adjusted win odds |
+| Compare historical roster scores | `predictMatchup` | Completed roster score histories and stated normal win-probability heuristic |
+| Find waiver targets | `rankWaiverTargets` | League availability, common forecast + historical production, roster need, platform demand, and FAAB rules |
+| Evaluate a trade | `analyzeTradeImpact` | Exact optimal offensive starting lineup before and after the proposed swap |
+| Simulate playoff odds | `simulatePlayoffOdds` | Up to 50,000 Monte Carlo trials over actual remaining matchups with optional `matchupCorrelation` |
+| Review or update weekly learning | `inspectLearning` / `learnCompletedWeek` | Rolling chronological train/validation split, MAE + RMSE promotion gates, and checksummed revisions |
 
-These tools never submit a lineup, waiver claim, or trade.
-Only the learning update writes local football learning revisions. Source reads can also write caches and snapshots.
-An explicit CLI or skill request updates the local football files.
+All analysis tools are read-only against Sleeper; only explicit `seb learn update` or `/skill weekly-learning` calls write local parameter revisions under `.cache/learning/`.
 
 ## Forecast calculation
 
-For each eligible game, Seb calculates fantasy points from the league scoring settings.
-Seb combines the complete game average with an exponential average.
-The exponential average gives half as much weight to an observation four appearances earlier.
-Seb then adds a small position prior when at least 20 peer observations exist.
-The prior excludes the projected player's own observations.
+For each eligible regular-season appearance before the target cutoff, Seb scores component statistics using the league's exact rules, blends the full-sample mean with an exponential recency average, and shrinks toward a leave-one-out position prior once at least 20 peer observations exist:
 
 ```text
 recent_weight = 2 ^ (-appearances_ago / halfLife)
@@ -38,181 +41,68 @@ base = (1 - recentWeight) * mean + recentWeight * weighted_mean
 expected_points = (games * base + priorGames * position_mean) / (games + priorGames)
 ```
 
-Without a position prior, the last calculation returns `base`.
-The default parameters are `recentWeight=0.25`, `halfLife=4`, and `priorGames=0.5`.
-A small prior reduces extreme estimates from small samples without dominating established players.
-
-Opponent, weather, and availability adjustments follow the statistical base forecast.
-These existing adjustments remain bounded heuristics. The historical benchmark does not validate their accuracy.
-Seb exposes each adjustment and its reason.
-
-The result uses `expectedPoints` for the predicted mean.
-The legacy `median` field contains the same value for compatibility. It does not estimate a statistical median.
-The `model` field states the model version, parameters, learned season, learned week, and manual override state.
+When fewer than 20 peer games exist, `expected_points` equals `base`. Default parameters are `recentWeight = 0.25`, `halfLife = 4`, and `priorGames = 0.5`, dampening small-sample spikes without overriding established starter workloads. Bounded opponent, NWS kickoff weather, and availability heuristics apply transparently after the statistical base forecast; each result returns `expectedPoints` (mirrored in `median` for backward compatibility) alongside a `model` descriptor recording version, effective parameters, learned season/week, and override status.
 
 ### Scoring and input safeguards
 
-Seb supports ordinary passing, rushing, and receiving scoring.
-It also supports volume scoring, reception premiums, fumbles, two-point conversions, special-teams touchdowns, and fumble-recovery touchdowns.
-Known kicking and team-defense settings do not invalidate offensive projections.
-Unknown active settings remain explicit and block final player recommendations.
+Seb computes component fantasy points across passing, rushing, receiving, kicking, team D/ST, and individual special-teams categories:
 
-Kicker projections calculate made and missed field goals, made and missed PATs, distance ranges, total field-goal yards, and yards over 30.
-The distance ranges include both the older 50-plus rule and the separate 50–59 and 60-plus rules.
-Blocked kicks count as misses. A distance rule requires a complete list of kick distances.
-Kicker projections use default parameters or an explicit manual override. They do not reuse parameters learned from offensive players.
-Seb does not claim validated kicker forecast accuracy.
+- **Offensive & individual special teams**: Covers standard yardage/TDs, volume/attempt scoring, reception and position-tiered PPR premiums (`bonus_rec_rb`, `bonus_rec_wr`, `bonus_rec_te`), fumbles, 2-point conversions, fumble-recovery TDs, kick/punt return yardage, special-teams TDs (`st_td`), and play-by-play enriched **individual special-teams forced fumbles (`st_ff`), fumble recoveries (`st_fum_rec`), and solo tackles (`st_tkl_solo`)**.
+- **Exclusive Sleeper yardage bonuses**: Tiered yardage bonuses follow [Sleeper's exclusive-tier rules](https://support.sleeper.com/en/articles/3998131-what-scoring-options-are-available)—for example, a 400-yard passing game awards the 400+ bonus rather than stacking the 300–399 bonus.
+- **Kicking**: Supports made/missed FGs and PATs, blocked kicks (scored as misses), total FG yards, yards over 30, legacy `50+` tiers, and split `50–59` / `60+` distance tiers (requiring complete attempt distance lists). Kickers use fixed default or manual-override parameters rather than offensive learned weights.
+- **Strict validation & cutoffs**: Non-numeric or non-finite scoring weights and missing required stat columns throw explicit errors—Seb never silently substitutes `0`. Duplicate player-week rows and ambiguous historical identities are rejected, nflverse `'LA'` codes map deterministically to `'LAR'`, and postseason games are excluded from regular-season training. Week 1 (or unpublished early-season stat releases under automatic windows) falls back to the prior regular season; explicit season windows preserve missing-data errors instead of silently swapping years.
 
-A nonnumeric or nonfinite scoring weight causes an error. A missing required scoring component also causes an error. Seb never substitutes zero for that missing component.
-The source cache uses a new player-statistics version to avoid reusing rows without the added fields.
-
-Sleeper yardage bonuses use separate ranges.
-For example, 400 passing yards awards the configured 400-yard bonus and removes the 300-yard bonus.
-The same rule applies to rushing and receiving tiers. See [Sleeper's scoring rules](https://support.sleeper.com/en/articles/3998131-what-scoring-options-are-available).
-
-Seb rejects duplicate player-week records and ambiguous historical identities.
-Seb maps nflverse's `LA` source code to `LAR` before matching schedules, players, and opponents.
-It excludes postseason rows from regular-season projections.
-It limits training to completed weeks before the target week.
-An explicit historical cutoff also limits the available learning revision.
-
-Week 1 uses the previous season.
-Later weeks also fall back when the current season has no matching results.
-An unpublished current-season statistics file also triggers this fallback when the user did not select an explicit analysis window.
-Other source failures remain visible. Seb does not silently replace a requested season.
-Fewer than three observed games prevent a final starter recommendation.
-An explicit prior-season analysis remains available when the current sample is too small.
-
-A bye week, a started game, an unavailable player, or an invalid starter slot prevents a starter selection.
-A missing kickoff time or unverified current team also prevents a starter selection.
-Recorded weather from a completed target game cannot adjust its historical projection.
-Current injuries and later team assignments cannot adjust a past week or season.
-Comparisons across positions require an explicit slot, such as `FLEX` or `SUPER_FLEX`.
-Current identity, league scoring, player status, source freshness, and news checks still apply.
-News must cover every relevant player. A shared last name cannot satisfy both players' checks.
+Starter recommendations require at least **three observed games**, a verified active team and future kickoff time, and complete support for all active scoring rules. When comparing players across positions in `compareStartSit`, omitting `slot` automatically infers the **narrowest compatible flex slot** from the league's `roster_positions` (such as `WRRB_FLEX`, `REC_FLEX`, `FLEX`, or `SUPER_FLEX`), while an explicit `slot` is validated against both candidate positions and the league's configured starter slots. Historical projections ignore current-day injuries, later team transfers, and post-kickoff recorded weather, whereas live recommendations require fresh status and news checks covering every compared candidate individually.
 
 ## Forecast uncertainty
 
-With at least 20 applicable past errors, Seb uses the 80% absolute-error rank with a finite-sample correction.
-The interval equals the forecast center plus or minus that error magnitude.
-Local learning pools the last three validation weeks by position.
-Without enough errors, Seb uses a wider sample-variance fallback and labels it `uncalibrated-small-sample`.
-The range permits negative fantasy scores.
+When at least 20 historical validation residuals exist for a position, Seb sets a symmetric 80% prediction interval around the forecast center using the finite-sample-corrected 80th percentile of absolute errors—pooling positional residuals across earlier validation weeks in the season when recent three-week windows are still accumulating samples. Below 20 residuals, Seb falls back to a wider sample-variance interval labeled `uncalibrated-small-sample`. Intervals allow negative fantasy scores, borrow conformal residual-rank mechanics without claiming distribution-free individual coverage under mid-season role shifts, and keep `confidence` strictly as an evidence-completeness metric rather than a personal win rate.
 
-This method borrows the residual-rank calculation from conformal prediction.
-It does not claim exact conformal coverage under season drift, player dependence, or parameter selection.
-The confidence score measures evidence completeness. It does not measure the probability of a correct prediction.
+### Same-game covariance ($\rho$) reference
 
-Start-sit and matchup probabilities model intra-game stack correlations when complete player intervals are available ($\rho = +0.30$ same-team QB + pass-catcher/RB, $\rho = -0.10$ same-team skill competition, $\rho = -0.25$ offense vs. opposing D/ST, $\rho = +0.12$ opposing shootout pass offenses).
-The output flags the top two players as a close choice below a 60% estimated advantage probability.
-Uneven scoring distributions and availability uncertainty can change that estimate.
-The estimate does not represent a validated personal win rate.
+When complete player uncertainty intervals are available on a shared scheduled game, `compareStartSit` and `projectLeagueMatchup` adjust pairwise difference and roster-sum variances using `sameGameCorrelation` (`src/projection/comparison.ts`):
 
-## Trades, waivers, and playoffs
+| Pairing in the same scheduled NFL game | Correlation ($\rho$) | Football mechanism |
+| --- | ---: | --- |
+| Same-team `QB` + `RB` / `WR` / `TE` | `+0.30` | Shared passing touchdowns, yardage, and scoring drives |
+| Same-team skill pair (`RB` / `WR` / `TE` with `RB` / `WR` / `TE`) | `-0.10` | Red-zone and target/touch opportunity cannibalization |
+| Same-team `K` + `QB` / `RB` / `WR` / `TE` | `+0.10` | Shared offensive drive volume producing PATs and field goals |
+| `QB` / `RB` / `WR` / `TE` / `K` vs. opposing `DEF` | `-0.25` | Negative coupling across points allowed, sacks, and turnovers (verified via mutual opponent schedule check) |
+| Opposing `QB` / `WR` / `TE` vs. `QB` / `WR` / `TE` | `+0.12` | Shared game pace and pass-heavy shootout scripts |
 
-### Roster and trade lineup value
+`compareStartSit` flags the top two choices as a close call whenever the estimated head-to-head advantage probability falls below `60%`.
 
-Seb assigns each player to at most one eligible starter slot.
-`optimizeRosterLineup` projects active starters and bench candidates for a roster, solves the highest-scoring legal starting lineup across all slots, and recommends specific bench-to-starter swaps when eligible.
-The optimizer searches all reachable slot combinations and maximizes the expected starter total.
-It supports up to 12 offensive starter slots and 60 candidate players.
+## Lineups, trades, waivers, and playoffs
 
-A trade can increase summed player value while reducing starter value.
-For example, two 12-point bench options do not replace a 20-point starter in a one-slot lineup.
-Seb reports both totals and bases its value verdict on the lineup change.
-Unchanged kicker and defense slots cancel from this offensive comparison.
+### Roster lineup optimization and trade value
 
-Missing player identities, missing production, or unsupported slots prevent a lineup verdict.
-Draft picks, contracts, market prices, future roster moves, and playoff-specific player schedules remain outside this estimate.
-Current news remains necessary before an accept or decline recommendation.
+`optimizeRosterLineup` projects active starters and bench candidates for a Sleeper roster and solves the exact maximum-expectation legal assignment across **up to 12 non-bench starter slots of any supported type** (including `QB`, `RB`, `WR`, `TE`, `K`, `DEF`, `FLEX`, `WRRB_FLEX`, `REC_FLEX`, `SUPER_FLEX`, and `IDP_FLEX` slot parsing) and **up to 60 candidate players**. Any starter or bench player whose game has already kicked off is locked in place so mid-slate optimization only proposes legal pre-kickoff swaps, and unsupported IDP candidates are surfaced explicitly rather than scored as zero.
 
-### Waiver ranking
+`analyzeTradeImpact` applies the same exact slot assignment to compare optimal starting offensive lineups before and after a trade (canceling unchanged kicker and defense slots) alongside raw bench-summed totals—catching 2-for-1 bench consolidations that raise total roster points while lowering weekly starter output. Missing identities, unsupported slots, draft picks, keeper contracts, and unverified player news block an automatic accept/decline verdict.
 
-The waiver assistant keeps its explicit production, need, demand, and risk formula.
-It now exposes the common forecast's `expectedPoints` alongside historical production.
-Its rank and FAAB ranges remain heuristics, not trained price predictions.
-Sleeper popularity covers the platform, not the selected league.
+### Waiver ranking and playoff simulations
 
-An explicit priority-waiver setting overrides a leftover FAAB budget.
-Seb withholds a bid range when the remaining budget is below the minimum bid.
-It removes duplicate trending players and rejects duplicate production weeks.
-Unavailable production remains unavailable.
+`rankWaiverTargets` combines league availability, common-forecast `expectedPoints`, historical production, positional roster need, platform-wide Sleeper add trends, and waiver settings (letting explicit priority waivers override leftover FAAB fields and withholding bid ranges when remaining FAAB sits below the league minimum).
 
-### Historical rosters and playoff odds
-
-Historical league analysis reconstructs wins, ties, and points from the requested weekly scores.
-It does not use current roster totals to describe an earlier cutoff.
-Commissioner score overrides take precedence.
-Median-match leagues add the extra result without halving the team's weekly scoring average.
-
-Playoff simulation requires complete historical scores, valid opponent pairs, and at least two scores per roster.
-It also requires one known future matchup per roster in every remaining fantasy regular-season week.
-Missing schedules and division-based seeding stop the simulation.
-Seb never invents future opponents.
-
-The simulation blends season and recent roster averages at 70% and 30%.
-It uses normal weekly scores with a minimum standard deviation of eight points and supports optional correlated head-to-head matchup shocks (`matchupCorrelation`).
-It ranks simulated records by wins, then points scored, then higher points against, then a random draw for exact ties.
-This order follows [Sleeper standings tiebreakers](https://support.sleeper.com/en/articles/4238872-can-i-set-tiebreakers).
-Custom commissioner seeding remains outside the model.
-It includes median matches when the league enables them.
-
-The default uses 10,000 simulations and a fixed seed.
-The maximum uses 50,000 simulations and 32 rosters.
-The loop yields every 250 simulations so cancellation can stop it.
-The reported 95% interval measures simulation sampling error only. It excludes uncertainty in the scoring model.
+Historical standings reconstruct wins, ties, commissioner score overrides, and league-median extra results strictly through the requested week cutoff without leaking current-week record totals. `simulatePlayoffOdds` requires at least two completed scores per roster, valid paired historical matchups, contiguous remaining regular-season schedules, and non-division seeding. Weekly team scores blend season (`70%`) and recent (`30%`) averages under normal draws (minimum SD `8.0`, optional head-to-head `matchupCorrelation`), ranking playoff seeds by [Sleeper tiebreakers](https://support.sleeper.com/en/articles/4238872-can-i-set-tiebreakers) (record $\rightarrow$ points for $\rightarrow$ points against $\rightarrow$ seeded tiebreak) across 10,000 default trials (up to 50,000 trials and 32 rosters, yielding every 250 iterations for cancellation).
 
 ## Update local learning
 
-Run an update after every game in the requested week has results.
-The update also requires 24 hours after each game's kickoff and statistics for every completed game.
-A missing week, unfinished game, or inconsistent game identity stops the update.
-
-Use the selected league's scoring profile when the league uses custom rules.
-Without a league, the CLI uses the explicit PPR profile shown in the JSON report.
+Run a weekly learning update after every game in the target week is final, at least 24 hours have elapsed since each kickoff, and weekly player statistics are published:
 
 ```bash
 seb learn update --season 2026 --through-week 1 --league LEAGUE_ID
 seb learn status --season 2026 --league LEAGUE_ID
 seb learn status --season 2026 --league LEAGUE_ID --json
-```
-
-Replace `LEAGUE_ID` with the numeric Sleeper league ID.
-Omit `--through-week` to select the latest contiguous completed week.
-Use the previous season to prepare a Week 1 baseline.
-
-```bash
+# Prepare a Week 1 baseline from the prior completed season:
 seb learn update --season 2025
 ```
 
-In the interactive terminal, run the built-in workflow.
-
-```text
-/skill weekly-learning Review the last completed week and update learning for my selected league.
-```
-
-The skill can also inspect a player or team without writing an update.
-It does not create a background schedule. Run the workflow after each week, or invoke the explicit CLI command from your own scheduler.
+Omit `--through-week` to advance through the latest contiguous completed week, or omit `--league` to use the explicit default PPR profile recorded in the output JSON. Inside interactive chat, run `/skill weekly-learning Review the last completed week and update learning for my selected league.` (Seb never installs background cron jobs automatically).
 
 ### Parameter promotion
 
-1. Build chronological samples from games with at least three earlier player appearances.
-2. Select a candidate using the earlier training weeks.
-3. Reserve the final three sample weeks for validation.
-4. Require at least 100 training samples and 100 validation samples.
-5. Require at least three separate training weeks and three validation weeks.
-6. Promote only when validation MAE improves by more than 1% and RMSE does not increase.
-7. Retain the fixed default parameters when either gate fails.
-
-MAE measures average absolute point error.
-RMSE gives larger errors more weight.
-The candidate grid uses recency weights of `0`, `0.25`, and `0.5`.
-It uses prior strengths of `0`, `0.5`, and `2` with a four-appearance half-life.
-Each update compares against the versioned default. It does not reuse a previously selected candidate as an unbiased validation baseline.
-
-These gates reduce untested changes. They do not prove that a candidate improves future accuracy.
-The historical 2024 and 2025 tests retained the defaults at every update.
-Synthetic trend tests verify that the learner can promote a candidate when both gates pass.
+Each update builds chronological samples from games where a player has at least three prior appearances, evaluates a candidate grid (`recentWeight` in `{0, 0.25, 0.5}`, `priorGames` in `{0, 0.5, 2}`, `halfLife = 4`) on earlier training weeks, and reserves the final three completed weeks for out-of-sample validation. Candidate promotion requires at least **100 training samples across $\ge 3$ weeks**, **100 validation samples across $\ge 3$ weeks**, a **$> 1\%$ validation MAE improvement** over the versioned default, and **non-increasing validation RMSE**; otherwise the fixed defaults remain active (as occurred at every weekly step in 2024 and 2025 historical backtests, while synthetic trend suites confirm promotion when both gates pass).
 
 ### Storage and privacy
 
@@ -225,45 +115,11 @@ Synthetic trend tests verify that the learner can promote a candidate when both 
     02-<content-sha256>.json
 ```
 
-Each revision contains a schema version, model version, season, completed week, creation time, and data checksum.
-It also contains the scoring rules, selected parameters, candidate parameters, validation weeks, errors, player summaries, team summaries, and source URLs.
-Player summaries use nflverse player IDs. Team summaries use NFL team codes.
-Player summaries track average points, recent points, and passing attempts plus carries plus targets.
-Team summaries track sample count, MAE, RMSE, and signed forecast bias.
-They do not create unverified injury, depth-chart, or coaching claims.
-
-Later projections read only a compatible scoring profile from an earlier eligible week.
-Trade and waiver estimates use the compatible parameters for their selected analysis cutoff.
-The agent can inspect player and team summaries as dated historical context.
-Team error summaries do not directly modify matchup coefficients.
-
-Writes use a temporary file followed by an atomic rename.
-A local lock prevents simultaneous updates.
-Identical source results produce no new revision.
-The store retains four corrections per completed week and preserves earlier weeks for replay.
-The maximum revision size is 8 MiB. The maximum override size is 16 KiB.
-Checksums detect altered revisions. Invalid schemas or checksums stop the read.
-
-The learning files contain football statistics and model diagnostics.
-They contain no prompts, answers, API keys, or model-provider transcripts.
-Usage analytics remain in the existing metadata-only telemetry store.
-Clearing the source cache or usage history does not delete learning revisions.
-
-If a crashed update leaves `.update-lock`, confirm that no update runs before removing that directory.
-Archive or remove an old season directory when you no longer need its revisions.
+Each immutable revision (`<= 8 MiB`, retaining up to four upstream stat-correction revisions per week) stores schema/model versions, scoring rules, selected and candidate parameters, validation residuals, nflverse player usage summaries, team error/bias diagnostics, source URLs, and a SHA-256 content checksum written via atomic rename under `.update-lock`. Revisions contain football statistics only—never prompts, completions, or API keys—and survive `seb cache clear` and `seb stats clear`.
 
 ### Overrides and rollback
 
-Create `.cache/learning/overrides.json` to disable all learned and manual parameters.
-
-```json
-{
-  "schemaVersion": 1,
-  "enabled": false
-}
-```
-
-Use an explicit bounded configuration for a controlled experiment or rollback.
+Place `.cache/learning/overrides.json` (`<= 16 KiB`, validated by `seb doctor --offline` and reported by `seb learn status`) to disable learned revisions or pin bounded manual parameters without reusing mismatched residual calibrations:
 
 ```json
 {
@@ -277,20 +133,14 @@ Use an explicit bounded configuration for a controlled experiment or rollback.
 }
 ```
 
-| Parameter | Type | Meaning | Allowed range |
-| --- | --- | --- | --- |
-| `recentWeight` | Number | Fraction assigned to the exponential average | 0 through 0.75 |
-| `halfLife` | Number | Player appearances before an observation receives half weight | 1 through 12 |
-| `priorGames` | Number | Equivalent observations assigned to the position prior | 0 through 12 |
+| Parameter | Meaning | Allowed range |
+| --- | --- | --- |
+| `recentWeight` | Weight assigned to the exponential recency average | `0` – `0.75` |
+| `halfLife` | Appearances before an observation's recency weight halves | `1` – `12` |
+| `priorGames` | Equivalent games assigned to the leave-one-out position prior | `0` – `12` |
 
-A manual override takes precedence over learned parameters.
-It does not reuse residual calibration from another parameter configuration.
-To restore an earlier configuration, copy its `parameters` object into the override file.
-Do not edit a revision file. The checksum detects that edit.
-
-`seb doctor --offline` validates the override.
-`seb learn status` reports the effective parameters and override state.
-The learner never edits its source code, provider settings, prompts, or arbitrary files.
+> [!CAUTION]
+> Never hand-edit a `<week>-<sha256>.json` revision file—checksum verification will reject the altered file. Set `"enabled": false` or copy target `parameters` into `overrides.json` instead, and verify no `seb learn update` process is running before removing a stale `.update-lock` directory.
 
 ## Verify forecast quality
 
@@ -299,101 +149,28 @@ seb evaluate --season 2024 --through-week 18 --output evaluation-2024.json
 seb evaluate --season 2025 --through-week 18 --output evaluation-2025.json
 ```
 
-The evaluation compares the previous forecast formula, the new fixed ensemble, and the weekly adaptive ensemble.
-Each week uses only earlier statistical observations.
-The evaluation uses corrected scoring for every model.
-The old model retains its original narrow range formula.
-New ranges use each model's errors from earlier weeks.
+`seb evaluate` benchmarks the legacy formula, fixed ensemble, and weekly adaptive learner walk-forward across regular-season Weeks 4–18 (`QB`, `RB`, `WR`, `TE` with $\ge 3$ prior appearances and observed outcomes), reporting MAE, RMSE, bias, 80% interval coverage and Winkler interval score, Spearman/pairwise ranking, synthetic neighbor-rank decision regret, and probability calibration (Brier score and ECE). Do not compare `seb evaluate` headline numbers directly against `seb replay`, which uses a broader prior-week-appearance target pool; see the [evaluation guide](EVALUATION.md) and [saved 2024–2025 benchmark summary](benchmarks/projections-2024-2025.json).
 
-The report includes MAE, RMSE, bias, interval coverage, interval score, rank correlation, and pairwise ranking accuracy.
-It also includes synthetic neighbor-choice regret and probability calibration diagnostics.
-Each model pairs adjacent projected ranks. Those model-specific pairs are not a shared set of user decisions.
-Position reports expose differences between quarterbacks, running backs, receivers, and tight ends.
-
-The tests below used revised nflverse statistics, regular-season Weeks 4 through 18, and the report's PPR scoring rules.
-The target pool requires three earlier appearances and an observed outcome.
-Missing outcomes remain missing. The report does not count them as zero.
-
-| Season | Player-week outcomes | Previous MAE | New MAE | Previous RMSE | New RMSE | Previous range coverage | New 80% range coverage |
+| Season | Player-week outcomes | Legacy MAE | Ensemble MAE | Legacy RMSE | Ensemble RMSE | Legacy coverage | Ensemble 80% coverage |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 2024 | 4,227 | 4.655 | 4.640 | 6.483 | 6.411 | 52.4% | 80.6% |
 | 2025 | 4,325 | 4.598 | 4.567 | 6.513 | 6.405 | 54.2% | 80.2% |
 
-The [saved benchmark summary](benchmarks/projections-2024-2025.json) includes dataset checksums and results by position.
+Point-error gains are modest (`2024` informed default `priorGames`, `2025` served as out-of-sample holdout), wider empirical intervals restore nominal ~80% coverage, and historical replays cannot reconstruct historical injury-report timestamps or live roster constraints.
 
-The point-error improvement is modest. The new ranges improve observed coverage partly because they are wider.
-The 2024 season informed the default prior strength. The 2025 season supplied the separate later-season check.
-Mean absolute rank error does not improve in both seasons. Do not claim improvement on every metric.
-These results do not prove superior live lineup decisions or league wins.
+## Performance and research basis
 
-The replay cannot reconstruct original source publication times, injury reports, inactive-player decisions, or roster constraints.
-It measures the statistical base forecast conditional on observed player outcomes.
-It does not score the full language-model answer or the production context adjustments.
-The calibration pools positions. It supplies no individual-player coverage guarantee.
+Local Node.js 22 benchmarks ([analysis-performance.json](benchmarks/analysis-performance.json)) complete one weekly learning update (`19,400` rows) in **76 ms**, exact 60-player / 12-slot lineup optimization in **62 ms**, and a maximum 32-roster / 15-week / 50,000-trial playoff simulation in **2.80 s**.
 
-The older `seb replay` command remains available for the existing versioned evaluation dataset.
-It has a different target-pool definition. Do not compare its headline metrics directly with `seb evaluate`.
-See the [evaluation guide](EVALUATION.md).
-
-## Performance and verification
-
-A local Node.js 22 run measured the following computation times after imports and downloads.
-The [saved performance report](benchmarks/analysis-performance.json) records the environment and exact limits.
-
-| Work | Input size | Observed time |
-| --- | --- | ---: |
-| One weekly learning revision | 19,400 source rows with regular-season filtering | 76 ms |
-| Exact lineup assignment | 60 players and 12 starter slots | 62 ms |
-| Maximum playoff simulation | 32 rosters, 15 weeks, and 50,000 trials | 2.80 seconds |
-
-These observations do not guarantee the same speed on another machine.
-The learning service also passed a live 2025 update and checksum readback for 610 players and 32 teams.
-A repeated update retained the same revision.
-
-Regression tests cover scoring tiers, missing scoring fields, future inputs, duplicate identities, legal slots, and started games.
-They also cover historical standings, median matches, waiver budgets, comparison news, learning cutoffs, invalid overrides, retention, and cancellation.
-Existing usage-analytics tests continue to check missing metrics, overflow, aggregation, and metadata-only storage.
-Doctor checks local overrides without a language-model call.
-
-## Research basis and next experiments
-
-| Primary source | Application in Seb | Limit |
+| Primary reference | Application in Seb | Scope limit |
 | --- | --- | --- |
-| [Forecasting: time-series cross-validation](https://otexts.com/fpp3/tscv.html) | Rolling weekly cutoffs and separate validation | Revised historical data cannot recreate every original publication delay |
-| [Forecasting: forecast combinations](https://otexts.com/fpp3/combinations.html) | A transparent mean and recency ensemble | Complexity alone does not establish better forecasts |
-| [Forecasting: distributional accuracy](https://otexts.com/fpp3/distaccuracy.html) | Coverage and an interval score that penalizes misses and excessive width | Aggregate coverage does not establish player-level reliability |
-| [Report the Floor, June 2026 preprint](https://arxiv.org/abs/2606.09473) | Motivation for explicit baseline and interval comparisons | The paper does not validate NFL player forecasts |
-| [Adaptive conformal inference under distribution shift](https://arxiv.org/abs/2106.00170) | Motivation for checking uncertainty as the season changes | Seb uses empirical residual ranks, not the paper's full adaptive conformal algorithm |
-| [nflverse expected fantasy opportunity](https://nflreadr.nflverse.com/reference/load_ff_opportunity.html) | A candidate source for future opportunity-based forecasts | The current model does not ingest or claim these expected-point features |
-| [Playoff-aware fantasy trade optimization preprint](https://arxiv.org/abs/2511.17535) | Motivation for separating roster value from summed player value | Seb uses exact weekly slot assignment, not the paper's genetic algorithm or dynasty claims |
-| [Sleeper scoring reference](https://support.sleeper.com/en/articles/3998131-what-scoring-options-are-available) | Scoring categories and exclusive yardage bonus ranges | Unknown active rules still require explicit support |
-
-A later model can add play-by-play expected opportunity and explicit role-change features.
-Those additions need aligned historical inputs and the same chronological tests before automatic promotion.
-Large machine-learning models and causal player claims remain outside this implementation.
+| [Hyndman & Athanasopoulos: Time-series CV](https://otexts.com/fpp3/tscv.html), [Combinations](https://otexts.com/fpp3/combinations.html), [Distributional accuracy](https://otexts.com/fpp3/distaccuracy.html) | Walk-forward cutoffs, simple mean/recency shrinkage, and interval-score evaluation | Revised public stats cannot recreate exact live feed latencies; aggregate coverage is pooled by position |
+| [Gibbs & Candès (arXiv:2106.00170)](https://arxiv.org/abs/2106.00170) & [Report the Floor (arXiv:2606.09473)](https://arxiv.org/abs/2606.09473) | Explicit baseline comparisons and rolling empirical residual intervals | Uses empirical residual ranks rather than online adaptive conformal step updates |
+| [Playoff-aware trade optimization (arXiv:2511.17535)](https://arxiv.org/abs/2511.17535) & [nflverse `ff_opportunity`](https://nflreadr.nflverse.com/reference/load_ff_opportunity.html) | Separating optimal starter value from bench-summed points; candidate future features | Exact weekly slot solver (no dynasty/genetic claims); expected-opportunity features are not yet ingested |
+| [Sleeper scoring options](https://support.sleeper.com/en/articles/3998131-what-scoring-options-are-available) | Component scoring rules and exclusive yardage bonus tiers | Unrecognized custom league rules still produce explicit partial-scoring flags |
 
 ## Missing projections
 
-The player model supports QB, RB, WR, TE, and K scoring. A separate model supports team D/ST. Individual defender projections remain unavailable.
+Seb projects `QB`, `RB`, `WR`, `TE`, `K`, and team `DEF` (`D/ST`; see [Defense and special teams](DEFENSE_AND_SPECIAL_TEAMS.md)). Individual defensive player (`IDP`: `DL`, `LB`, `DB`) projections remain unsupported and return explicit unavailable entries—never `0`.
 
-See [Defense and special teams](DEFENSE_AND_SPECIAL_TEAMS.md) for scoring rules, the forecast method, and benchmark results.
-
-Seb reports these positions as unavailable. It does not use zero as a replacement.
-
-A batch keeps successful player projections when another player lacks data. Cancellation stops the batch before it starts more players.
-
-Each projection includes `scoreScope`: `weekly-estimate`, `partial-scoring`, or `historical-baseline`.
-Unknown active scoring rules produce partial estimates. Missing schedules or current team identity produce historical baselines.
-The batch reports `complete: true` only when every result has a complete weekly estimate.
-Weekly data does not separate player special-teams forced fumbles and recoveries. The active `st_ff` and `st_fum_rec` rules remain explicit omissions.
-
-A matchup subtotal excludes missing projections. It does not represent a complete final score.
-
-`projectLeagueMatchup` calculates both sides from the selected week's starting lineups.
-It uses verified completed individual scores, including completed defenses, and projects the remaining supported players and team defenses.
-It excludes bench players, missing scores, unverified in-progress outcomes, and historical-only baselines.
-The tool returns completed points, remaining projected points, and their calculated subtotal for each roster.
-It keeps commissioner score overrides separate. When all starters are complete and have uncertainty intervals, it also calculates a correlation-adjusted `winProbability` and `stackCorrelations`.
-Answers must use these returned totals without adding the player scores again.
-
-The historical roster-score model needs at least two completed scores per roster. Week 1 analysis uses supported player projections from the prior season.
+Every projection reports `scoreScope` as `weekly-estimate` (complete active scoring and scheduled matchup), `partial-scoring` (one or more unrecognized custom league scoring keys omitted), or `historical-baseline` (missing current team, bye/unscheduled week, or already started game). Batch calls (`projectPlayers`) report `complete: true` only when every requested subject achieves `weekly-estimate`. `projectLeagueMatchup` combines verified completed Sleeper starter scores (including completed defenses) with remaining `weekly-estimate` projections, keeping commissioner overrides separate and computing `winProbability` and `stackCorrelations` whenever all active starters have complete intervals; model answers must cite those returned subtotals directly without re-summing individual starters.

@@ -1,279 +1,122 @@
 # AI SDK integration guide
 
-Seb uses AI SDK features to improve news research, analysis, context size, tool selection, local debugging, and interactive streaming.
+Seb builds its multi-provider research loop, structured JSON analysis, context management, terminal streaming, and three-layer observability stack on public AI SDK contracts without importing private package internals.
+
+```mermaid
+sequenceDiagram
+  participant User as User or Connector
+  participant Trans as Transport and Compactor
+  participant Agent as ToolLoopAgent
+  participant Model as Language Model
+  participant Tools as Local and Grounded Tools
+  participant Gate as Decision Gate
+
+  User->>Trans: Submit question + AbortSignal
+  Trans->>Trans: Two-pass turn compaction + 5m prior-turn evidence check
+  Trans->>Agent: Stream or generate with untrusted session JSON
+  loop Max 16 Steps (0 to 15)
+    Agent->>Agent: prepareStep (pruneMessages, Anthropic cacheControl, step-15 synthesis)
+    Agent->>Model: Prepared context + active tool schemas and examples
+    alt Model requests tools (Steps 0 to 14)
+      Model-->>Agent: Tool calls
+      Agent->>Tools: Execute validated tools (L1/SQLite cache, 47 newsrooms)
+      Tools-->>Agent: Full result (recorded for Gate) + compacted toModelOutput
+    else Final synthesis (Step 15 or stop)
+      Model-->>Agent: Draft answer + grounded sources
+    end
+  end
+  Agent->>Gate: Draft answer + verified tool (input, output) receipts
+  alt Direct action with recoverable missing or stale evidence (1st pass)
+    Gate->>Tools: Purge stale Sleeper, news, and weather caches if stale
+    Gate->>Agent: Single retry via buildRecommendationRecoveryPrompt
+    Agent->>Gate: Updated answer + fresh receipts
+  end
+  Gate-->>Trans: Verified answer or explicit missing-evidence refusal
+  Trans-->>User: Sanitized stream + validated HTTP/HTTPS sources
+```
 
 ## Interactive stream integration
 
-Seb owns the conversation loop and terminal renderer.
-
-The loop uses the public AI SDK chat transport and UI message contracts.
-
-The renderer reads public AI SDK UI message streams with `readUIMessageStream`.
-
-This design keeps the agent and transport behavior unchanged.
-
-It also gives Seb complete control over prompt editing and screen layout.
-
-Seb does not import private package source files.
-
-This design lets AI SDK package updates stay independent from the terminal interface.
+Seb owns its conversation runner, prompt editor, and terminal layout while consuming the public AI SDK `ChatTransport`, UI message, and `readUIMessageStream` interfaces. Keeping terminal rendering decoupled from private SDK modules allows AI SDK and provider adapter upgrades without breaking prompt editing, ANSI sanitization, scrollback preservation, or tool-approval flows.
 
 ## 1. Providers, direct news, and grounded news
 
-Seb constructs Google, Anthropic, OpenAI, and OpenAI-compatible models through their AI SDK provider packages.
+Seb constructs models across four AI SDK provider adapters:
 
-Google uses the Gemini `generateContent` adapter. OpenAI uses the Responses adapter.
+- **Google Gemini**: Standard `generateContent` adapter (`@ai-sdk/google`), receiving local tools plus hosted Gemini **Google Search** and **URL Context**.
+- **Anthropic**: Messages adapter (`@ai-sdk/anthropic`) with per-step ephemeral prompt caching (`cacheControl: { type: 'ephemeral' }`).
+- **OpenAI**: Responses adapter (`@ai-sdk/openai`).
+- **OpenAI-compatible**: Chat completions adapter (`@ai-sdk/openai-compatible`) bound to a validated base URL, requesting streamed token usage when supported.
 
-Anthropic uses its provider adapter. Compatible endpoints use the OpenAI-compatible chat adapter.
+Every production provider receives `searchFirstClassNews` alongside data, analysis, learning, identity, and `inspectSystemDocs` tools. `searchFirstClassNews` queries Seb's built-in 47-source registry first, indexing articles in SQLite FTS5 (`news_articles_fts`), clustering corroborated stories within 36 hours via `corroboratedBy`, and reporting result counts, publisher diversity, and source failures. When Google is active, Gemini Google Search provides secondary public web coverage if direct results are sparse or broad web context is requested, and Gemini URL Context reads user-supplied `http://` or `https://` URLs.
 
-Every provider receives the direct `searchFirstClassNews` tool.
+Authority boundaries remain strict across all providers: **Sleeper** is authoritative for fantasy leagues and rosters, **nflverse** for schedules and historical NFL statistics, and the **National Weather Service** for U.S. forecasts and alerts. Every tool output and web page enters the model context as untrusted data; prompt rules forbid following embedded instructions, and Seb validates every HTTP/HTTPS source link before displaying it in CLI, interactive, or connector output. See the [data source guide](DATA_SOURCES.md) for source IDs and TTLs.
 
-The Google agent also receives Google Search and URL Context.
+### Provider resolution and endpoint safety
 
-The `searchFirstClassNews` tool searches the built-in registry first.
+`seb configure` stores masked API keys in `credentials.json` separately from non-secret model selections in `model-settings.json`, verifying one live local tool loop before persisting changes. At runtime, CLI flags (`--provider`, `--model`) override environment variables, which in turn override saved `~/.config/seb/` defaults loaded via `loadUserEnvironment(process.env, true)`. An explicit CLI or `/model` override uses itself as its fallback; a provider-only override retains that provider's configured fallback (and `SEB_MODEL` preserves the resolved fallback when `SEB_FALLBACK_MODEL` is unset). Automatic fallback retries run only on rate-limit or capacity errors before visible output begins.
 
-It returns official NFL, independent, fantasy-impact, and official team reporting.
+OpenAI-compatible endpoints require a base URL and model ID (with an optional API key). Remote compatible URLs must use `https://` (`http://` is restricted to loopback hosts), may not contain credentials, query strings, fragments, or individual completion paths, reject HTTP redirects during discovery and generation, and require streaming plus tool-calling support.
 
-It also reports the result count, publisher count, and source failures.
+## 2. Typed analysis, Decision Gate, and auto-recovery
 
-Google Search supplies secondary coverage when the direct result is insufficient and Google is active.
-
-Google Search also runs for broad web coverage when Google is active.
-
-URL Context reads a user-supplied HTTP or HTTPS page only when Google is active.
-
-Seb shows the resulting web links in the command line, interactive interface, and chat connectors.
-
-Sleeper remains authoritative for fantasy league data.
-
-nflverse remains authoritative for schedules and historical statistics.
-
-The NWS remains authoritative for United States weather forecasts and alerts.
-
-Seb does not treat a news article as an official statistic.
-
-Seb treats every tool result and web page as untrusted data.
-
-Seb instructs the model to ignore instructions inside returned data. The decision gate also checks executed evidence before it permits an action.
-
-Seb has no licensed publisher feed or official injury-report feed.
-
-Read the [data source guide](DATA_SOURCES.md) for every source ID and cache period.
-
-### Provider resolution
-
-`seb configure` saves keys separately from non-secret model settings.
-
-Environment keys override saved keys. Environment model values override saved model values.
-
-An explicit CLI or slash model override uses that model as its own fallback.
-
-A provider-only override keeps the configured fallback for that provider.
-
-`SEB_MODEL` keeps the resolved fallback when `SEB_FALLBACK_MODEL` is empty.
-
-The normal configured primary uses its fallback only after a capacity or rate-limit error.
-
-The OpenAI-compatible provider accepts an optional key, a required base URL, and a required model ID.
-
-HTTP compatible endpoints must use a loopback host. Remote endpoints must use HTTPS.
-
-Compatible URLs cannot contain credentials, a query, a fragment, or an individual completion endpoint path.
-
-Compatible model and discovery requests reject redirects.
-
-The compatible endpoint must support streaming and tool calls for the full agent flow.
-
-Interactive configuration verifies one local tool loop before it saves the selection.
-
-## 2. Typed analysis and decision safeguards
-
-`seb ask --json` uses AI SDK `Output.object` with a Zod schema.
-
-Seb first runs a source-grounded research request with the source and local analysis tools.
-
-Seb then sends that draft to a tool-free formatter request.
-
-This two-request design keeps direct and optional Google source records available during structured output.
-
-The validated `analysis` object includes these fields.
-
-- An analysis kind and subject.
-- A summary and optional recommendation.
-- A confidence level, score, and reason.
-- Named metrics with values and context.
-- Strengths, weaknesses, risks, assumptions, and limits.
-
-The output includes `schemaVersion: 1`.
-
-Seb formats the validated object into the existing `answer` field.
-
-The `sources` field stays separate from the model object.
-
-This rule lets Seb validate each HTTP or HTTPS source before output.
-
-Seb applies a deterministic eligibility gate after schema validation.
-
-The gate compares requested players and leagues with the executed tool inputs and results.
-
-The gate removes a recommendation when required source, identity, player status, current news, league scoring, or projection evidence is missing.
-
-Start-sit output needs an eligible scoring-aware projection.
-
-An active scoring rule that the projection cannot calculate makes that projection ineligible.
-
-The gate limits confidence when a fresh required source has a stale supplemental source.
-
-Interactive, command-line, and connector paths record each tool input with its result.
-
-Interactive and connector answers use the same gate for direct action requests.
-
-These paths buffer a direct action answer until the gate finishes.
-
-This rule prevents an unsupported partial action from reaching the user.
-
-Select useful fields with `jq`.
+`seb ask --json` pairs a tool-enabled research agent run with a second, tool-free `Output.object` formatting call governed by a versioned Zod schema (`schemaVersion: 1`). Separating research from structured formatting preserves direct and Google grounding source links while guaranteeing a typed `analysis` payload containing `kind`, `subject`, `summary`, optional `recommendation`, `confidence` (`level`, `score`, `reason`), named `metrics`, `strengths`, `weaknesses`, `risks`, `assumptions`, and `limits`. Seb renders `analysis` into the top-level `answer` string and keeps `sources` outside the model-generated object so every URL is independently verified.
 
 ```bash
 seb ask --json "Should I start Player A?" | jq '.analysis.recommendation'
 seb ask --json "Compare these teams." | jq '.analysis.confidence.score'
 ```
 
-## 3. Context pruning
+Across `seb ask`, `seb ask --json`, interactive chat, and chat connectors, direct fantasy action responses remain buffered until the deterministic **Decision Gate** verifies actual `(input, output)` tool records:
 
-Seb calls AI SDK `pruneMessages` before each model request.
+- **5-minute prior-turn evidence reuse**: Interactive and session turns reuse verified tool calls recorded within the preceding 5 minutes so immediate follow-up questions do not repeat fresh roster, projection, or news lookups.
+- **Scoped eligibility and verified refusals**: Start/sit and lineup recommendations require resolved player and league identities, complete active scoring support, at least three observed games, legal starter slots, and current status/news coverage for the recommended or compared subjects (capping confidence when a supplemental source is stale). When verified evidence establishes that a player is Out, on IR, on bye, already kicked off, or slot-ineligible, the gate permits explicit sit/pass advice.
+- **Single-retry auto-recovery**: When a first-pass action response lacks required tool evidence or relies on stale current sources (`currentEvidence === 'stale'`), Seb purges stale Sleeper, news, and weather cache namespaces when needed, constructs a targeted follow-up via `buildRecommendationRecoveryPrompt`, and executes **one** automatic recovery pass before re-checking the gate and either releasing the verified recommendation or listing exact missing evidence.
 
-The policy preserves all messages and provider signatures in the active turn.
+## 3. Context compaction, `toModelOutput`, and prompt caching
 
-The policy removes reasoning from earlier turns. It removes tool data older than the last six history messages.
+Long research loops and multi-turn fantasy sessions control token growth at three levels:
 
-The policy also removes empty history messages.
-
-Recent user and assistant text remains available.
-
-The interactive transport keeps at most 24 recent model messages.
-
-This policy reduces token use during long interactive and connector sessions.
+1. **`toModelOutput` payload compaction**: Heavy data and analysis tools return rich structured objects to Seb's runtime (powering UI cards and the Decision Gate) while supplying a compact `toModelOutput` projection to the language model. For example, `optimizeRosterLineup` strips verbose intermediate matrices while preserving optimal starters, recommended swaps, and an explicit `bench` summary so the model can discuss bench alternatives accurately on minimal tokens.
+2. **Two-pass interactive turn compaction and receipts**: Interactive sessions cap retained history at 24 messages and 120,000 estimated characters, keeping up to 3 recent turns uncompacted and summarizing older tool exchanges into compact `[Verified tool calls in this turn (outputs compacted): ...]` receipts. Before each model call, `prepareStep` also runs AI SDK `pruneMessages` to drop prior-turn reasoning, empty messages, and tool payloads older than six history messages while keeping the active turn's tool outputs and provider signatures intact.
+3. **Ephemeral prompt caching and step-15 synthesis**: On Anthropic models, `prepareStep` marks system, tool, and history prefixes with `cacheControl: { type: 'ephemeral' }` on each step. On the final allowed step (`15` of `0..15`) or at 200,000 prepared characters, `prepareStep` switches to static synthesis instructions with `activeTools: []`, retaining function declarations so Gemini sends `functionCallingConfig.mode = NONE` while stripping hosted tools.
 
 ## 4. Tool input examples
 
-Each main data tool includes valid input examples.
-
-AI SDK middleware converts those examples into provider-compatible tool descriptions.
-
-The examples distinguish player names from player IDs.
-
-The examples also distinguish league IDs, roster IDs, team codes, seasons, and weeks.
-
-This feature improves tool selection without changing the tool input schema.
+Primary data and analysis tools declare validated input examples that AI SDK middleware serializes into provider-compatible tool descriptions without altering Zod validation schemas. Explicit examples disambiguate display names (`"Ja'Marr Chase"`) from canonical or provider IDs, Sleeper numeric league IDs from roster IDs, and canonical NFL team codes (`"LAR"`, `"SEA"`) from seasons and weeks.
 
 ## 5. Local usage telemetry
 
-The production agent records the active model provider and model ID.
+Seb registers `SebUsageTelemetry` via AI SDK's `experimental_telemetry` integration interface across interactive chat, CLI commands, connectors, setup verification, doctor checks, and live contract runs. Each recorded model step corresponds to one logical AI SDK step (internal provider HTTP retries inside a step are not exposed by AI SDK events).
 
-Google returns input, output, thought, cached, tool-use, and total token values when those values exist.
+`SebUsageTelemetry` writes normalized token classes (`input`, `cacheRead`, `cacheWrite`, `output`, `text`, `reasoning`, `toolUse`, `total`), Google-specific metadata when present (`providerTotal`, `groundingSearchQueries`, `groundingWebChunks`, and `standard`/`priority`/`flex`/`deferred`/`other` service tiers), step latencies (time to first token, response time, total step duration), and client vs. provider tool execution outcomes to `.cache/seb.sqlite`. Omitted provider metrics remain `null` so `/usage` and `seb stats` (`schemaVersion: 1`, zero model calls) report exact measured-call coverage. Interactive stream stops explicitly close unfinished runs, and terminal state updates follow monotonic precedence (`aborted` > `failed` > `completed`) without overwriting the initial terminal timestamp.
 
-The OpenAI-compatible adapter requests streamed usage values from endpoints that support them.
+> [!NOTE]
+> AI SDK's shared `recordInputs` and `recordOutputs` telemetry flags are set to `false` **only when both AI SDK DevTools (`SEB_DEVTOOLS`) and Judgment tracing (`SEB_JUDGMENT_TRACING`) are disabled**. Enabling either DevTools or Judgment sets `recordInputs: true` and `recordOutputs: true` so those trace sinks receive full message and tool payloads; however, `SebUsageTelemetry` always ignores prompt and output content and persists strictly metadata-only records in SQLite.
 
-AI SDK normalizes model usage and performance for each logical model step.
+## 6. Observability layers: SQLite, DevTools, and Judgment OTel
 
-Seb registers `SebUsageTelemetry` through the AI SDK telemetry integration interface.
+Seb provides three distinct observability layers with explicit privacy boundaries:
 
-The integration observes run, model-step, tool-execution, completion, error, and cancellation events.
+| Layer | Activation | Destination | Captured payload | Production policy |
+| --- | --- | --- | --- | --- |
+| **`SebUsageTelemetry`** | Always enabled | Local `.cache/seb.sqlite` (`usage_*` tables) | Run/step/tool IDs, token counts, latencies, bounded error categories. Zero prompts, outputs, keys, or URLs. | Safe and recommended in all environments. |
+| **`@ai-sdk/devtools`** | `SEB_DEVTOOLS=true` (or `1`) | Local `.devtools/` JSON trace files (`npm run devtools` viewer) | Full system prompts, user messages, model completions, reasoning, and tool inputs/outputs. | **Blocked** when `NODE_ENV=production`. Local debugging only. |
+| **Judgment OTel (`@ai-sdk/otel` + `judgeval`)** | `SEB_JUDGMENT_TRACING=true` with `JUDGMENT_API_KEY` & `JUDGMENT_ORG_ID` | Remote Judgment OpenTelemetry collector (`src/ai/judgment.ts`) | Full GenAI spans, prompts, outputs, client tool I/O, and normalized Gemini server-tool spans (Google Search & URL Context). | Opt-in only; review data-handling requirements before enabling. |
 
-The interactive transport closes unfinished runs when a user stops local stream consumption.
-
-This explicit action covers stream cancellation paths that do not emit an AI SDK abort event.
-
-Seb applies terminal precedence in this order: aborted, failed, then completed.
-
-This rule corrects a completed callback when later structured-output validation fails.
-
-It also corrects a startup error when a later abort callback confirms cancellation.
-
-Seb keeps the first terminal timestamp during each correction.
-
-It records interactive, top-level command, connector, doctor, setup, and live contract activity in the local SQLite database.
-
-One recorded model call equals one AI SDK model step.
-
-The provider can make HTTP retries inside one step. The AI SDK event does not expose those retries to Seb.
-
-Seb saves AI SDK token classes and selected Google usage fields.
-
-The Google fields add provider totals, tool-use tokens, grounding counts, and service tier when Google returns them.
-
-Seb recognizes the `standard`, `priority`, `flex`, and `deferred` service tiers. It maps another value to `other`.
-
-Seb keeps a missing provider metric as `null`. The reports show the known coverage for each token class.
-
-AI SDK performance data supplies model response time, time to first output, and complete step time.
-
-AI SDK tool lifecycle events supply client execution duration and final outcome.
-
-Model content parts supply provider tool calls and provider results.
-
-Seb sets `recordInputs: false` and `recordOutputs: false` when DevTools is off.
-
-DevTools enables both shared AI SDK flags because it records content in its separate trace store.
-
-The local analytics integration ignores content in both configurations.
-
-The analytics tables do not contain prompts, answers, tool inputs, tool results, or raw errors.
-
-They also exclude keys, authorization headers, and compatible endpoint URLs.
-
-The `/usage` and `/stats` commands read these local records without a model request.
-
-The reports group safe error categories and calculate the successful run rate.
-
-They also count failed runs that follow a returned client tool.
-
-The successful run rate counts runs that end with `stop` against those runs plus failed runs.
-
-It excludes approval pauses, cancellations, and unfinished runs. It does not measure completed user answers.
-
-The JSON reports use stable schema version 1.
-
-## 6. Local AI SDK DevTools
-
-AI SDK DevTools records model calls, messages, outputs, and tool data on the local computer.
-
-Enable recording for one local Seb session.
+Start a local DevTools inspection session during development with:
 
 ```bash
 SEB_DEVTOOLS=true npm run seb
-```
-
-Start the local viewer in another terminal.
-
-```bash
+# In a second terminal:
 npm run devtools
 ```
 
-Run `/devtools` inside Seb to show the active setting and commands.
-
-DevTools writes trace data under `.devtools/`.
-
-Git ignores that folder.
-
-The files can contain complete prompts, model answers, and tool data.
-
-Never enable DevTools in production.
-
-Seb rejects this configuration when `NODE_ENV=production`.
-
-Delete local trace files with a normal file operation when you no longer need them.
-
-DevTools and local usage telemetry have different privacy rules.
-
-DevTools records complete content. Local usage telemetry records metadata only.
-Optional Judgment tracing exports conversation content when `SEB_JUDGMENT_TRACING=true`.
-It stays off by default. See [Judgment setup and data capture](../README.md#optional-judgment-tracing).
+Inside interactive chat, `/devtools` displays the current recording state, and `/usage` or `/stats` reads metadata-only SQLite analytics. For optional Judgment tracing setup and Gemini server-side grounding span normalization details, see [Optional Judgment tracing](../README.md#optional-judgment-tracing).
 
 ## Verification
 
-Run the complete local checks.
+Run the deterministic verification, dependency, and security suite locally:
 
 ```bash
 npm run check
@@ -281,56 +124,19 @@ npm run deps:check
 npm audit
 ```
 
-Run one current news request when a configured provider exists.
-
-```bash
-seb ask --json "Find current official NFL news and cite the publisher and date."
-```
-
-Confirm that the result includes web source links.
-
-Run the doctor to verify one streaming local tool continuation.
-
-The Google doctor check also verifies one grounded Google Search URL.
-
-```bash
-npm run doctor
-```
-
-Unit tests use AI SDK model mocks and injected HTTP mocks.
-
-They cover all four provider selections, provider construction, private storage, setup prompts, model switching, connector routing, and safe error text.
-
-The unit suite does not require live Anthropic, OpenAI, or OpenAI-compatible credentials.
-
-Use `seb doctor` with each real provider configuration when live integration coverage is required.
-
-Run the live first-class source probe without a model provider.
+Unit tests use AI SDK `MockLanguageModelV4` and injected HTTP mocks to verify provider resolution, endpoint validation, tool compaction, Decision Gate auto-recovery, and telemetry across all four provider adapters without live API keys. When live credentials are configured, run end-to-end source and provider checks:
 
 ```bash
 npm run news:smoke
+npm run doctor
+seb ask --json "Find current official NFL news and cite the publisher and date."
 ```
 
 ## 2026 design sources
 
-These official sources define the current telemetry and usage basis.
+Seb isolates AI SDK's experimental telemetry interface behind `SebUsageTelemetry` (`schemaVersion: 1`) while aligning recorded dimensions with current GenAI observability specifications:
 
-- [AI SDK telemetry](https://ai-sdk.dev/docs/ai-sdk-core/telemetry)
-- [AI SDK tool calling](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling)
-- [AI SDK Anthropic provider](https://ai-sdk.dev/providers/ai-sdk-providers/anthropic)
-- [AI SDK OpenAI provider](https://ai-sdk.dev/providers/ai-sdk-providers/openai)
-- [AI SDK OpenAI-compatible providers](https://ai-sdk.dev/providers/openai-compatible-providers)
-- [Gemini generateContent API](https://ai.google.dev/api/generate-content)
-- [Gemini function calling](https://ai.google.dev/gemini-api/docs/function-calling)
-- [Gemini token guidance](https://ai.google.dev/gemini-api/docs/tokens)
-- [Gemini rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)
-- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/)
-- [OpenTelemetry 2026 GenAI observability guidance](https://opentelemetry.io/blog/2026/genai-observability/)
-
-AI SDK marks its telemetry interface as experimental. Seb isolates that interface behind its own versioned recorder.
-
-The 2026 OpenTelemetry guidance calls for agent, model, tool, token, and latency visibility.
-
-Seb records those dimensions locally. It keeps prompt and output content disabled for this analytics store.
-
-The local JSON schema is not an OpenTelemetry exporter. Its fields remain stable through Seb schema version 1.
+- [AI SDK telemetry](https://ai-sdk.dev/docs/ai-sdk-core/telemetry) and [AI SDK tool calling](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling)
+- [AI SDK Anthropic](https://ai-sdk.dev/providers/ai-sdk-providers/anthropic), [OpenAI](https://ai-sdk.dev/providers/ai-sdk-providers/openai), and [OpenAI-compatible](https://ai-sdk.dev/providers/openai-compatible-providers) provider docs
+- [Gemini generateContent API](https://ai.google.dev/api/generate-content), [function calling](https://ai.google.dev/gemini-api/docs/function-calling), [token accounting](https://ai.google.dev/gemini-api/docs/tokens), and [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)
+- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/) and [2026 GenAI observability guidance](https://opentelemetry.io/blog/2026/genai-observability/)

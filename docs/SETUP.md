@@ -1,71 +1,108 @@
-# Setup guide
+# Setup Guide
 
-This guide starts Seb on one computer. It also verifies each external service.
+[Documentation Hub](README.md) · [Persistent Configuration](CONFIGURATION.md) · [Model Selection](MODELS.md) · [CLI Guide](CLI.md)
 
-## 1. Install the requirements
+This guide walks you through installing Seb, configuring a language model provider, verifying all local and public data services, and optionally linking your Sleeper fantasy account or a chat connector.
 
-Install Node.js 22 or a newer version.
+## 1. Prerequisites and model providers
 
-Check the installed versions.
+Seb requires **Node.js 22 or newer** (unless you run the official Docker image). Check your local runtime before installing:
 
 ```bash
 node --version
 npm --version
 ```
 
-Choose one supported model provider.
+Sleeper, nflverse, the National Weather Service (NWS), and Seb's 47 built-in NFL newsrooms all use public read-only endpoints and require **no API keys**. You only need access to one supported language model provider:
 
-| Provider | Required access | Default primary model | Default fallback model |
+| Provider | Required credentials | Default primary family | Default fallback family |
 | --- | --- | --- | --- |
-| Google Gemini | `GOOGLE_GENERATIVE_AI_API_KEY` or `GEMINI_API_KEY` | `gemini-flash` | `gemini-flash-lite` |
-| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet` | `claude-haiku` |
-| OpenAI | `OPENAI_API_KEY` | `gpt-luna` | `gpt-mini` |
-| OpenAI-compatible | API base URL and model ID. The key is optional. | No default | The primary model |
+| **Google Gemini** | `GOOGLE_GENERATIVE_AI_API_KEY` or `GEMINI_API_KEY` | `gemini-flash` | `gemini-flash-lite` |
+| **Anthropic** | `ANTHROPIC_API_KEY` | `claude-sonnet` | `claude-haiku` |
+| **OpenAI** | `OPENAI_API_KEY` | `gpt-luna` | `gpt-mini` |
+| **OpenAI-compatible** | Base URL and model ID (API key is optional) | None (explicit model required) | Uses primary model |
 
-Hosted defaults use model families. Seb resolves their current stable versions at startup. See [model selection](MODELS.md).
+Hosted providers default to auto-updating model families that resolve to the newest stable release at startup. See [Model selection](MODELS.md) for family resolution rules, capabilities, and pinning exact model IDs.
 
-Sleeper, nflverse, and the NWS use public read-only endpoints. These sources need no API key.
+## 2. Install Seb
 
-## 2. Install the project
+Choose the installation method that fits your workflow:
 
-Open the project folder.
+### Install globally from npm (recommended)
 
 ```bash
-cd /path/to/seb
-npm ci
+npm install -g @arvarik/seb
+seb --version
 ```
 
-Copy the example environment file.
+### Run without installing via `npx`
+
+```bash
+npx @arvarik/seb configure
+npx @arvarik/seb
+```
+
+### Run with Docker
+
+The published container sets `SEB_CONFIG_HOME=/root/.seb` so a single mounted volume persists your configuration, prompt history, and resumable sessions:
+
+```bash
+docker run --rm -it \
+  -v "$HOME/.config/seb:/root/.seb" \
+  ghcr.io/arvarik/seb:latest
+```
+
+### Install from source
+
+Clone the repository, install locked dependencies with `npm ci`, and link or install the binary globally:
+
+```bash
+git clone https://github.com/arvarik/seb.git
+cd seb
+npm ci
+npm link          # or: npm install -g .
+```
+
+When working directly in a source checkout without `npm link`, you can run any command via `npm run seb -- <subcommand>` (for example, `npm run seb -- configure` or `npm run seb`).
+
+## 3. Configure a model provider and settings
+
+Run the interactive configuration wizard in a terminal to mask secret input, verify your provider key with a 30-second live test, and save settings to `~/.config/seb`:
+
+```bash
+seb configure
+```
+
+Seb saves your provider credentials only after the verification request succeeds. Re-run `seb configure` any time to add another provider, edit application settings, or switch model families.
+
+Alternatively, import supported keys and settings from an explicit dotenv file without contacting the provider:
 
 ```bash
 cp .env.example .env
+# Edit .env with your provider key and preferences
+seb configure --import-env /absolute/path/to/.env
 ```
 
-Run the private model configuration flow.
+> [!IMPORTANT]
+> Seb **never** auto-loads a `.env` file from your current working directory. This prevents an untrusted repository from hijacking your model endpoint or storage paths. Always apply settings via `seb configure`, `seb configure --import-env`, or explicit shell/deployment environment variables.
 
-```bash
-npm run seb -- configure
-```
+### Recommended environment settings
 
-Select model provider setup to enter a key and test the selected provider for 30 seconds.
-
-Seb saves the configuration only after the test succeeds.
-
-The command requires an interactive terminal because it masks private keys.
-
-Run the command again to add another provider or change a saved model.
-
-You can import a dotenv file instead. This example adds a Google key.
+Set a contact address on `NWS_USER_AGENT` so the National Weather Service can reach you if automated weather requests encounter issues, and use strict `'true'` or `'false'` strings for boolean flags:
 
 ```dotenv
-GOOGLE_GENERATIVE_AI_API_KEY=your-key
+NWS_USER_AGENT=seb/1.1.2 (you@example.com)
+SEB_DEVTOOLS=false
+SEB_THEME=default
+SEB_ICONS=unicode
+SEB_HISTORY=true
+SEB_SESSIONS=true
 ```
 
-Run `seb configure --import-env /absolute/path/to/.env` and confirm the import.
-Imports save credentials without contacting the provider.
-Saved settings apply from any directory. See [Persistent configuration](CONFIGURATION.md).
+> [!WARNING]
+> Boolean settings imported with `seb configure --import-env` strictly accept `'true'` or `'false'` (never `on` or `off`). For example, use `SEB_SESSIONS=false` to stop saving session snapshots, or `SEB_HISTORY=false` to disable both disk prompt history and session snapshots. Keep `SEB_DEVTOOLS=false` outside local debugging because DevTools writes full prompts and tool payloads to `.devtools/`.
 
-This shell example selects a local OpenAI-compatible endpoint without a key.
+To target a local OpenAI-compatible server (such as Ollama or vLLM) for the current shell without saving credentials:
 
 ```bash
 export SEB_MODEL_PROVIDER=openai-compatible
@@ -73,568 +110,204 @@ export OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
 export OPENAI_COMPATIBLE_MODEL=local-model
 ```
 
-Seb does not load a current-directory `.env` file automatically.
+See [Persistent configuration](CONFIGURATION.md) for full details on `~/.config/seb` files, precedence rules, and optional Judgment OpenTelemetry tracing.
 
-This rule prevents an untrusted project file from selecting a model endpoint or a private storage path.
+## 4. Verify diagnostics and data sources
 
-Use `seb configure`, a shell environment, or a deployment environment for these values.
-
-Add a contact value to the NWS user agent.
-
-```dotenv
-NWS_USER_AGENT=seb/1.1.1 (you@example.com)
-```
-
-The default value identifies the public Seb repository. A direct contact value helps the NWS contact you about request problems.
-
-Do not commit `.env`. The project already ignores this file.
-
-Keep local AI SDK DevTools disabled by default.
-
-```dotenv
-SEB_DEVTOOLS=false
-```
-
-DevTools records complete prompts and tool data when you enable it.
-
-Optional terminal settings select a theme, symbol set, and history policy.
-
-```dotenv
-SEB_THEME=default
-SEB_ICONS=unicode
-SEB_HISTORY=true
-```
-
-Use `high-contrast` or `compact` for the theme.
-
-Use `ascii` when the terminal cannot display Unicode symbols.
-
-Set `SEB_HISTORY=false` to prevent disk history.
-
-Read the [terminal interface guide](TERMINAL_UI.md) for every setting and file path.
-
-## 3. Verify the public data sources
-
-Run the Sleeper smoke test.
+Run `seb doctor` to verify your local environment, active model provider, and every public NFL/weather source in one pass:
 
 ```bash
-npm run sleeper:smoke
+seb doctor
 ```
 
-This test reads the current NFL state.
+`seb doctor` executes **9 checks**:
 
-The test does not call a model provider.
+1. **Node.js runtime** — Confirms Node.js 22 or newer.
+2. **Environment configuration** — Validates configured provider settings, keys, and environment values.
+3. **Local SQLite cache** — Opens `.cache/seb.sqlite` and reports schema version plus cache, snapshot, canonical identity, and source-link counts.
+4. **Local file permissions** — Verifies safe directory (`0700`) and file (`0600`) modes on saved configuration files.
+5. **Local forecast learning** — Validates stored adaptive forecast learning state.
+6. **Active model provider** — Forces the active model through a live local tool-calling loop (and verifies a grounded Google Search URL when Google Gemini is active).
+7. **Sleeper public API** — Fetches the live NFL season and week state.
+8. **nflverse public files** — Verifies schedule and player statistics release access.
+9. **National Weather Service API** — Fetches a live stadium hourly forecast and alert feed.
 
-Run the combined nflverse and NWS smoke test.
+When working without network access, run only the local checks with `seb doctor --offline`. Once diagnostics pass, test a quick one-shot prompt:
 
 ```bash
-npm run data:smoke
+seb ask "Show the current NFL state."
 ```
 
-This test loads the 2026 schedule and 2025 weekly player statistics.
+One-shot requests try your configured primary model first and fall back to the fallback model only on capacity or rate-limit errors (never on authentication errors, invalid requests, timeouts, or cancellations).
 
-The test also loads the Seattle stadium hourly forecast and active alerts.
-
-This test does not call a model provider.
-
-Run the direct news source smoke test.
+If you installed from source, you can also run provider-free smoke tests directly:
 
 ```bash
-npm run news:smoke
+npm run sleeper:smoke   # Reads live Sleeper NFL state
+npm run data:smoke      # Loads nflverse schedules/stats + Seattle NWS forecast & alerts
+npm run news:smoke      # Verifies dated articles across all 47 built-in NFL newsrooms
 ```
 
-This test reads all 47 built-in news sources from their live public endpoints.
+## 5. Connect an optional Sleeper account
 
-It verifies that each source returns at least one valid dated article.
-
-The test can take longer when a publisher requires a crawl delay.
-
-This test does not call a model provider or Google Search.
-
-## 4. Verify the model provider
-
-Run the complete diagnostic command.
+Seb works out of the box for NFL research without any fantasy account. When you want automatic league, roster, scoring, and matchup context in **My Fantasy** and **Analyze**, save your public Sleeper username:
 
 ```bash
-npm run doctor
+seb setup your-sleeper-name
 ```
 
-This command checks Node.js, SQLite, the active model provider, Sleeper, nflverse, and the NWS.
+Running `seb setup` with no username initializes a clean empty `profile.json` for scripts or non-fantasy setups. `profile.json` stores only your optional Sleeper username, schema version, and update timestamp—never league IDs, roster IDs, or API keys—because Seb rediscovers your active leagues and owned rosters dynamically from Sleeper.
 
-The SQLite check reports cache, snapshot, identity, and source-link counts.
+## 6. Use interactive chat, sessions, and tool inspection
 
-Every provider must complete one forced local tool loop.
-
-The Google check must also return one valid grounded Google Search URL.
-
-Use the offline check when you only want to verify local configuration.
-
-```bash
-npm run doctor -- --offline
-```
-
-Then ask one small question.
-
-```bash
-npm run ask -- "Show the current NFL state."
-```
-
-One-shot requests use the configured primary model first.
-
-Seb retries the fallback only after a capacity or rate-limit error.
-
-Seb does not retry the fallback for an authentication error, invalid request, timeout, or cancellation.
-
-## 5. Save the optional Sleeper account
-
-Run setup without a username when you do not want automatic fantasy context.
-
-```bash
-npm run seb -- setup
-```
-
-Add one Sleeper username when you want automatic fantasy context.
-
-```bash
-npm run seb -- setup your-sleeper-name
-```
-
-Seb saves only the optional Sleeper username and the update time.
-
-The preferences file contains no league, roster, NFL team, season, or week.
-
-Starting `seb` without preferences creates an empty preferences file.
-
-The setup command accepts no interactive answers, so scripts can also run it.
-
-## 6. Install the direct command
-
-Link the project into the active Node.js installation.
-
-```bash
-npm link
-```
-
-Start the interactive interface.
+Launch the terminal UI with `seb`:
 
 ```bash
 seb
 ```
 
-The npm command remains available when you do not want a link.
+Inside interactive chat, all three experiences work together without manual setup:
+
+- **Explore** answers player, team, schedule, stat, and verified news questions with no Sleeper account required.
+- **My Fantasy** (`/connect your-sleeper-name`) discovers every current-season league and owned roster to surface lineup gaps, injuries, waivers, and matchup priorities.
+- **Analyze** carries the active player, team, or league forward for start/sit comparisons, full-roster lineup optimization, waiver rankings, and trade evaluations.
+
+Press `Ctrl+K` or type `/` to open the command palette, or run `/help` for the full command list. Use `/league <ID>` or `/season <YEAR>` only when you want to narrow focus to one league or historical season, and use `/profile show`, `/profile clear`, or `/disconnect` to manage your saved Sleeper profile. See the [Interactive guide](INTERACTIVE.md) and [Terminal interface guide](TERMINAL_UI.md) for all controls.
+
+### Inspect tool details
+
+Every external lookup renders as a compact purple tool row in the transcript. Click any purple tool row to expand its JSON input and result in place, and click it again to collapse. Consecutive calls to the same tool collapse into a single grouped row—click once to expand into individual calls (each labeled with a short ID and elapsed duration), then click an individual call to inspect its payload (capped at 64,000 characters with a truncation label when shortened). You can drag across any visible text to select and copy it.
+
+### Resume a conversation
+
+When you leave chat with `/exit`, Seb saves the conversation snapshot and prints its session ID along with the exact command to continue later:
 
 ```bash
-npm run seb
+seb sessions
+seb resume seb-00000000-0000-0000-0000-000000000000
 ```
 
-Read the [command-line guide](CLI.md) for pipes, JSON output, and exit codes.
+`seb sessions` lists saved conversations with their opening question, while `seb resume <SESSION_ID>` restores prompts, answers, tool inputs/results, source evidence, and active player/team/skill/league focus under owner-only permissions (`0600`) in `~/.config/seb/sessions/` (or alongside `SEB_HISTORY_FILE`; `/root/.seb/sessions` in Docker).
 
-## 7. Use the three Seb experiences
+- **Privacy & opt-out**: Session files never contain API keys or provider credentials. Set `SEB_SESSIONS=false` to disable session snapshots while keeping prompt history, or `SEB_HISTORY=false` to disable both prompt history and session saving (existing `.json` files remain until you delete them).
+- **Safety & limits**: Seb records your prompt before calling the model so a failed request is ready to retry after resuming, but it never auto-executes an unfinished approval. One terminal writes a given session at a time; snapshots exceeding 32 MiB keep their previous revision with a warning, and corrupted snapshots are left untouched and omitted from `seb sessions`. Resuming refreshes the live model and NFL calendar from startup and requires the same connected Sleeper account.
 
-Explore needs no Sleeper account.
+## 7. Shell completion, local DevTools, and source checks
+
+### Shell completion
+
+Generate and install tab completion for Zsh, Bash, or Fish:
 
 ```bash
-npm run ask -- "Show Derrick Henry's profile, recent statistics, and news."
-```
+# Zsh (ensure ~/.zfunc is in fpath before compinit in ~/.zshrc)
+mkdir -p ~/.zfunc && seb completion zsh > ~/.zfunc/_seb
 
-My Fantasy uses one saved Sleeper username.
-
-```text
-/connect your-sleeper-name
-What needs my attention across my leagues?
-```
-
-Seb refreshes the current NFL state when the session starts.
-
-It discovers every current league and owned roster for the saved account.
-
-Analyze continues from the active player, team, or fantasy subject.
-
-```text
-Show Derrick Henry's current profile and news.
-Compare him with Saquon Barkley for this matchup.
-```
-
-You do not need to select a season, week, league, roster, or NFL team first.
-
-Press `Ctrl+K` or type `/` to open the command palette.
-
-Use an advanced override only when you want another period or one league.
-
-```text
-/league 123456789
-/season 2026
-```
-
-Run `/help` inside chat for the complete command list.
-
-Run `/profile show` to show the active profile and file path.
-
-Run `/profile clear` to remove the profile.
-
-Run `/disconnect` to remove the saved Sleeper username.
-
-Player and team subjects remain in memory for natural follow-up questions.
-
-## 8. Install shell completion
-
-Install completion after you run `npm link`.
-
-For Zsh, create a personal completion directory.
-
-```bash
-mkdir -p ~/.zfunc
-seb completion zsh > ~/.zfunc/_seb
-```
-
-Add these lines to `~/.zshrc` when they do not exist.
-
-```zsh
-fpath=(~/.zfunc $fpath)
-autoload -Uz compinit
-compinit
-```
-
-Restart Zsh after this change.
-
-For Bash, load the generated function from `~/.bashrc`.
-
-```bash
+# Bash
 seb completion bash > ~/.seb-completion.bash
 printf '\nsource ~/.seb-completion.bash\n' >> ~/.bashrc
-```
 
-Restart Bash after this change.
-
-For Fish, write the script to the standard completion directory.
-
-```fish
+# Fish
 mkdir -p ~/.config/fish/completions
 seb completion fish > ~/.config/fish/completions/seb.fish
 ```
 
-Fish loads the new file automatically in a new shell.
+### Local AI SDK DevTools
 
-## 9. Run the project checks
+To inspect raw model steps and tool payloads during local development, launch Seb with `SEB_DEVTOOLS=true seb` and run `npm run devtools` in a second terminal from a source checkout. Never enable `SEB_DEVTOOLS` in production; see the [AI SDK guide](AI_SDK.md) for trace retention details.
 
-Run the version check, linter, type check, and all unit tests.
-
-```bash
-npm run check
-```
-
-Run the coverage gate.
+### Contributor checks (source checkouts)
 
 ```bash
-npm run test:coverage
+npm run check           # Version invariant, ESLint, TypeScript, and unit tests
+npm run test:coverage   # Coverage gate
+npm run test:harness    # Model and tool harness suite
+npm run deps:check      # Check direct dependencies for newer releases
 ```
 
-Run the model and tool harness alone.
+## 8. Start a chat connector
 
-```bash
-npm run test:harness
-```
-
-Check for newer direct dependencies.
-
-```bash
-npm run deps:check
-```
-
-## 10. Inspect local AI SDK requests
-
-Enable local trace recording for one Seb session.
-
-```bash
-SEB_DEVTOOLS=true npm run seb
-```
-
-Start the trace viewer in another terminal.
-
-```bash
-npm run devtools
-```
-
-DevTools stores complete prompts and tool data under `.devtools/`.
-
-Never enable DevTools in production.
-
-Read the [AI SDK guide](AI_SDK.md) before you retain or share trace files.
-
-## 11. Start a chat connector
-
-Choose one platform guide.
+Seb includes webhook and bot connectors for four chat platforms:
 
 - [Slack](connectors/SLACK.md)
 - [Discord](connectors/DISCORD.md)
 - [Telegram](connectors/TELEGRAM.md)
+- [GroupMe](connectors/GROUPME.md)
 
-Add the platform values to `.env` and import it with `seb configure --import-env .env`. Then start the connector service.
-
-```bash
-npm run connectors
-```
-
-Check the service health from another terminal.
+Save your platform credentials via `seb configure` or `seb configure --import-env /absolute/path/to/.env` (or pass them directly in the process environment), then start the unified HTTP connector service:
 
 ```bash
+seb connectors          # or: npm run connectors
 curl http://localhost:3000/health
 ```
 
-The response lists each enabled connector and the selected state adapter.
+For **GroupMe**, create a bot callback pointing to your public HTTPS endpoint (or an HTTPS development tunnel forwarding to `http://localhost:3000`) with your webhook secret query/header configuration, and set `SEB_CONNECTORS=groupme`, `GROUPME_BOT_ID`, and `GROUPME_WEBHOOK_SECRET`. See [GroupMe setup](connectors/GROUPME.md) and [Production operations](OPERATIONS.md) for deployment checklists and Redis state configuration (`REDIS_URL`).
 
 ## Environment reference
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `SEB_MODEL_PROVIDER` | No | Selects `google`, `anthropic`, `openai`, or `openai-compatible`. |
-| `SEB_PROVIDER` | No | Provides the older alias for `SEB_MODEL_PROVIDER`. |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Google | Authenticates Google Gemini requests. |
-| `GEMINI_API_KEY` | Google | Provides an accepted Google key alias. |
+| `SEB_MODEL_PROVIDER` | No | Selects `google`, `anthropic`, `openai`, or `openai-compatible` (`SEB_PROVIDER` is an older alias). |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google | Authenticates Google Gemini requests (`GEMINI_API_KEY` is an accepted alias). |
 | `ANTHROPIC_API_KEY` | Anthropic | Authenticates Anthropic requests. |
 | `OPENAI_API_KEY` | OpenAI | Authenticates OpenAI requests. |
-| `OPENAI_COMPATIBLE_API_KEY` | Endpoint-specific | Authenticates an OpenAI-compatible endpoint when it requires a key. |
-| `OPENAI_COMPATIBLE_BASE_URL` | OpenAI-compatible | Selects the compatible API base URL. |
-| `SEB_MODEL` | No | Overrides the active provider model. |
-| `SEB_FALLBACK_MODEL` | No | Overrides the active provider fallback model. |
-| `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` | No | Select the Google models. |
-| `ANTHROPIC_MODEL`, `ANTHROPIC_FALLBACK_MODEL` | No | Select the Anthropic models. |
-| `OPENAI_MODEL`, `OPENAI_FALLBACK_MODEL` | No | Select the OpenAI models. |
-| `OPENAI_COMPATIBLE_MODEL`, `OPENAI_COMPATIBLE_FALLBACK_MODEL` | OpenAI-compatible | Select the endpoint models. |
-| `NWS_USER_AGENT` | Recommended | Identifies Seb and gives the NWS a contact value. |
-| `SEB_DEVTOOLS` | No | Records local AI SDK traces when it equals `true` or `1`. |
-| `SEB_SLEEPER_USER` | No | Supplies the optional Sleeper username during setup. |
-| `SEB_PROFILE_FILE` | No | Selects the complete preferences file path. |
-| `SEB_CONFIG_HOME` | No | Selects the directory that contains `profile.json`. |
-| `SEB_MODEL_SETTINGS_FILE` | No | Selects the complete non-secret model settings file path. |
-| `SEB_CONNECTORS` | Usually | Lists `slack`, `discord`, or `telegram`. |
-| `SEB_BOT_NAME` | No | Sets the common bot name. The default is `seb`. |
-| `HOST` | No | Sets the connector bind address. The default is `0.0.0.0`. |
-| `PORT` | No | Sets the HTTP port. The default is `3000`. |
-| `REDIS_URL` | Production | Enables persistent and shared connector state. |
+| `OPENAI_COMPATIBLE_API_KEY` | Endpoint-specific | Authenticates an OpenAI-compatible endpoint when required. |
+| `OPENAI_COMPATIBLE_BASE_URL` | OpenAI-compatible | Base URL for an OpenAI-compatible API (`http://` loopback or `https://` remote). |
+| `SEB_MODEL`, `SEB_FALLBACK_MODEL` | No | Overrides the active provider's primary or fallback model (`provider:model` prefix supported). |
+| `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` | No | Overrides the Google Gemini primary or fallback model/family. |
+| `ANTHROPIC_MODEL`, `ANTHROPIC_FALLBACK_MODEL` | No | Overrides the Anthropic primary or fallback model/family. |
+| `OPENAI_MODEL`, `OPENAI_FALLBACK_MODEL` | No | Overrides the OpenAI primary or fallback model/family. |
+| `OPENAI_COMPATIBLE_MODEL`, `OPENAI_COMPATIBLE_FALLBACK_MODEL` | OpenAI-compatible | Selects the compatible endpoint primary and optional fallback model IDs. |
+| `SEB_CONFIG_HOME` | No | Directory storing `settings.json`, `credentials.json`, `model-settings.json`, `profile.json`, `history.json`, and `sessions/`. |
+| `SEB_PROFILE_FILE` | No | Explicit file path override for `profile.json` (takes priority over `SEB_CONFIG_HOME`). |
+| `SEB_MODEL_SETTINGS_FILE` | No | Explicit file path override for `model-settings.json`. |
+| `SEB_HISTORY_FILE` | No | Explicit file path override for `history.json` (also relocates sibling `sessions/`). |
+| `SEB_SLEEPER_USER` | No | Supplies a default Sleeper username during `seb setup`. |
+| `SEB_THEME` | No | Startup terminal theme (`default`, `high-contrast`, or `compact`). |
+| `SEB_ICONS` | No | Startup symbol set (`unicode` or `ascii`). |
+| `SEB_HISTORY` | No | `'true'` or `'false'`. Setting `'false'` disables both disk prompt history and session snapshots. |
+| `SEB_SESSIONS` | No | `'true'` or `'false'`. Setting `'false'` disables saving resumable conversation snapshots. |
+| `NWS_USER_AGENT` | Recommended | Identifies Seb and supplies contact info for National Weather Service API calls. |
+| `SEB_DEVTOOLS` | No | Records local AI SDK traces to `.devtools/` when set to `'true'` or `'1'`. |
+| `SEB_JUDGMENT_TRACING` | No | `'true'` or `'false'`. Enables optional Judgment OpenTelemetry tracing when `'true'`. |
+| `JUDGMENT_API_KEY` | Judgment | API key for Judgment trace export (saved in `credentials.json` when configured). |
+| `JUDGMENT_ORG_ID` | Judgment | Target Judgment organization UUID for trace export. |
+| `JUDGMENT_MONITORING` | No | Set to `'false'` to disable Judgment monitoring spans. |
+| `SEB_CONNECTORS` | Production | Comma-separated list of enabled connectors: `slack`, `discord`, `telegram`, or `groupme`. |
+| `SEB_BOT_NAME` | No | Display/mention handle for chat connectors (defaults to `seb`). |
+| `HOST`, `PORT` | No | Bind host (`0.0.0.0`) and HTTP port (`3000`) for `seb connectors`. |
+| `REDIS_URL` | Production | Redis connection URL for shared, persistent connector state across restarts. |
+| `GROUPME_BOT_ID` | GroupMe | Bot ID issued by GroupMe for posting replies. |
+| `GROUPME_WEBHOOK_SECRET` | GroupMe | Shared secret verifying inbound GroupMe webhook callbacks. |
+| `TELEGRAM_MENTION_ON_REPLY` | No | `'true'` or `'false'`. Controls whether Telegram replies mention the sender. |
 
-Seb can auto-detect a connector from complete platform credentials.
-
-Set `SEB_CONNECTORS` explicitly in production. This setting prevents an unused credential from enabling a platform.
-
-Environment values override saved credentials and saved model settings.
-
-The explicit dotenv importer skips custom endpoints and private storage paths. Use model provider setup or a shell environment for these values.
-
-An explicit CLI or slash model override uses that model as its own fallback.
-
-An explicit provider-only override keeps that provider's configured fallback.
-
-`SEB_MODEL` does not disable fallback.
-
-It uses `SEB_FALLBACK_MODEL`, a provider-specific fallback, a saved fallback, or the hosted default.
-
-A qualified model uses the `provider:model` format. The provider prefix must match a supported provider ID.
+> [!NOTE]
+> While Seb can auto-detect enabled connectors from complete platform credentials during local testing, always set `SEB_CONNECTORS` explicitly in production so unused credentials never activate an unintended webhook route.
 
 ## Local configuration paths and security
 
-Seb selects the account preferences path in this order.
+Seb resolves its user configuration directory in this order: `SEB_CONFIG_HOME`, `$XDG_CONFIG_HOME/seb`, or `~/.config/seb` by default (`SEB_PROFILE_FILE`, `SEB_MODEL_SETTINGS_FILE`, and `SEB_HISTORY_FILE` can override individual paths—use absolute paths in scripts). Inside that directory, Seb separates data cleanly across six artifacts:
 
-1. `SEB_PROFILE_FILE` selects the complete file path.
-2. `SEB_CONFIG_HOME` selects `DIRECTORY/profile.json`.
-3. `XDG_CONFIG_HOME` selects `DIRECTORY/seb/profile.json`.
-4. The default path is `~/.config/seb/profile.json`.
+- **`settings.json`** — Non-secret application settings (UI preferences, `NWS_USER_AGENT`, Judgment tracing flags/org ID, and non-secret connector options).
+- **`credentials.json`** — Provider API keys and saved secrets (`JUDGMENT_API_KEY` and connector secrets). OpenAI-compatible API keys are cryptographically bound to their canonical base URL.
+- **`model-settings.json`** — Active provider, primary and fallback model families/IDs, and any configured OpenAI-compatible base URL (no secret keys).
+- **`profile.json`** — Optional Sleeper username, schema version (`3`), and update timestamp. Legacy v1/v2 profiles migrate automatically on load while stripping deprecated league, roster, season, and week fields.
+- **`history.json`** — Private prompt history (up to 200 entries; excluded when typed inside secret configuration prompts).
+- **`sessions/`** — Owner-only conversation snapshot JSON files for `seb resume`.
 
-Seb places `credentials.json` and `model-settings.json` beside `profile.json`.
+Interactive chat (`seb`), one-shot CLI invocations (`seb ask`), and the connector server (`seb connectors`) all load saved configuration from `~/.config/seb` as defaults whenever the corresponding process environment variables are unset. **Process environment variables (`process.env`) always take precedence over saved files**, and explicit CLI flags (`--provider`, `--model`) override both. Note that one-shot and connector requests remain stateless per call/thread rather than applying interactive `/team` or `/roster` overrides.
 
-`SEB_MODEL_SETTINGS_FILE` can select a different model settings path.
-
-Use absolute paths for file overrides in scripts.
-
-Do not set both Seb preferences variables.
-
-`SEB_PROFILE_FILE` has priority when both values exist.
-
-Seb gives a newly created preferences directory mode `0700`.
-
-Seb does not change the mode of an existing custom directory.
-
-Seb writes each configuration file with mode `0600`.
-
-It writes a temporary file before an atomic rename.
-
-It rejects a file larger than 64 KiB.
-
-It validates the schema, identifiers, ranges, and update time on every load.
-
-One saved key cannot exceed 16 KiB. One model ID cannot exceed 200 safe characters.
-
-`profile.json` contains only the optional Sleeper username, schema version, and update time.
-
-`credentials.json` contains saved provider keys and no model settings.
-
-It binds a saved OpenAI-compatible key to one canonical compatible base URL.
-
-`model-settings.json` contains the active provider, model IDs, fallback model IDs, and the optional compatible endpoint. It contains no keys.
-
-Seb migrates version 1 and version 2 files to version 3 when it loads them.
-
-Version 1 migration keeps a valid Sleeper username.
-
-All migrations remove saved league, roster, season, and week values.
-
-The account preferences file does not contain a provider key or connector credential.
-
-The model configuration prompt never adds a typed key to chat or prompt history.
-
-Local usage telemetry excludes keys, authorization headers, and compatible endpoint URLs.
-
-Interactive chat and one-shot requests load these preferences automatically.
-
-They also load saved model credentials and model settings.
-
-Connector services do not load the saved provider files. Configure each connector process through its environment.
-
-One-shot and connector requests do not apply interactive team context.
+Seb creates new configuration directories with mode `0700` (leaving existing custom directory permissions unchanged) and writes every file atomically via a temporary file with owner-only mode `0600`. Config files are capped at 64 KiB, individual keys at 16 KiB, and model IDs at 200 safe characters. Local usage telemetry never records API keys, authorization headers, or custom compatible base URLs.
 
 ## Common setup errors
 
-### No model provider is configured
-
-Run `seb configure` in an interactive terminal.
-
-You can instead add a supported provider key or compatible endpoint to the environment.
-
-### An OpenAI-compatible endpoint is rejected
-
-Use an HTTP loopback URL or an HTTPS remote URL.
-
-Use the API base URL. Do not use `/chat/completions`, `/completions`, `/models`, or `/responses` as the final path.
-
-Remove embedded credentials, a query string, and a fragment from the URL.
-
-Seb rejects redirects for compatible model and discovery requests.
-
-The interactive flow asks for confirmation before it sends data to a non-loopback origin.
-
-The endpoint must support streaming and model tool calls.
-
-Run `seb configure` to test those requirements before you save the endpoint.
-
-### Sleeper finds no league
-
-Confirm the saved Sleeper username with `/account`.
-
-Confirm that the user has an NFL league for the current Sleeper league season.
-
-Run `/connect USERNAME` again to refresh the account.
-
-### Sleeper does not list the expected roster
-
-Run `/account` to confirm that Seb found the owned roster.
-
-Run `/rosters LEAGUE_ID` to inspect every roster in one league.
-
-Select the required roster with `/roster ID`.
-
-### The preferences file contains invalid JSON
-
-Run `/profile clear` from chat when the file still loads far enough to start.
-
-Otherwise, inspect the file at the configured profile path.
-
-Move the invalid file to a private backup location.
-
-Then run `seb setup` to create a validated profile.
-
-### The preferences file has unsafe permissions
-
-Restrict the directory and file on Unix systems.
-
-Run each file command only when that file exists.
-
-```bash
-chmod 700 ~/.config/seb
-chmod 600 ~/.config/seb/profile.json ~/.config/seb/credentials.json ~/.config/seb/model-settings.json
-```
-
-### No connector is configured
-
-The connector service reports that no connector exists.
-
-Set `SEB_CONNECTORS`. Then add every required platform credential.
-
-### A connector works until restart
-
-The service uses memory state when `REDIS_URL` is empty.
-
-Add Redis before production use. See [production operations](OPERATIONS.md).
-
-### Sleeper returns an API error
-
-Run `npm run sleeper:smoke` again.
-
-Check the league ID when only one league request fails.
-
-Sleeper removes old or invalid league identifiers from some results.
-
-### nflverse returns a missing file
-
-Confirm that the requested season exists in the nflverse data release.
-
-Run `npm run data:smoke` to verify the current supported files.
-
-Use `/refresh nflverse` when a cached record does not match a new release.
-
-### The weather forecast is unavailable
-
-The NWS hourly forecast covers about seven days.
-
-Seb returns an explicit unavailable result for a later kickoff.
-
-Seb skips direct field-weather effects for a closed roof or a dome.
-
-International games do not use the NWS.
-
-### The SQLite cache does not open
-
-Run `seb cache status` to show the path and error.
-
-Confirm that the current user can read and write the `.cache` directory.
-
-Read the [storage guide](STORAGE.md) before you replace the database.
-
-### Seb uses stale data
-
-Run `/sources` to identify the source and refresh error.
-
-Run `/refresh SOURCE` to force the next request to contact that source.
-
-Seb does not use a stale value after its allowed backup period ends.
-
-## Resume a conversation
-
-Exit with `/exit`. Seb prints the unique identifier and an exact command. The session list shows each conversation’s first question:
-
-```sh
-seb resume seb-00000000-0000-0000-0000-000000000000
-seb sessions
-```
-
-Use the identifier from your terminal. The example identifier does not select a real conversation.
-Seb saves conversations in the `sessions` folder beside its prompt-history file.
-`SEB_CONFIG_HOME` selects the normal configuration folder. `SEB_HISTORY_FILE` also changes the parent folder for sessions.
-The Docker image sets `SEB_CONFIG_HOME=/root/.seb` to use its mounted persistent volume.
-Session files contain prompts, answers, tool inputs, tool results, and source evidence. Files use owner-only permissions.
-Seb does not save provider credentials or configuration in the session snapshot.
-Set `SEB_SESSIONS=off` to stop session saving. `SEB_HISTORY=off` disables both prompt history and session saving.
-These settings do not delete existing files. Delete a session JSON file to remove that conversation after closing it.
-
-Seb saves the question before requesting an answer. A failed answer leaves the question available for a natural retry after resume.
-A resumed conversation never executes an unfinished approval. Ask again if an approved action did not finish.
-One terminal can write a saved session at a time. A session larger than 32 MiB keeps its previous snapshot and shows a warning.
-A damaged snapshot stays untouched. The session list omits damaged files.
-The current model and NFL calendar come from the new session startup. Seb restores player, team, skill, and available league focus.
-Resume requires the same connected Sleeper account. It does not restore credentials or switch accounts.
-
-## Inspect tool details
-
-Click a purple tool row to expand its input and result. Click it again to collapse the details.
-A grouped row first expands into individual calls. Each call shows a short identifier and elapsed time.
-Click an individual call to inspect its details. Drag across text to select and copy it.
-The display limits each tool detail to 64,000 characters and labels any shortened result.
+- **No model provider is configured**: Run `seb configure` in an interactive terminal or export a supported provider API key (`GOOGLE_GENERATIVE_AI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or OpenAI-compatible variables).
+- **OpenAI-compatible endpoint rejected**: Supply an `http://` loopback URL or `https://` remote API base URL without trailing `/chat/completions`, `/completions`, `/models`, or `/responses` paths, embedded credentials, query strings, or fragments. Seb blocks HTTP redirects, asks before contacting non-loopback origins, and verifies streaming plus tool-calling support during `seb configure`.
+- **Unsafe file permissions warning**: Restrict your config folder and existing JSON files on Unix systems:
+  ```bash
+  chmod 700 ~/.config/seb
+  chmod 600 ~/.config/seb/*.json
+  ```
+- **Invalid `profile.json` JSON**: Run `/profile clear` if interactive chat starts, or move the damaged file aside and run `seb setup` to write a fresh profile.
+- **Sleeper league or roster missing**: Run `/account` to inspect discovered current-season NFL leagues, `/connect <USERNAME>` to refresh, or `/rosters <LEAGUE_ID>` and `/roster <ID>` to select a roster manually.
+- **Connector fails to start or loses state on restart**: Set `SEB_CONNECTORS` alongside all required platform secrets, and configure `REDIS_URL` so connector state persists across restarts (see [Production operations](OPERATIONS.md)).
+- **Stale source data, missing nflverse season, or unavailable weather**: Run `/sources` to check cache age and `/refresh <sleeper|nflverse|weather|news|all>` to invalidate cached rows. Remember that NWS forecasts cover ~7 days for US outdoor venues only (domes, closed roofs, and international venues skip NWS field-weather adjustments). If `.cache/seb.sqlite` cannot open, run `seb cache status` and consult [Storage](STORAGE.md).

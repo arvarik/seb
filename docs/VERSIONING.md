@@ -2,50 +2,57 @@
 
 Seb uses [Semantic Versioning](https://semver.org/) with the `MAJOR.MINOR.PATCH` format.
 
-The current version is `1.1.1`.
+The current version is `1.1.2`.
+
+```mermaid
+flowchart LR
+  TAG["Push Annotated Tag (v1.1.2)"] --> VERIFY["Verify & Audit (version:check, lint, typecheck, test, audit)"]
+  VERIFY --> PACK["Build Archive (npm pack to arvarik-seb-1.1.2.tgz)"]
+  PACK --> NPM["Publish npm (@arvarik/seb with SLSA --provenance)"]
+  PACK --> GHCR["Build & Push Container (ghcr.io/arvarik/seb)"]
+  PACK --> GHREL["Create GitHub Release (Exact Title: v1.1.2 + Tarball)"]
+```
 
 ## Supported public interfaces
 
-Version 1 supports the commands and options in the [CLI guide](CLI.md).
-It also supports the documented interactive commands and connector webhook routes.
-JSON commands expose their schema versions. Consumers must ignore additional object fields.
+Version 1 guarantees compatibility across the documented CLI commands and flags in the [CLI guide](CLI.md), documented interactive slash commands, and connector webhook routes (`/webhooks/slack`, `/webhooks/discord`, `/webhooks/telegram`, `/webhooks/groupme`, and `GET /health`). Structured JSON outputs declare explicit `schemaVersion` integers—downstream integrations should validate `schemaVersion` and ignore newly added object properties.
 
-Patch releases fix compatible behavior. Minor releases add compatible features or fields.
-A major release changes an existing command or documented output contract incompatibly.
+- **Patch (`X.Y.Z`)**: Backwards-compatible bug fixes, source resilience updates, and documentation improvements.
+- **Minor (`X.Y.0`)**: Backwards-compatible commands, connectors, analysis tools, or additive JSON fields.
+- **Major (`X.0.0`)**: Breaking CLI flag removals, incompatible JSON schema changes, or removed webhook contracts.
 
-Model prose, provider catalogs, forecast values, news sources, and table layouts can change without a major version.
-Internal TypeScript exports and SQLite tables do not form a stable library API.
-Use the CLI JSON commands when integrating another program.
+Model prose, default provider model catalogs, numerical projection parameters, built-in newsroom rosters, and terminal layout details may evolve across minor or patch releases without a major bump. Internal TypeScript modules and SQLite tables are not public library APIs; integrate external tooling via CLI `--json` commands.
 
-## Version sources
+## Version locations: automated check vs. manual sync
 
-`package.json` contains the source version. The CLI reads it for `seb --version`.
-Both root version fields in `package-lock.json` must match it.
-`CHANGELOG.md` needs a dated heading for the same version.
-The NWS examples in `.env.example` and `docs/SETUP.md` must use that version.
-This guide must state the same current version.
+Run `npm run version:check` (`scripts/check-version.mjs`) to verify synchronized release metadata before opening a release PR:
 
-Run `npm run version:check` to verify these requirements.
+| File | Enforced by `npm run version:check`? | Required content |
+| --- | :---: | --- |
+| `package.json` | Yes | `"version": "1.1.2"` (read at runtime by `seb --version`) |
+| `package-lock.json` | Yes | Matching `"version"` at root and `packages[""].version` |
+| `CHANGELOG.md` | Yes | Dated `## [1.1.2] - YYYY-MM-DD` release section |
+| `.env.example` | Yes | `NWS_USER_AGENT=seb/1.1.2 ...` example string |
+| `docs/VERSIONING.md` | Yes | Exact sentence: ``The current version is `1.1.2`.`` |
+| `docs/SETUP.md` | Yes | `NWS_USER_AGENT=seb/1.1.2 ...` setup example |
+| `README.md` | Manual check | Top release version badge (`version-1.1.2-...`) |
+| `docs/DATA_SOURCES.md` | Manual check | `NWS_USER_AGENT=seb/1.1.2 (you@example.com)` example |
 
-## Release names
+## Release naming invariants
 
-Git tags use a lowercase `v` prefix. Version `1.0.0` uses the `v1.0.0` tag.
-The GitHub release title must exactly match the tag, such as `v1.0.0`.
-Use an annotated tag. Do not reuse or move a published tag.
+> [!IMPORTANT]
+> Git release tags **and** GitHub Release titles must use the exact `vX.Y.Z` format (for example, `v1.1.2`—never `Release v1.1.2` or `1.1.2`). Always push an annotated Git tag and never move or reuse a published tag.
 
-Use a Conventional Commit subject for release preparation:
+Use a Conventional Commit subject on the release preparation PR:
 
 ```text
-chore(release): v1.0.0
+chore(release): v1.1.2
 ```
 
-## Prepare a release
+## Prepare and publish a release
 
-1. Create a branch from current `main`.
-2. Consolidate completed `Unreleased` notes into one dated version section.
-3. Run `npm version 1.0.0 --no-git-tag-version` with the intended version.
-4. Update the environment example, setup guide, and version guide to match.
-5. Run the local checks:
+1. Branch from up-to-date `main`, consolidate `Unreleased` entries in `CHANGELOG.md` under a dated `[1.1.2]` heading, and bump `package.json` + `package-lock.json` via `npm version 1.1.2 --no-git-tag-version`.
+2. Update `.env.example`, `docs/SETUP.md`, `docs/VERSIONING.md`, `docs/DATA_SOURCES.md`, and the `README.md` version badge, then run the full local verification suite:
 
    ```bash
    npm run check
@@ -58,22 +65,19 @@ chore(release): v1.0.0
    npm pack --dry-run
    ```
 
-6. Inspect the package file list for credentials, caches, and unrelated files.
-7. Verify a clean production install from the package archive.
-8. Open a pull request with the changes and exact verification results.
-9. Wait for every required Linux and macOS check to pass, then squash merge.
-10. Sync local `main` and verify that its commit matches GitHub.
-11. Create and push the annotated tag from that commit:
+3. Inspect `npm pack --dry-run` output (and test a clean `--omit=dev` tarball install) to confirm zero credentials, `.cache/`, `.devtools/`, test files, or unrelated artifacts enter the archive.
+4. Open the release PR, confirm all required Linux and macOS CI checks pass, squash-merge to `main`, and pull the exact merged commit locally.
+5. Create and push the annotated `vX.Y.Z` tag from `main`:
 
-    ```bash
-    git tag -a v1.0.0 -m "Release v1.0.0"
-    git push origin v1.0.0
-    ```
+   ```bash
+   git tag -a v1.1.2 -m "v1.1.2"
+   git push origin v1.1.2
+   ```
 
-12. The automated [Release workflow](../.github/workflows/release.yml) triggers on the tag push to execute:
-    - Verification: Runs `npm run version:check`, `lint`, `typecheck`, `test`, and `npm audit --omit=dev`.
-    - Package archiving: Generates the npm release tarball (`arvarik-seb-*.tgz`).
-    - npm registry: Publishes `@arvarik/seb` with cryptographic SLSA provenance (`--provenance`).
-    - Container registry: Builds and publishes the Docker image to GitHub Container Registry (`ghcr.io/arvarik/seb`).
-    - GitHub Release: Publishes the official GitHub release with notes generated from merged pull requests and the packaged tarball attached.
-13. Verify the release on GitHub, npm, and GHCR.
+6. Pushing `v1.1.2` triggers the automated [Release workflow](../.github/workflows/release.yml), which:
+   - **Verifies & audits**: Runs `npm run version:check`, `lint`, `typecheck`, `test`, and `npm audit --omit=dev`.
+   - **Packages**: Builds the release tarball (`arvarik-seb-1.1.2.tgz`).
+   - **Publishes to npm**: Publishes `@arvarik/seb` with cryptographic SLSA provenance (`--provenance`).
+   - **Publishes to GHCR**: Builds and pushes multi-metadata container tags to `ghcr.io/arvarik/seb`.
+   - **Publishes GitHub Release**: Creates the official GitHub Release titled `v1.1.2` with generated PR release notes and the `.tgz` asset attached.
+7. Confirm the published package on npm (`@arvarik/seb`), container tags on GHCR (`ghcr.io/arvarik/seb`), and release page on GitHub.

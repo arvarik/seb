@@ -6,21 +6,13 @@ Seb supports rich interactive terminal research alongside scriptable one-shot pr
 
 ## Install the `seb` command
 
-Install the published CLI globally from npm, or invoke it directly via `npx` without a global install:
+Clone the repository, install locked dependencies with `npm ci`, and install or link the binary into your active Node.js environment (use `npm unlink -g seb` later if you want to remove a global link, or run `npm run seb` / `npm run ask` directly from source):
 
 ```bash
-npm install -g @arvarik/seb
-seb --version
-
-# Or run on demand:
-npx @arvarik/seb doctor
-```
-
-When working from a source checkout, install locked dependencies with `npm ci` and link the binary into your active Node.js environment (use `npm unlink -g seb` later if you want to remove the global link, or run `npm run seb` / `npm run ask` directly):
-
-```bash
+git clone https://github.com/arvarik/seb.git
+cd seb
 npm ci
-npm link
+npm install -g .    # or: npm link
 seb doctor
 ```
 

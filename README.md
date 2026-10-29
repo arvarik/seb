@@ -3,7 +3,6 @@
 **The source-grounded NFL & fantasy football AI agent. One terminal.**
 
 [![CI](https://github.com/arvarik/seb/actions/workflows/ci.yml/badge.svg)](https://github.com/arvarik/seb/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/@arvarik/seb?logo=npm)](https://www.npmjs.com/package/@arvarik/seb)
 [![Version](https://img.shields.io/badge/version-1.1.2-informational.svg)](package.json)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-339933?logo=node.js&logoColor=white)](package.json)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -41,11 +40,15 @@ Rank the top WR waiver targets this week and suggest FAAB bids.
 Requires **Node.js 22+**:
 
 ```bash
-# Install globally from npm
-npm install -g @arvarik/seb
+git clone https://github.com/arvarik/seb.git
+cd seb
+npm ci
 
-# Or run immediately without installing
-npx @arvarik/seb
+# Run directly from source
+npm run seb
+
+# Or install globally as `seb`
+npm install -g .
 ```
 
 <details>
@@ -58,17 +61,6 @@ docker run -it --rm -v ~/.seb:/root/.seb ghcr.io/arvarik/seb:latest
 # Or build locally from source
 docker build -t seb .
 docker run -it --rm -v ~/.seb:/root/.seb seb
-```
-</details>
-
-<details>
-<summary><strong>Install from Source</strong></summary>
-
-```bash
-git clone https://github.com/arvarik/seb.git
-cd seb
-npm ci
-npm install -g .
 ```
 </details>
 
@@ -138,31 +130,6 @@ Run `npm run connectors` to host Seb inside your league's group chat with shared
 - **Discord** — Gateway bot & HTTP interactions ([Discord Guide](docs/connectors/DISCORD.md))
 - **Telegram** — Long polling & secret-verified webhooks ([Telegram Guide](docs/connectors/TELEGRAM.md))
 - **GroupMe** — Secret-verified group webhooks with 1,000-char smart chunking ([GroupMe Guide](docs/connectors/GROUPME.md))
-
----
-
-## How Seb Protects Your Decisions
-
-```mermaid
-flowchart LR
-  A["1. Resolve Identity & League"] --> B["2. Gather Live Sources"]
-  B --> C["3. Compute Deterministic Math"]
-  C --> D{"4. Decision Gate"}
-  D -->|Verified| E["Grounded Recommendation + Evidence"]
-  D -->|Missing or Stale| F["Auto-Refresh & Single Retry"]
-  F --> D
-```
-
-1. **Resolve**: Maps nicknames and abbreviations to canonical player/team IDs and loads exact Sleeper league roster slots and scoring weights.
-2. **Gather**: Queries Sleeper, nflverse play-by-play/weekly CSVs, NWS kickoff forecasts, and 47 curated NFL newsrooms.
-3. **Compute**: Runs deterministic ensembles for player/kicker/D/ST projections, same-game covariance, maximum-weight lineup optimization, FAAB scoring, and playoff simulations.
-4. **Validate**: Verifies active roster/slot legality, injury status, and fresh news for recommended starters. If context is stale or incomplete, Seb automatically refreshes caches and retries once—withholding the call rather than guessing if evidence remains unavailable.
-
-### Transparent Limits
-
-- **Supported Positions**: Projections and lineup optimization cover offensive skill positions (`QB`, `RB`, `WR`, `TE`), kickers (`K`), and team `D/ST` (including individual `kr_yd`, `pr_yd`, `st_ff`, and `st_fum_rec` rules). Individual defensive player (`IDP`) projections are not yet modeled.
-- **Public Feed Cadence**: Public RSS/sitemap newsrooms and nflverse weekly releases can lag live in-game broadcast events.
-- **Weather Venues**: National Weather Service forecasts cover United States venues; international neutral-site games are flagged explicitly.
 
 ---
 

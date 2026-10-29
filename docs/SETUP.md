@@ -28,18 +28,16 @@ Hosted providers default to auto-updating model families that resolve to the new
 
 Choose the installation method that fits your workflow:
 
-### Install globally from npm (recommended)
+### Install from source (recommended)
+
+Clone the repository, install locked dependencies with `npm ci`, and install or link the `seb` command globally:
 
 ```bash
-npm install -g @arvarik/seb
+git clone https://github.com/arvarik/seb.git
+cd seb
+npm ci
+npm install -g .    # or: npm link
 seb --version
-```
-
-### Run without installing via `npx`
-
-```bash
-npx @arvarik/seb configure
-npx @arvarik/seb
 ```
 
 ### Run with Docker
@@ -50,17 +48,6 @@ The published container sets `SEB_CONFIG_HOME=/root/.seb` so a single mounted vo
 docker run --rm -it \
   -v "$HOME/.config/seb:/root/.seb" \
   ghcr.io/arvarik/seb:latest
-```
-
-### Install from source
-
-Clone the repository, install locked dependencies with `npm ci`, and link or install the binary globally:
-
-```bash
-git clone https://github.com/arvarik/seb.git
-cd seb
-npm ci
-npm link          # or: npm install -g .
 ```
 
 When working directly in a source checkout without `npm link`, you can run any command via `npm run seb -- <subcommand>` (for example, `npm run seb -- configure` or `npm run seb`).

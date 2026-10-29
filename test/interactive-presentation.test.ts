@@ -54,12 +54,14 @@ describe('interactive presentation', () => {
     const output = renderAnalysisText([
       '## Decision',
       'Confidence: 72%',
+      'Confidence: medium (59%)',
       'Win probability: 61%',
       'Weekly points: 8, 14, 10, 19',
     ].join('\n'), theme);
 
     expect(output).toContain('DECISION');
     expect(output).toContain('72% #######---');
+    expect(output).toContain('medium (59%) ######----');
     expect(output).toContain('61% ############--------');
     expect(output).toContain('8 -> 14 -> 10 -> 19');
   });

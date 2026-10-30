@@ -275,6 +275,21 @@ describe('SebDatabase', () => {
     expect(cacheIndexes.some((idx) => idx.name === 'cache_stale_until_idx')).toBe(true);
     expect(snapshotIndexes.some((idx) => idx.name === 'snapshot_as_of_idx')).toBe(true);
   });
+
+  it('opens an already-migrated WAL database without acquiring a write lock', () => {
+    const database = createDatabase();
+    const writer = new Database(database.file);
+    writer.exec('BEGIN IMMEDIATE');
+    try {
+      const startedAt = Date.now();
+      const concurrent = new SebDatabase(database.file);
+      databases.push(concurrent);
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      writer.exec('ROLLBACK');
+      writer.close();
+    }
+  });
 });
 
 describe('CachedResource', () => {

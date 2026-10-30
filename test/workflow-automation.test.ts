@@ -948,6 +948,7 @@ describe('Feature 3: zero-UUID seb resume, session working memory, and SQLite fo
     const agent = createFantasyFootballAgent({
       identityRepository: false,
       languageModel: model,
+      newsClient: {} as NewsClient,
       nflverseClient: nflverse,
       sleeperClient: sleeper,
       weatherClient: {} as WeatherClient,
@@ -1092,6 +1093,7 @@ describe('Feature 3: zero-UUID seb resume, session working memory, and SQLite fo
           getRuntimeContext: () => formatSessionData(session),
           identityRepository: false,
           languageModel: model,
+          newsClient: {} as NewsClient,
           nflverseClient: nflverse,
           sleeperClient: sleeper,
           weatherClient: {} as WeatherClient,
@@ -1554,6 +1556,7 @@ describe('Review & live-E2E audit regressions', () => {
         agent: createFantasyFootballAgent({
           identityRepository: false,
           languageModel: mockModel,
+          newsClient: {} as NewsClient,
           nflverseClient: nflverse,
           sleeperClient: sleeper,
           weatherClient: {} as WeatherClient,
@@ -1587,7 +1590,7 @@ describe('Review & live-E2E audit regressions', () => {
       transport: makeTransport(),
     });
     await expect.poll(() => emptyIn.listenerCount('data')).toBe(1);
-    emptyIn.type('\x1b'); // Escape on empty prompt exits immediately
+    emptyIn.type('\u0003');
     await emptyRun;
     expect(await store.list()).toEqual([]);
 
@@ -1606,6 +1609,11 @@ describe('Review & live-E2E audit regressions', () => {
     await expect.poll(() => helpIn.listenerCount('data')).toBe(1);
     helpIn.type('/help\r');
     await expect.poll(() => helpOut.text).toContain('/sources');
+    await expect.poll(async () => {
+      const [entry] = await store.list();
+      return entry ? (await store.load(entry.id)).messages.length : 0;
+    }).toBe(2);
+    await expect.poll(() => helpIn.listenerCount('data')).toBe(1);
     expect(helpOut.text).toContain('Sources');
     helpIn.type('/exit\r');
     await helpRun;

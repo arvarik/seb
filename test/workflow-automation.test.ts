@@ -1587,7 +1587,7 @@ describe('Review & live-E2E audit regressions', () => {
       transport: makeTransport(),
     });
     await expect.poll(() => emptyIn.listenerCount('data')).toBe(1);
-    emptyIn.type('\x1b'); // Escape on empty prompt exits immediately
+    emptyIn.type('\u0003');
     await emptyRun;
     expect(await store.list()).toEqual([]);
 
@@ -1606,6 +1606,11 @@ describe('Review & live-E2E audit regressions', () => {
     await expect.poll(() => helpIn.listenerCount('data')).toBe(1);
     helpIn.type('/help\r');
     await expect.poll(() => helpOut.text).toContain('/sources');
+    await expect.poll(async () => {
+      const [entry] = await store.list();
+      return entry ? (await store.load(entry.id)).messages.length : 0;
+    }).toBe(2);
+    await expect.poll(() => helpIn.listenerCount('data')).toBe(1);
     expect(helpOut.text).toContain('Sources');
     helpIn.type('/exit\r');
     await helpRun;

@@ -948,6 +948,7 @@ describe('Feature 3: zero-UUID seb resume, session working memory, and SQLite fo
     const agent = createFantasyFootballAgent({
       identityRepository: false,
       languageModel: model,
+      newsClient: {} as NewsClient,
       nflverseClient: nflverse,
       sleeperClient: sleeper,
       weatherClient: {} as WeatherClient,
@@ -1092,6 +1093,7 @@ describe('Feature 3: zero-UUID seb resume, session working memory, and SQLite fo
           getRuntimeContext: () => formatSessionData(session),
           identityRepository: false,
           languageModel: model,
+          newsClient: {} as NewsClient,
           nflverseClient: nflverse,
           sleeperClient: sleeper,
           weatherClient: {} as WeatherClient,
@@ -1554,6 +1556,7 @@ describe('Review & live-E2E audit regressions', () => {
         agent: createFantasyFootballAgent({
           identityRepository: false,
           languageModel: mockModel,
+          newsClient: {} as NewsClient,
           nflverseClient: nflverse,
           sleeperClient: sleeper,
           weatherClient: {} as WeatherClient,

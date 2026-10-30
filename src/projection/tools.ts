@@ -2,31 +2,85 @@ import { compareProjections } from './comparison.js';
 import { tool, type JSONValue } from 'ai';
 import { z } from 'zod';
 
+import type { NewsClient } from '../news/client.js';
+import { bundleCandidateNewsChecks } from '../news/tools.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import { WeatherClient } from '../weather/client.js';
-import { PlayerProjectionService } from './service.js';
+import { PlayerProjectionService, type ProjectionSnapshotStore } from './service.js';
 import { projectPlayers } from './batch.js';
 import { optimizeRosterLineup, projectLeagueMatchup } from './matchup.js';
 
 const seasonSchema = z.number().int().min(1999).max(2100);
 
+export interface ProjectionToolsOptions {
+  news?: Pick<NewsClient, 'search'> | undefined;
+  snapshotDatabase?: ProjectionSnapshotStore | false | undefined;
+}
+
 export function createProjectionTools(
   sleeper: SleeperClient,
   nflverse: NflverseClient,
   weather: WeatherClient,
+  options?: ProjectionToolsOptions,
 ) {
-  const service = new PlayerProjectionService(sleeper, nflverse, weather);
+  const service = new PlayerProjectionService(
+    sleeper,
+    nflverse,
+    weather,
+    undefined,
+    options?.snapshotDatabase ?? false,
+  );
   return {
     optimizeRosterLineup: tool({
-      description: 'Solve the optimal legal starting lineup for a Sleeper roster in a selected week. Projects starters and bench players, assigns overlapping FLEX/SUPER_FLEX slots via exact combinatorial optimization, and returns concrete bench-to-starter swaps and point gains.',
+      description: 'Solve the optimal legal starting lineup for a Sleeper roster in a selected week. Projects starters and bench players, assigns overlapping FLEX/SUPER_FLEX slots via exact combinatorial optimization, returns concrete bench-to-starter swaps and point gains, and automatically bundles first-class newsroom checks for swap and injured starter candidates.',
       inputSchema: z.object({
         leagueId: z.string().trim().regex(/^\d+$/),
         rosterId: z.number().int().positive(),
         season: seasonSchema,
         week: z.number().int().min(1).max(18),
       }),
-      execute: (request) => optimizeRosterLineup(sleeper, nflverse, service, request),
+      execute: async (request) => {
+        const result = await optimizeRosterLineup(sleeper, nflverse, service, request);
+        if (!options?.news) return result;
+        const teamById = new Map<string, string>();
+        for (const item of result.projections) {
+          if (item.status === 'projected' && item.projection.player.team) {
+            teamById.set(item.projection.player.playerId, item.projection.player.team);
+          }
+        }
+        const candidates: Array<{ name: string; team?: string | undefined }> = [];
+        for (const swap of result.recommendedSwaps) {
+          candidates.push({
+            name: swap.startPlayer.name,
+            team: teamById.get(swap.startPlayer.playerId),
+          });
+          if (swap.sitPlayer && swap.sitPlayer.playerId !== '0') {
+            candidates.push({
+              name: swap.sitPlayer.name,
+              team: teamById.get(swap.sitPlayer.playerId),
+            });
+          }
+        }
+        for (const starter of result.optimalLineup) {
+          if (starter.injuryStatus) {
+            candidates.push({
+              name: starter.name,
+              team: teamById.get(starter.playerId),
+            });
+          }
+        }
+        if (candidates.length === 0 && result.optimalLineup.length > 0) {
+          const topStarter = [...result.optimalLineup]
+            .sort((a, b) => (b.points ?? -Infinity) - (a.points ?? -Infinity))[0]!;
+          candidates.push({
+            name: topStarter.name,
+            team: teamById.get(topStarter.playerId),
+          });
+        }
+        const bundledNewsChecks = await bundleCandidateNewsChecks(options.news, candidates, 6);
+        return { ...result, bundledNewsChecks };
+      },
       toModelOutput: ({ output: { projections: _projections, ...rest } }) => ({
         type: 'json',
         value: rest as unknown as JSONValue,
@@ -63,7 +117,7 @@ export function createProjectionTools(
       }),
     }),
     compareStartSit: tool({
-      description: 'Compare two through six players using league scoring, forecast uncertainty, and scheduled games. Flag close decisions and ineligible players.',
+      description: 'Compare two through six players using league scoring, forecast uncertainty, scheduled games, and automatically bundled first-class newsroom checks. Flag close decisions and ineligible players.',
       inputSchema: z.object({
         leagueId: z.string().trim().regex(/^\d+$/),
         playerNames: z.array(z.string().trim().min(2).max(100)).min(2).max(6),
@@ -75,7 +129,14 @@ export function createProjectionTools(
           Promise.all(playerNames.map((playerName) => service.project({ ...request, playerName }))),
           sleeper.getLeague(request.leagueId).catch(() => null),
         ]);
-        return compareProjections(projections, slot, league?.roster_positions);
+        const comparison = compareProjections(projections, slot, league?.roster_positions);
+        if (!options?.news) return comparison;
+        const bundledNewsChecks = await bundleCandidateNewsChecks(
+          options.news,
+          projections.map((proj) => ({ name: proj.player.name, team: proj.player.team })),
+          6,
+        );
+        return { ...comparison, bundledNewsChecks };
       },
     }),
     projectPlayer: tool({

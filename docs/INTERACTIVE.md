@@ -56,8 +56,10 @@ Most slash commands execute locally without calling a language model:
 | `/analyze [QUESTION]` | Switches to Analyze or runs a comparison/decision question. |
 | `/connect <USERNAME>` | Validates and saves one Sleeper username, then discovers leagues and owned rosters. |
 | `/account` | Displays the connected Sleeper account and discovered league settings. |
+| `/brief [LEAGUE_ID]` or `/autopilot` | Generates a deterministic weekly autopilot brief across all active leagues (or one league). |
 | `/disconnect` | Removes the saved Sleeper username. |
 | `/context` or `/status` | Shows active session context values and session token totals. |
+| `/memory [clear]` | Displays or clears pinned session working memory (preferences, tracked players, decisions). |
 | `/season <YEAR\|current>` | Overrides the active NFL season or restores Sleeper's live season. |
 | `/week <1..22\|current\|clear>` | Sets, restores, or clears the active NFL week override. |
 | `/leagues [USER] [YEAR]` | Refreshes current or historical Sleeper leagues. |
@@ -107,6 +109,7 @@ Most slash commands execute locally without calling a language model:
 | `/?` | `/help` |
 | `/architecture`, `/arch` | `/about` |
 | `/my` | `/fantasy` |
+| `/autopilot` | `/brief` |
 | `/status` | `/context` |
 | `/open` | `/source` |
 | `/cost` | `/usage` |
@@ -137,6 +140,7 @@ Entering a **model family** (such as `gemini-flash`, `claude-sonnet`, or `gpt-lu
 
 For start/sit, full-lineup optimization, waiver, and trade prompts, Seb validates the model's draft recommendation against recorded tool inputs and outputs—checking player identity, active injury/news coverage, scoring-rule support, projection eligibility, fixed-scale waiver scores, and valid single-opponent trade rosters.
 
+- **Auto-bundled newsroom verification**: Decision tools (`compareStartSit`, `optimizeRosterLineup`, `rankWaiverTargets`, and `runWeeklyPortfolioBrief`) automatically run parallel first-class newsroom searches for compared, swapped, injured, and top waiver candidates so most decisions clear the gate in a single tool call.
 - **5-minute evidence reuse**: Verified tool evidence from earlier turns in the same session remains reusable for **5 minutes**, allowing natural follow-up questions (`"What if it rains?"` or `"Compare him with my bench RB instead"`) without redundant fetches.
 - **Single-retry Decision Gate recovery**: If a draft recommendation misses required verification evidence on the first pass, Seb automatically runs **one targeted recovery turn** (`buildRecommendationRecoveryPrompt`) instructing the agent to execute the missing verification tools before checking the gate again. If evidence is still unavailable, Seb renders `Decision unavailable` with the exact missing requirements.
 
@@ -150,10 +154,10 @@ Above each answer, completed tool calls appear as compact **purple tool rows** (
 
 Seb manages long interactive research sessions automatically so multi-turn conversations stay fast and grounded:
 
-- **Context budget & two-pass turn compaction**: Each model request includes up to **24** recent messages within a **120,000-character** budget (with individual user prompts capped at 32,000 characters). Seb preserves full, uncompacted tool outputs in up to the **3** most recent turns and compacts older turns into concise `[Verified tool calls in this turn (outputs compacted): ...]` summaries—running a second compaction pass if needed to stay within the 120,000-character ceiling.
+- **Context budget, two-pass turn compaction, & pinned working memory**: Each model request includes up to **24** recent messages within a **120,000-character** budget (with individual user prompts capped at 32,000 characters). Seb preserves full, uncompacted tool outputs in up to the **3** most recent turns, compacts older turns into concise `[Verified tool calls in this turn (outputs compacted): ...]` summaries, and folds evicted turns plus noted floor/ceiling preferences, league constraints, tracked players, and `Recommendation:` verdicts into persistent `workingMemory` (`/memory [clear]`).
 - **Draft queueing & error recovery**: You can type and edit your next prompt (`Alt+Enter` for newlines, bracketed multiline paste supported) while Seb streams an answer, and press `Enter` to queue it for immediate submission once the active turn finishes (editing the text unqueues it). Pressing `Escape` cancels an active run while preserving your draft and keeping the failed question in context for `"try again"` follow-ups; incomplete answers and unfinished approvals are excluded from future model turns.
 - **Copy, native scrollback, & exports**: Drag across visible text to copy on mouse release, run `/copy` or `/copy all`, use `/select` (`/copy-mode`) to dump the transcript into native terminal scrollback, or write Markdown/JSON transcripts to `exports/` with `/export [NAME] [md|json]`.
-- **Session boundaries & resume**: Run `/new` (or `/clear`) to reset the model context, active subject, and skill workflow for a new topic while keeping your Sleeper connection. When you finish and run `/exit` (`/quit`, `/q`, or `Escape` on an empty prompt), Seb saves the session under `~/.config/seb/sessions/` and prints the exact `seb resume <SESSION_ID>` command so you can continue later (see [Setup guide](SETUP.md#resume-a-conversation)).
+- **Session boundaries & resume**: Run `/new` (or `/clear`) to reset the model context, pinned working memory, active subject, and skill workflow for a new topic while keeping your Sleeper connection. When you finish and run `/exit` (`/quit`, `/q`, or `Escape` on an empty prompt), Seb saves the session under `~/.config/seb/sessions/` so you can reopen it immediately with bare `seb resume` (or `seb resume <INDEX|QUERY|SESSION_ID>`—see [Setup guide](SETUP.md#resume-a-conversation)).
 
 ## Cache, snapshots, telemetry, and DevTools
 

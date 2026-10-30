@@ -282,6 +282,7 @@ export function enforceFreeformRecommendation(
 export function buildRecommendationEvidence(
   input: BuildRecommendationEvidenceInput,
 ): RecommendationEvidence {
+  input = { ...input, toolResults: expandBundledToolResults(input.toolResults) };
   const initialInactiveOrTeamless = extractInactiveOrTeamlessPlayers(input.toolResults);
   const initialUnfound = extractUnfoundPlayers(input.toolResults);
   const verifiedUnprojectableSet = new Set([
@@ -309,7 +310,7 @@ export function buildRecommendationEvidence(
       .some((subject) => textMentionsSubject(input.question, subject)),
   );
   const fullLineupOptimizationRequest =
-    /\b(?:optimize|audit)\b|\b(?:full|entire|whole|complete|optimal)\s+(?:starting\s+)?(?:lineup|starters?|roster)\b|\b(?:set|fix|build)\s+(?:my|our|the)\s+(?:week\s+\d+\s+)?(?:starting\s+)?(?:lineup|starters?)\b/iu.test(input.question);
+    /\b(?:optimize|audit|brief|autopilot|portfolio|rundown)\b|\b(?:full|entire|whole|complete|optimal)\s+(?:starting\s+)?(?:lineup|starters?|roster)\b|\b(?:set|fix|build)\s+(?:my|our|the)\s+(?:week\s+\d+\s+)?(?:starting\s+)?(?:lineup|starters?)\b/iu.test(input.question);
   const generalLineup = fullLineupOptimizationRequest ||
     /\b(?:lineup|starters?)\b|\b(?:who|which|what)\b[^?\n]{0,40}\b(?:start|sit|bench)\b/iu.test(input.question);
   input = { ...input, toolResults: input.toolResults.flatMap((result) => {
@@ -1678,4 +1679,78 @@ function eligibilityAnalysis(): FantasyAnalysis {
     assumptions: [],
     limitations: [],
   };
+}
+
+function expandBundledToolResults(
+  toolResults: readonly RecommendationToolResult[],
+): RecommendationToolResult[] {
+  return toolResults.flatMap((result): RecommendationToolResult[] => {
+    const out = asRecord(result.output);
+    if (!out) return [result];
+    const newsResults = bundledChecksToNewsResults(out.bundledNewsChecks);
+    if (result.toolName === 'runWeeklyPortfolioBrief') {
+      const expanded: RecommendationToolResult[] = [];
+      const leagues = Array.isArray(out.leagues) ? out.leagues : [];
+      for (const item of leagues) {
+        const league = asRecord(item);
+        if (!league) continue;
+        const baseInput = {
+          leagueId: league.leagueId,
+          rosterId: league.rosterId,
+          season: league.season,
+          week: league.week,
+        };
+        if (asRecord(league.rawLineup)) {
+          expanded.push({
+            input: baseInput,
+            output: league.rawLineup,
+            toolName: 'optimizeRosterLineup',
+          });
+        }
+        if (asRecord(league.rawMatchup)) {
+          expanded.push({
+            input: baseInput,
+            output: league.rawMatchup,
+            toolName: 'projectLeagueMatchup',
+          });
+        }
+        const rawWaivers = asRecord(league.rawWaivers);
+        if (rawWaivers) {
+          const targets = Array.isArray(rawWaivers.targets)
+            ? rawWaivers.targets.slice(0, 1)
+            : [];
+          expanded.push({
+            input: { leagueId: league.leagueId, rosterId: league.rosterId },
+            output: { ...rawWaivers, targets },
+            toolName: 'rankWaiverTargets',
+          });
+        }
+      }
+      return [...expanded, ...newsResults];
+    }
+    if (newsResults.length === 0) return [result];
+    const { bundledNewsChecks: _bundled, ...cleanOutput } = out;
+    return [{ ...result, output: cleanOutput }, ...newsResults];
+  });
+}
+
+function bundledChecksToNewsResults(value: unknown): RecommendationToolResult[] {
+  if (!Array.isArray(value)) return [];
+  const results: RecommendationToolResult[] = [];
+  for (const item of value) {
+    const check = asRecord(item);
+    if (!check || typeof check.query !== 'string') continue;
+    const articles = Array.isArray(check.articles)
+      ? check.articles.map((article) => {
+          const record = asRecord(article);
+          return record ? { ...record, stale: Boolean(record.stale) } : article;
+        })
+      : [];
+    results.push({
+      input: { query: check.query },
+      output: { ...check, articles },
+      toolName: 'searchFirstClassNews',
+    });
+  }
+  return results;
 }

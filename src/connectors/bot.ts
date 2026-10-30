@@ -347,6 +347,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
       ...clients,
       getRuntimeContext: () => runtimeContext.data,
       getRuntimeInstructions: () => runtimeContext.instructions,
+      snapshotDatabase: database,
       telemetryFunctionId: 'seb.connector.research',
       telemetryIntegrations: [primaryUsageTelemetry],
     });
@@ -365,6 +366,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
           ...clients,
           getRuntimeContext: () => runtimeContext.data,
           getRuntimeInstructions: () => runtimeContext.instructions,
+          snapshotDatabase: database,
           telemetryFunctionId: 'seb.connector.research',
           telemetryIntegrations: [fallbackUsageTelemetry],
         });
@@ -1059,4 +1061,127 @@ async function* recordJudgmentResponse(
     else if (part.type === 'markdown_text') appendJudgmentOutput(part.text);
     yield part;
   }
+}
+
+export interface OutboundConnectorMessageOptions {
+  channel?: string | undefined;
+  connector: ConnectorName;
+  environment?: Environment | undefined;
+  fetchImpl?: typeof fetch | undefined;
+  signal?: AbortSignal | undefined;
+  text: string;
+}
+
+export async function postOutboundConnectorMessage(
+  options: OutboundConnectorMessageOptions,
+): Promise<{ channel: string | null; chunksSent: number; connector: ConnectorName }> {
+  const environment = options.environment ?? process.env;
+  const fetchFn = options.fetchImpl ?? fetch;
+  const signal = options.signal ?? AbortSignal.timeout(30_000);
+  const limit = connectorChunkLimit(options.connector) ?? 3_800;
+  const chunks = splitConnectorMessage(options.text.trim(), limit).filter((c) => c.trim().length > 0);
+  if (chunks.length === 0) {
+    throw new Error('Cannot post an empty message to a connector.');
+  }
+
+  if (options.connector === 'slack') {
+    const token = environment.SLACK_BOT_TOKEN?.trim();
+    if (!token) throw new Error('Set SLACK_BOT_TOKEN before posting to Slack.');
+    const channel = options.channel?.trim() || environment.SLACK_DEFAULT_CHANNEL_ID?.trim();
+    if (!channel) {
+      throw new Error('Pass --channel <CHANNEL_ID> or set SLACK_DEFAULT_CHANNEL_ID for Slack delivery.');
+    }
+    for (const chunk of chunks) {
+      const response = await fetchFn('https://slack.com/api/chat.postMessage', {
+        body: JSON.stringify({ channel, text: chunk, unfurl_links: false }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        method: 'POST',
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Slack post failed with HTTP ${response.status}.`);
+      }
+      const payload = (await response.json()) as { error?: string; ok?: boolean };
+      if (payload.ok !== true) {
+        throw new Error(`Slack post failed: ${payload.error ?? 'unknown error'}.`);
+      }
+    }
+    return { channel, chunksSent: chunks.length, connector: 'slack' };
+  }
+
+  if (options.connector === 'discord') {
+    const token = environment.DISCORD_BOT_TOKEN?.trim();
+    if (!token) throw new Error('Set DISCORD_BOT_TOKEN before posting to Discord.');
+    const channel = options.channel?.trim() || environment.DISCORD_DEFAULT_CHANNEL_ID?.trim();
+    if (!channel || !/^\d+$/u.test(channel)) {
+      throw new Error(
+        'Pass a numeric --channel <CHANNEL_ID> or set DISCORD_DEFAULT_CHANNEL_ID for Discord delivery.',
+      );
+    }
+    for (const chunk of chunks) {
+      const response = await fetchFn(`https://discord.com/api/v10/channels/${channel}/messages`, {
+        body: JSON.stringify({ content: chunk }),
+        headers: {
+          Authorization: `Bot ${token}`,
+          'Content-Type': 'application/json',
+        },
+        method: 'POST',
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Discord post failed with HTTP ${response.status}.`);
+      }
+    }
+    return { channel, chunksSent: chunks.length, connector: 'discord' };
+  }
+
+  if (options.connector === 'telegram') {
+    const token = environment.TELEGRAM_BOT_TOKEN?.trim();
+    if (!token) throw new Error('Set TELEGRAM_BOT_TOKEN before posting to Telegram.');
+    const chatId = options.channel?.trim() || environment.TELEGRAM_DEFAULT_CHAT_ID?.trim();
+    if (!chatId) {
+      throw new Error('Pass --channel <CHAT_ID> or set TELEGRAM_DEFAULT_CHAT_ID for Telegram delivery.');
+    }
+    for (const chunk of chunks) {
+      const response = await fetchFn(`https://api.telegram.org/bot${token}/sendMessage`, {
+        body: JSON.stringify({
+          chat_id: chatId,
+          disable_web_page_preview: true,
+          text: chunk,
+        }),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Telegram post failed with HTTP ${response.status}.`);
+      }
+      const payload = (await response.json()) as { description?: string; ok?: boolean };
+      if (payload.ok !== true) {
+        throw new Error(`Telegram post failed: ${payload.description ?? 'unknown error'}.`);
+      }
+    }
+    return { channel: chatId, chunksSent: chunks.length, connector: 'telegram' };
+  }
+
+  const botId = environment.GROUPME_BOT_ID?.trim();
+  if (!botId) throw new Error('Set GROUPME_BOT_ID before posting to GroupMe.');
+  if (options.channel?.trim()) {
+    throw new Error('GroupMe posts to the group bound to GROUPME_BOT_ID and does not take --channel.');
+  }
+  for (const chunk of chunks) {
+    const response = await fetchFn('https://api.groupme.com/v3/bots/post', {
+      body: JSON.stringify({ bot_id: botId, text: chunk }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GroupMe post failed with HTTP ${response.status}.`);
+    }
+  }
+  return { channel: null, chunksSent: chunks.length, connector: 'groupme' };
 }

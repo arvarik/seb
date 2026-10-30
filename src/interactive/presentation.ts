@@ -62,6 +62,7 @@ export function friendlyToolName(toolName: string): string {
     projectPlayers: 'Project the selected players',
     projectLeagueMatchup: 'Calculate matchup scores',
     rankWaiverTargets: 'Rank waiver and FAAB targets',
+    runWeeklyPortfolioBrief: 'Build weekly portfolio brief',
     readNewsUrl: 'Read the supplied web page',
     resolvePlayerIdentity: 'Resolve player identity',
     resolveTeamIdentity: 'Resolve NFL team identity',

@@ -12,14 +12,39 @@ import { NflverseApiError, NflverseClient } from '../nflverse/client.js';
 import type { NflversePlayerWeek } from '../nflverse/types.js';
 import { SleeperClient } from '../sleeper/client.js';
 import type { SleeperPlayer } from '../sleeper/types.js';
+import type { SebDatabase } from '../data/sqlite-store.js';
 import { GameWeatherService } from '../weather/game-weather.js';
 import { WeatherClient } from '../weather/client.js';
 import {
   projectPlayer,
   scorePlayerWeek,
+  type ForecastDiff,
+  type ProjectionConfidence,
   type ScoringAwarePlayerProjection,
 } from './player-projection.js';
 import { DEFAULT_PROJECTION_PARAMETERS, rollingResiduals, type ProjectionParameters } from './statistics.js';
+
+export type ProjectionSnapshotStore = Pick<SebDatabase, 'createSnapshot' | 'listSnapshots'>;
+
+interface PlayerProjectionSnapshotPayload {
+  adjustments: Array<{ factor: number; label: string; reason: string }>;
+  analysisSeason: number;
+  ceiling: number;
+  confidenceLabel: ProjectionConfidence;
+  expectedPoints: number;
+  floor: number;
+  games: number;
+  injuryStatus: string | null;
+  learningThroughWeek: number | null;
+  modelVersion: string;
+  opponent: string | null;
+  playerName: string;
+  position: string;
+  recommendationEligible: boolean;
+  scoreScope: ScoringAwarePlayerProjection['scoreScope'];
+  team: string;
+  throughWeek: number;
+}
 
 export interface PlayerProjectionRequest {
   analysisSeason?: number;
@@ -42,6 +67,7 @@ export class PlayerProjectionService {
     private readonly nflverse: NflverseClient,
     weather: WeatherClient,
     private readonly learning: LearningStore | false = new LearningStore(),
+    private readonly snapshotDatabase: ProjectionSnapshotStore | false = false,
   ) {
     this.gameWeather = new GameWeatherService(nflverse, weather);
   }
@@ -94,11 +120,11 @@ export class PlayerProjectionService {
       if (schedule.length > 1) throw new ResearchDataError('The defense has multiple scheduled games.');
       const game = schedule[0];
       const kickoff = game ? easternKickoff(game.gameDate, game.gameTime) : null;
-      return projectDefense({ rows: data.weeks, team: code, name: `${team.identity.city} ${team.identity.name}`,
+      return this.withForecastSnapshot(projectDefense({ rows: data.weeks, team: code, name: `${team.identity.city} ${team.identity.name}`,
         opponent: game ? game.homeTeam === code ? game.awayTeam : game.homeTeam : null,
         analysisSeason, throughWeek, season: request.season, week: request.week,
         leagueId: league.league_id, leagueName: league.name, scoringSettings: league.scoring_settings,
-        scheduled: Boolean(kickoff), gameStarted: Boolean(kickoff && kickoff.getTime() <= Date.now()) });
+        scheduled: Boolean(kickoff), gameStarted: Boolean(kickoff && kickoff.getTime() <= Date.now()) }), null);
     }
     const automaticCurrentSeason = request.analysisSeason === undefined && request.throughWeek === undefined && analysisSeason === request.season;
     const historicalTarget = request.season < Number(state.season) ||
@@ -199,7 +225,8 @@ export class PlayerProjectionService {
       : pooledResiduals && pooledResiduals.length >= 20
         ? pooledResiduals
         : learnedResiduals;
-    return projectPlayer({
+    const injuryStatus = [player?.injury_status, player?.status].filter(Boolean).join(' ') || null;
+    return this.withForecastSnapshot(projectPlayer({
       projectionSeason: request.season,
       scheduled: Boolean(game),
       kickoffKnown: !game || Boolean(easternKickoff(game.gameDate, game.gameTime)),
@@ -216,7 +243,7 @@ export class PlayerProjectionService {
       ...(player?.fantasy_positions?.length ? { fantasyPositions: player.fantasy_positions } : {}),
       analysisSeason,
       currentTeam,
-      injuryStatus: [player?.injury_status, player?.status].filter(Boolean).join(' ') || null,
+      injuryStatus,
       leagueId: league.league_id,
       leagueName: league.name,
       opponent,
@@ -227,7 +254,84 @@ export class PlayerProjectionService {
       weatherRisk: weather?.risk ?? null,
       weatherStatus: weather?.status ?? null,
       week: request.week,
-    });
+    }), injuryStatus);
+  }
+
+  private withForecastSnapshot(
+    projection: ScoringAwarePlayerProjection,
+    injuryStatus: string | null,
+  ): ScoringAwarePlayerProjection {
+    if (!this.snapshotDatabase) return projection;
+    const entityKey = `${projection.league.leagueId}:${projection.season}:${projection.week}:${projection.player.playerId}`;
+    const current: PlayerProjectionSnapshotPayload = {
+      adjustments: projection.adjustments.map((adj) => ({
+        factor: adj.factor,
+        label: adj.label,
+        reason: adj.reason,
+      })),
+      analysisSeason: projection.analysisSeason,
+      ceiling: projection.ceiling,
+      confidenceLabel: projection.confidence.label,
+      expectedPoints: projection.expectedPoints,
+      floor: projection.floor,
+      games: projection.games,
+      injuryStatus,
+      learningThroughWeek: projection.model.learningThroughWeek,
+      modelVersion: projection.model.version,
+      opponent: projection.opponent,
+      playerName: projection.player.name,
+      position: projection.player.position,
+      recommendationEligible: projection.recommendationEligible,
+      scoreScope: projection.scoreScope,
+      team: projection.player.team,
+      throughWeek: projection.throughWeek,
+    };
+    try {
+      const existing = this.snapshotDatabase.listSnapshots<PlayerProjectionSnapshotPayload>({
+        entityKey,
+        kind: 'player-projection',
+        limit: 2,
+      });
+      const latest = existing[0];
+      const changed = !latest ||
+        Math.abs(projection.expectedPoints - latest.payload.expectedPoints) >= 0.01 ||
+        Math.abs(projection.floor - latest.payload.floor) >= 0.01 ||
+        Math.abs(projection.ceiling - latest.payload.ceiling) >= 0.01 ||
+        latest.payload.throughWeek !== current.throughWeek ||
+        latest.payload.analysisSeason !== current.analysisSeason ||
+        latest.payload.injuryStatus !== current.injuryStatus ||
+        latest.payload.opponent !== current.opponent ||
+        latest.payload.team !== current.team;
+      if (changed) {
+        this.snapshotDatabase.createSnapshot({
+          entityKey,
+          kind: 'player-projection',
+          payload: current,
+          schemaVersion: 'player-projection-v1',
+        }, 16);
+        return latest
+          ? { ...projection, forecastDiff: computeForecastDiff(latest.asOf, latest.payload, current) }
+          : projection;
+      }
+      const priorShift = existing[1];
+      const forecastDiff: ForecastDiff = priorShift
+        ? {
+            ...computeForecastDiff(priorShift.asOf, priorShift.payload, current),
+            unchangedSince: latest.asOf,
+          }
+        : {
+            deltaCeiling: 0,
+            deltaExpectedPoints: 0,
+            deltaFloor: 0,
+            drivers: ['Unchanged since previous forecast'],
+            previousAsOf: latest.asOf,
+            previousExpectedPoints: latest.payload.expectedPoints,
+            unchangedSince: latest.asOf,
+          };
+      return { ...projection, forecastDiff };
+    } catch {
+      return projection;
+    }
   }
 
   private cachedPositionPrior(
@@ -399,4 +503,74 @@ function pooledPositionResiduals(
     }
   }
   return residuals;
+}
+
+function computeForecastDiff(
+  previousAsOf: string,
+  prev: PlayerProjectionSnapshotPayload,
+  curr: PlayerProjectionSnapshotPayload,
+): ForecastDiff {
+  const round2 = (value: number) => Math.round(value * 100) / 100;
+  const deltaExpectedPoints = round2(curr.expectedPoints - prev.expectedPoints);
+  const deltaFloor = round2(curr.floor - prev.floor);
+  const deltaCeiling = round2(curr.ceiling - prev.ceiling);
+  const drivers: string[] = [];
+  if (prev.analysisSeason !== curr.analysisSeason || prev.throughWeek !== curr.throughWeek) {
+    drivers.push(
+      `Completed stats window advanced (${prev.analysisSeason} W${prev.throughWeek} -> ${curr.analysisSeason} W${curr.throughWeek})`,
+    );
+  } else if (prev.games !== curr.games) {
+    drivers.push(`Sample size changed (${prev.games} -> ${curr.games} games)`);
+  }
+  if (prev.team !== curr.team) {
+    drivers.push(`Team changed (${prev.team} -> ${curr.team})`);
+  }
+  if (prev.opponent !== curr.opponent) {
+    drivers.push(
+      `Scheduled opponent changed (${prev.opponent ?? 'none'} -> ${curr.opponent ?? 'none'})`,
+    );
+  }
+  if ((prev.injuryStatus ?? null) !== (curr.injuryStatus ?? null)) {
+    drivers.push(
+      `Injury status changed (${prev.injuryStatus ?? 'healthy'} -> ${curr.injuryStatus ?? 'healthy'})`,
+    );
+  }
+  if (
+    (prev.learningThroughWeek ?? null) !== (curr.learningThroughWeek ?? null) ||
+    prev.modelVersion !== curr.modelVersion
+  ) {
+    const prevCal = `${prev.modelVersion}${prev.learningThroughWeek ? `@W${prev.learningThroughWeek}` : ''}`;
+    const currCal = `${curr.modelVersion}${curr.learningThroughWeek ? `@W${curr.learningThroughWeek}` : ''}`;
+    drivers.push(`Forecast calibration updated (${prevCal} -> ${currCal})`);
+  }
+  const prevAdj = new Map(prev.adjustments.map((adj) => [adj.label, adj]));
+  const currAdj = new Map(curr.adjustments.map((adj) => [adj.label, adj]));
+  for (const label of new Set([...prevAdj.keys(), ...currAdj.keys()])) {
+    const before = prevAdj.get(label);
+    const after = currAdj.get(label);
+    const beforeFactor = before?.factor ?? 1;
+    const afterFactor = after?.factor ?? 1;
+    if (
+      Math.abs(afterFactor - beforeFactor) >= 0.005 ||
+      (before?.reason ?? '') !== (after?.reason ?? '')
+    ) {
+      drivers.push(
+        `${label} shifted (${(beforeFactor * 100).toFixed(1)}% -> ${(afterFactor * 100).toFixed(1)}%)`,
+      );
+    }
+  }
+  if (drivers.length === 0 && Math.abs(deltaExpectedPoints) >= 0.01) {
+    drivers.push('League scoring or positional peer prior updated');
+  }
+  if (drivers.length === 0) {
+    drivers.push('Unchanged since previous forecast');
+  }
+  return {
+    deltaCeiling,
+    deltaExpectedPoints,
+    deltaFloor,
+    drivers,
+    previousAsOf,
+    previousExpectedPoints: prev.expectedPoints,
+  };
 }

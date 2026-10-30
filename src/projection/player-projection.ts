@@ -14,6 +14,16 @@ export interface ProjectionAdjustment {
   reason: string;
 }
 
+export interface ForecastDiff {
+  deltaCeiling: number;
+  deltaExpectedPoints: number;
+  deltaFloor: number;
+  drivers: string[];
+  previousAsOf: string;
+  previousExpectedPoints: number;
+  unchangedSince?: string;
+}
+
 export interface ScoringAwarePlayerProjection {
   adjustments: ProjectionAdjustment[];
   analysisSeason: number;
@@ -25,6 +35,7 @@ export interface ScoringAwarePlayerProjection {
     score: number;
   };
   floor: number;
+  forecastDiff?: ForecastDiff;
   games: number;
   league: {
     leagueId: string;

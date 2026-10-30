@@ -1,5 +1,18 @@
+import { CONNECTOR_NAMES, type ConnectorName } from './connectors/config.js';
+
 export type CliCommand =
   | { name: 'learn'; action: 'status' | 'update'; season: number; throughWeek?: number; leagueId?: string; json: boolean }
+  | {
+      name: 'brief';
+      channel?: string;
+      json: boolean;
+      leagueId?: string;
+      post?: ConnectorName;
+      rosterId?: number;
+      season?: number;
+      username?: string;
+      week?: number;
+    }
   | { name: 'sessions' }
   | { name: 'help' }
   | { name: 'version' }
@@ -72,8 +85,9 @@ export const CLI_HELP = `Seb reads Sleeper, nflverse, weather, and grounded news
 Usage:
   seb
   seb chat [--provider NAME] [--model MODEL]
-  seb resume <SESSION_ID>
+  seb resume [SESSION_ID|INDEX|QUERY]
   seb sessions
+  seb brief [--user USERNAME] [--league ID] [--roster N] [--season YEAR] [--week N] [--post slack|discord|telegram|groupme] [--channel ID] [--json]
   seb ask [OPTIONS] [QUESTION]
   seb doctor [--offline] [--json]
   seb configure
@@ -91,8 +105,9 @@ Usage:
 
 Commands:
   chat       Start an interactive terminal session. This is the default.
-  resume     Continue a saved session by its unique identifier.
-  sessions   List saved session identifiers and update times.
+  resume     Continue the latest saved session, or select by ID, number, or title.
+  sessions   List numbered saved sessions and update times.
+  brief      Run the deterministic multi-league weekly autopilot brief (and optionally push to a connector).
   ask        Ask one question. Seb also reads the question from standard input.
   doctor     Verify the active model provider, local data, and public data APIs.
   configure  Save model, application, and private credential settings.
@@ -144,7 +159,8 @@ Interactive controls:
 
 export function parseCliArguments(arguments_: readonly string[]): CliCommand {
   const valueOptions = new Set(['--model', '--provider', '--season', '--through-week', '--position',
-    '--output', '--league', '--max-size-mb', '--max-age-days', '--retain', '--kind', '--entity', '--id', '--limit', '--retain-days']);
+    '--output', '--league', '--roster', '--week', '--user', '--post', '--channel',
+    '--max-size-mb', '--max-age-days', '--retain', '--kind', '--entity', '--id', '--limit', '--retain-days']);
   let literal = false;
   arguments_ = arguments_.flatMap((argument) => {
     if (argument === '--') literal = true;
@@ -174,8 +190,13 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
       requireNoArguments(rest, first);
       return { name: 'sessions' };
     case 'resume':
-      if (rest.length !== 1 || !/^seb-[0-9a-f-]{36}$/u.test(rest[0] ?? '')) throw new CliUsageError('Use seb resume <SESSION_ID>. Use seb sessions to list saved sessions.');
-      return { name: 'chat', resumeId: rest[0]! };
+      if (rest[0] === '--help' || rest[0] === '-h') return { name: 'help' };
+      if (rest.length > 1 || (rest[0] !== undefined && (!rest[0].trim() || rest[0].startsWith('-')))) {
+        throw new CliUsageError('Use seb resume [SESSION_ID|INDEX|QUERY]. Use seb sessions to list saved sessions.');
+      }
+      return { name: 'chat', resumeId: rest[0]?.trim() || 'latest' };
+    case 'brief':
+      return parseBriefArguments(rest);
     case 'chat':
       return parseChatArguments(rest);
     case 'ask':
@@ -631,4 +652,90 @@ function parseLearningArguments(args: readonly string[]): CliCommand {
     (leagueId !== undefined && !/^\d+$/.test(leagueId))) throw new CliUsageError('Learning requires a season, an optional week from 1 through 18, and a numeric league ID.');
   return { name: 'learn', action, season: season!, json,
     ...(throughWeek === undefined ? {} : { throughWeek }), ...(leagueId ? { leagueId } : {}) };
+}
+
+function parseBriefArguments(args: readonly string[]): CliCommand {
+  if (args.includes('--help') || args.includes('-h')) return { name: 'help' };
+  let channel: string | undefined;
+  let json = false;
+  let leagueId: string | undefined;
+  let post: ConnectorName | undefined;
+  let rosterId: number | undefined;
+  let season: number | undefined;
+  let username: string | undefined;
+  let week: number | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === '--json') {
+      json = true;
+      continue;
+    }
+    if (
+      arg === '--user' ||
+      arg === '--league' ||
+      arg === '--roster' ||
+      arg === '--season' ||
+      arg === '--week' ||
+      arg === '--post' ||
+      arg === '--channel'
+    ) {
+      const value = readOptionValue(args, index, arg);
+      index += 1;
+      if (arg === '--user') username = value;
+      else if (arg === '--league') {
+        if (!/^\d+$/u.test(value)) {
+          throw new CliUsageError('The --league option must be a numeric Sleeper league ID.');
+        }
+        leagueId = value;
+      } else if (arg === '--roster') {
+        const parsed = Number(value);
+        if (!Number.isInteger(parsed) || parsed < 1 || parsed > 1_000_000) {
+          throw new CliUsageError('The --roster option must be a positive integer.');
+        }
+        rosterId = parsed;
+      } else if (arg === '--season') {
+        const parsed = Number(value);
+        if (!Number.isInteger(parsed) || parsed < 1999 || parsed > 2100) {
+          throw new CliUsageError('The --season option must be an integer from 1999 through 2100.');
+        }
+        season = parsed;
+      } else if (arg === '--week') {
+        const parsed = Number(value);
+        if (!Number.isInteger(parsed) || parsed < 1 || parsed > 18) {
+          throw new CliUsageError('The --week option must be an integer from 1 through 18.');
+        }
+        week = parsed;
+      } else if (arg === '--post') {
+        const normalized = value.toLowerCase();
+        if (!CONNECTOR_NAMES.includes(normalized as ConnectorName)) {
+          throw new CliUsageError('Use --post slack, discord, telegram, or groupme.');
+        }
+        post = normalized as ConnectorName;
+      } else if (arg === '--channel') {
+        channel = value;
+      }
+      continue;
+    }
+    throw new CliUsageError(`Unknown brief option: ${arg}`);
+  }
+
+  if (channel && !post) {
+    throw new CliUsageError('Use --post slack|discord|telegram with --channel <ID>.');
+  }
+  if (rosterId !== undefined && !leagueId) {
+    throw new CliUsageError('Use --league <ID> when specifying --roster <N>.');
+  }
+
+  return {
+    json,
+    name: 'brief',
+    ...(channel ? { channel } : {}),
+    ...(leagueId ? { leagueId } : {}),
+    ...(post ? { post } : {}),
+    ...(rosterId !== undefined ? { rosterId } : {}),
+    ...(season !== undefined ? { season } : {}),
+    ...(username ? { username } : {}),
+    ...(week !== undefined ? { week } : {}),
+  };
 }

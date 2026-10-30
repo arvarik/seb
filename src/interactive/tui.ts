@@ -223,7 +223,7 @@ export async function runSebInteractiveTui(
   });
   const store = sessionsEnabled(environment) ? new SessionStore(environment) : null;
   if (options.resumeId && !store) throw new Error('Session saving is disabled. Enable SEB_SESSIONS and SEB_HISTORY to resume.');
-  const chatId = options.resumeId ?? `seb-${randomUUID()}`;
+  const chatId = options.resumeId ? await store!.resolve(options.resumeId) : `seb-${randomUUID()}`;
   let locked = false;
   let saved = false;
   let warning = '';

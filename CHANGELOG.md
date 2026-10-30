@@ -6,6 +6,15 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Auto-Bundled Newsroom Checks Inside Decision Tools (`bundleCandidateNewsChecks`)**: Automatically executes parallel, normalized first-class newsroom searches inside `compareStartSit`, `optimizeRosterLineup`, and `rankWaiverTargets` (plus `runWeeklyPortfolioBrief`) and expands `bundledNewsChecks` in `buildRecommendationEvidence` so start/sit, lineup, and waiver recommendations clear the Decision Gate in a single tool call.
+- **Multi-League Weekly Autopilot (`seb brief`, `/brief`, `runWeeklyPortfolioBrief`, `--post`)**: Fans out deterministically across all active Sleeper leagues (or a focused league) in parallel—combining action-center alerts, exact combinatorial lineup swaps, suggested bench drops, owner-perspective matchup win probabilities, top waiver/FAAB claims, forecast shifts, and deduplicated newsroom checks—with `--json` output and outbound `--post slack|discord|telegram|groupme [--channel ID]` delivery (`SLACK_DEFAULT_CHANNEL_ID`, `DISCORD_DEFAULT_CHANNEL_ID`, `TELEGRAM_DEFAULT_CHAT_ID`).
+- **Zero-UUID `seb resume`, Session Working Memory & SQLite Forecast Diffs**:
+  - Support bare `seb resume` (reopens the latest saved session), numeric index (`seb resume 1` matching numbered `seb sessions`), unique ID prefix, and case-insensitive title substring alongside exact session UUIDs.
+  - Persist bounded `SessionWorkingMemory` across long interactive sessions and saved snapshots—folding evicted turns beyond the 24-message / 120k-character window plus floor/ceiling preferences, league constraints, tracked players, and `Recommendation:` verdicts into runtime `workingMemory` context (inspectable via `/memory [clear]`).
+  - Persist deduplicated `player-projection` snapshots in SQLite (`PlayerProjectionService.project`) to compute automatic `forecastDiff` point deltas and human-readable shift drivers (`drivers`, `unchangedSince`) across runs.
+
 ## [1.1.3] - 2026-10-29
 
 ### Fixed

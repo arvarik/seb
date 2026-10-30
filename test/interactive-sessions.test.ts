@@ -86,9 +86,12 @@ describe('saved sessions', () => {
   it('parses resume and session commands without accepting extra arguments', () => {
     const id = `seb-${randomUUID()}`;
     expect(parseCliArguments(['resume', id])).toEqual({ name: 'chat', resumeId: id });
+    expect(parseCliArguments(['resume'])).toEqual({ name: 'chat', resumeId: 'latest' });
+    expect(parseCliArguments(['resume', '1'])).toEqual({ name: 'chat', resumeId: '1' });
+    expect(parseCliArguments(['resume', 'weather'])).toEqual({ name: 'chat', resumeId: 'weather' });
     expect(parseCliArguments(['sessions'])).toEqual({ name: 'sessions' });
     expect(() => parseCliArguments(['resume', id, 'extra'])).toThrow();
-    expect(() => parseCliArguments(['resume'])).toThrow('seb sessions');
+    expect(() => parseCliArguments(['resume', '--bad'])).toThrow('seb sessions');
   });
   it('resumes a failed question through the real terminal loop and saves the answer on exit', async () => {
     const f = await fixture(); await f.store.acquire(f.id); await f.store.save(f.snapshot); await f.store.release(f.id);

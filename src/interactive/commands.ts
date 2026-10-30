@@ -119,6 +119,7 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('analyze', '/analyze [QUESTION]', 'Compare players and add matchup, weather, usage, or roster context.', 'Analyze', 'Open Analyze or ask one analysis question.'),
   command('connect', '/connect SLEEPER_USERNAME', 'Connect one Sleeper account and discover its fantasy context.', 'My Fantasy', 'Save the username and refresh leagues and owned rosters.', undefined, undefined, undefined, 1),
   command('account', '/account', 'Show the connected Sleeper account and discovered leagues.', 'My Fantasy', 'Open the automatic fantasy dashboard.', undefined, undefined, undefined, 0),
+  command('brief', '/brief [LEAGUE_ID]', 'Run the multi-league weekly autopilot brief.', 'My Fantasy', 'Combine lineup optimization, matchup odds, waiver/FAAB claims, and news in one report.', ['autopilot'], undefined, undefined, 1),
   command('disconnect', '/disconnect', 'Disconnect the saved Sleeper username.', 'My Fantasy', 'Remove the username and return to Explore.', undefined, undefined, true, 0),
   command('commands', '/commands [SEARCH]', 'Search the command catalog.', 'Essentials', 'Search command names and descriptions.'),
   command('complete', '/complete INPUT', 'Show completions for partial input.', 'Essentials', 'Print matching command completions.'),
@@ -154,6 +155,7 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('replay', '/replay [SEASON] [THROUGH_WEEK]', 'Run the nflverse baseline replay.', 'Analyze', 'Measure the baseline against past results.', undefined, undefined, undefined, 2),
   command('refresh', '/refresh [all|sleeper|nflverse|weather|news]', 'Refresh source data on the next read.', 'Sources', 'Delete selected cache entries before the next read.', undefined, ['all', 'sleeper', 'nflverse', 'weather', 'news'], true, 1),
   command('new', '/new', 'Start a new conversation context.', 'Conversation', 'Exclude earlier messages from the next model call.', ['clear'], undefined, true, 0),
+  command('memory', '/memory [clear]', 'Show or clear pinned session working memory.', 'Conversation', 'Inspect or reset noted preferences, tracked players, and compacted decisions.', undefined, ['clear'], undefined, 1),
   command('history', '/history [clear]', 'Show or clear question history.', 'Conversation', 'Read or delete the private prompt history.', undefined, ['clear'], undefined, 1),
   command('copy', '/copy [all]', 'Copy the latest answer or full conversation.', 'Conversation', 'Send the latest answer or full conversation to the clipboard.', undefined, ['all'], undefined, 1),
   command('select', '/select', 'Select the full conversation in terminal scrollback.', 'Conversation', 'Print the conversation for native selection. Press Escape to return.', ['copy-mode'], undefined, undefined, 0),
@@ -653,7 +655,11 @@ _seb_completion() {
   current="\${COMP_WORDS[COMP_CWORD]}"
   previous="\${COMP_WORDS[COMP_CWORD-1]}"
   if [[ "\${COMP_CWORD}" -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "chat resume sessions ask doctor configure setup cache snapshots replay evaluate learn usage stats completion help version" -- "\${current}") )
+    COMPREPLY=( $(compgen -W "chat resume sessions brief ask doctor configure setup cache snapshots replay evaluate learn usage stats completion help version" -- "\${current}") )
+    return
+  fi
+  if [[ "\${previous}" == "--post" ]]; then
+    COMPREPLY=( $(compgen -W "slack discord telegram groupme" -- "\${current}") )
     return
   fi
   if [[ "\${previous}" == "--provider" || "\${previous}" == "-p" ]]; then
@@ -668,6 +674,7 @@ _seb_completion() {
   done
   case "\${COMP_WORDS[1]}" in
     chat) COMPREPLY=( $(compgen -W "--provider --model --help" -- "\${current}") ) ;;
+    brief) COMPREPLY=( $(compgen -W "--user --league --roster --season --week --post --channel --json --help" -- "\${current}") ) ;;
     ask) COMPREPLY=( $(compgen -W "--json --provider --model --no-progress --help" -- "\${current}") ) ;;
     doctor) COMPREPLY=( $(compgen -W "--offline --json --help" -- "\${current}") ) ;;
     cache) COMPREPLY=( $(compgen -W "status clear prune --max-size-mb --max-age-days --retain --json --help" -- "\${current}") ) ;;
@@ -705,6 +712,7 @@ function fishCompletion(): string {
 complete -c seb -f
 complete -c seb -n '__fish_use_subcommand' -a resume -d 'Resume a saved conversation'
 complete -c seb -n '__fish_use_subcommand' -a sessions -d 'List saved conversations'
+complete -c seb -n '__fish_use_subcommand' -a brief -d 'Run multi-league weekly autopilot brief'
 complete -c seb -n '__fish_use_subcommand' -a chat -d 'Start an interactive terminal session'
 complete -c seb -n '__fish_use_subcommand' -a ask -d 'Ask one question'
 complete -c seb -n '__fish_use_subcommand' -a doctor -d 'Check the local setup'
@@ -756,6 +764,7 @@ _seb() {
     'chat:Start an interactive terminal session'
     'resume:Resume a saved conversation'
     'sessions:List saved conversations'
+    'brief:Run multi-league weekly autopilot brief'
     'ask:Ask one question'
     'doctor:Check the local setup'
     'configure:Configure a model provider privately'

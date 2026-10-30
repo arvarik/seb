@@ -1,6 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 
+import type { NewsClient } from '../news/client.js';
+import { bundleCandidateNewsChecks } from '../news/tools.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import { WaiverAssistantService } from './service.js';
@@ -14,12 +16,13 @@ const leagueIdSchema = z
 export function createWaiverTools(
   sleeper: SleeperClient,
   nflverse: NflverseClient,
+  news?: Pick<NewsClient, 'search'>,
 ) {
   const assistant = new WaiverAssistantService(sleeper, nflverse);
   return {
     rankWaiverTargets: tool({
       description:
-        'Rank unrostered waiver targets for one Sleeper roster. This read-only tool uses league scoring, roster need, Sleeper add demand, player status, recent nflverse production, risk, and a transparent FAAB range.',
+        'Rank unrostered waiver targets for one Sleeper roster. This read-only tool uses league scoring, roster need, Sleeper add demand, player status, recent nflverse production, risk, a transparent FAAB range, and automatically bundled first-class newsroom checks for the top waiver candidates.',
       inputSchema: z.object({
         leagueId: leagueIdSchema,
         rosterId: z.number().int().positive(),
@@ -46,15 +49,37 @@ export function createWaiverTools(
         lookbackHours,
         trendingLimit,
         resultLimit,
-      }) => assistant.rankTargets({
-        leagueId,
-        rosterId,
-        lookbackHours,
-        trendingLimit,
-        resultLimit,
-        ...(analysisSeason === undefined ? {} : { analysisSeason }),
-        ...(throughWeek === undefined ? {} : { throughWeek }),
-      }),
+      }) => {
+        const result = await assistant.rankTargets({
+          leagueId,
+          rosterId,
+          lookbackHours,
+          trendingLimit,
+          resultLimit,
+          ...(analysisSeason === undefined ? {} : { analysisSeason }),
+          ...(throughWeek === undefined ? {} : { throughWeek }),
+        });
+        if (!news || result.targets.length === 0) return result;
+        const prioritized = result.targets.slice(0, 3);
+        const coveredPositions = new Set(prioritized.map((t) => t.player.position.toUpperCase()));
+        for (const target of result.targets.slice(3)) {
+          const pos = target.player.position.toUpperCase();
+          if (!coveredPositions.has(pos)) {
+            coveredPositions.add(pos);
+            prioritized.push(target);
+          }
+          if (prioritized.length >= 6) break;
+        }
+        const bundledNewsChecks = await bundleCandidateNewsChecks(
+          news,
+          prioritized.map((target) => ({
+            name: target.player.name,
+            team: target.player.team,
+          })),
+          6,
+        );
+        return { ...result, bundledNewsChecks };
+      },
     }),
   };
 }

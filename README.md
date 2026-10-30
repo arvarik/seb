@@ -80,8 +80,9 @@ seb setup your-sleeper-username
 # Start the interactive terminal UI
 seb
 
-# Or run a one-shot query from your shell (add --json for structured output)
+# Or run a one-shot query or weekly multi-league autopilot brief from your shell
 seb ask "Optimize my Week 8 lineup and highlight any injury risks"
+seb brief
 ```
 
 ---
@@ -104,17 +105,18 @@ Switch experiences anytime with `/explore`, `/fantasy`, and `/analyze`—your ac
 
 - **Slash Palette & Shortcuts**: Press `/` or `Ctrl+K` to search commands, `Ctrl+G` to inspect active league/player context, and `/about [topic]` to inspect Seb's live architecture, projection math, or storage schema.
 - **Inspectable Tool Rows**: Click any purple tool row in the transcript to expand its exact JSON inputs and outputs; click grouped rows to inspect individual calls and latencies.
-- **Saved & Resumable Sessions**: Exiting prints `seb resume <session-id>`. Run `seb sessions` anytime to list and restore saved conversations, tool details, and source evidence.
+- **Saved & Resumable Sessions**: Run bare `seb resume` to reopen your latest session immediately (or pass a numbered `seb sessions` index, short prefix, or topic keyword), with pinned working memory preserving preferences and earlier decisions across 25+ turn sessions.
 
 ### Command-Line Reference
 
 | Command | Purpose |
 | --- | --- |
 | `seb` / `seb chat` | Launch the interactive terminal UI (supports `--provider` and `--model`). |
+| `seb brief` | Run a deterministic multi-league weekly autopilot brief (`--json`, `--post slack\|discord\|telegram\|groupme`). |
 | `seb ask "<question>"` | Run a single grounded query from scripts or shell (`--json` supported). |
 | `seb configure` | Configure providers, models, or import settings (`--import-env <file>`). |
 | `seb setup [username]` | Guided first-run setup or Sleeper username sync. |
-| `seb sessions` / `seb resume <id>` | List or restore saved interactive conversations. |
+| `seb sessions` / `seb resume [query]` | List numbered sessions or reopen the latest, `#index`, prefix, or title match. |
 | `seb doctor` | Run all 9 health checks across Node, config, SQLite, permissions, model, and APIs. |
 | `seb usage` / `seb stats` | View local token consumption, latency percentiles, and run success rates. |
 | `seb learn` | Inspect or update local post-week forecast calibration. |

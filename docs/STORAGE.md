@@ -10,6 +10,7 @@ flowchart TD
     MOD["model-settings.json (0600, Provider & Primary/Fallback Models)"]
     PROF["profile.json (0600, Optional Sleeper Username)"]
     HIST["history.json (0600, Serialized Prompt History)"]
+    MEM["memory.json (0600, Saved Notes per Account)"]
     SESS["sessions/{id}.json (0600, SessionStore Transcripts)"]
   end
 
@@ -54,6 +55,7 @@ Seb keeps user preferences, credentials, prompt history, and interactive session
 | `model-settings.json` | Schema `1`, `<= 64 KiB` (`<= 200` chars per model ID), atomic `0600` | Saved active provider, primary/fallback model IDs, and optional compatible base URL (no secrets). |
 | `profile.json` | Schema `1`, bounded regular-file read, atomic `0600` | Optional default Sleeper username and update timestamp (never stores API keys). |
 | `history.json` | Bounded regular-file read, serialized atomic `0600` queue | Interactive prompt history across terminal runs. |
+| `memory.json` | Schema `1`, `<= 1 MiB`, `<= 30` notes of `<= 200` chars per owner, atomic `0600` under the configuration commit lock | Saved notes that the user confirmed with `/remember`, keyed by owner (`sleeper:<username>`, `local`, or `<platform>:<user ID>` for connector direct messages). Seb rejects API keys and tokens. |
 | `sessions/<id>.json` | Bounded regular-file read, atomic `0600` (`SessionStore`) | Resumable interactive conversation transcripts and session metadata (`seb resume <id>`, `seb sessions`). |
 
 Both CLI commands and chat connector processes load saved `~/.config/seb/` defaults at startup via `loadUserEnvironment(process.env, true)` for any unset environment variables, while explicit `process.env` variables always override saved file values.

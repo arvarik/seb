@@ -13,6 +13,7 @@ The project follows [Semantic Versioning](https://semver.org/).
 - **Zero-UUID `seb resume`, Session Working Memory & SQLite Forecast Diffs**:
   - Support bare `seb resume` (preferring the latest real conversation over local-command-only sessions), numeric index (`seb resume 1` matching `seb sessions [--json]`), unique ID prefix, and case-insensitive title, full-transcript, league, or tracked-player search alongside exact session UUIDs.
   - Persist bounded `SessionWorkingMemory` across long interactive sessions and saved snapshots—folding each evicted turn at most once while preserving negations in preferences, tracking multi-player comparisons/trades, and skipping ungrounded `Decision unavailable` blocks (inspectable via `/memory [clear]`).
+  - Save user-confirmed notes across sessions in `~/.config/seb/memory.json` (`/remember [NOTE]`, `/forget <NUMBER|all>`, `/memory`) for the terminal, `seb ask`, and connector direct messages. A newer preference replaces an older one with the same key (`risk`, `faab`, `avoid:<topic>`), session preferences override saved notes, and decisions keep their season, week, and league, so only current-week decisions reach the model.
   - Persist deduplicated `player-projection` snapshots in SQLite (`PlayerProjectionService.project`) with SHA-256 leaf provenance manifests (`createDirectProvenanceManifest`), in-flight concurrency deduplication, historical-window isolation, and compact `forecastShifts` surfaced to the LLM.
 
 ## [1.1.3] - 2026-10-29

@@ -68,10 +68,24 @@ export interface ResolvedDecisionContext {
   week: DecisionContextField<number>;
 }
 
+export interface SessionDecision {
+  leagueId: string | null;
+  season: number;
+  text: string;
+  week: number | null;
+}
+
 export interface SessionWorkingMemory {
-  decisions: string[];
+  decisions: SessionDecision[];
   notedPreferences: string[];
   trackedPlayers: string[];
+  updatedAt: string;
+}
+
+export interface SavedMemoryNote {
+  createdAt: string;
+  scope: string;
+  text: string;
   updatedAt: string;
 }
 
@@ -88,6 +102,7 @@ export interface SessionState {
   player: string | null;
   rosterId: number | null;
   rosterOptions: number[];
+  savedMemory?: SavedMemoryNote[] | undefined;
   season: number;
   seasonType: SessionSeasonType;
   skillId: string;
@@ -242,6 +257,7 @@ export function formatSessionInstructions(state: SessionState): string {
 
 export function formatSessionData(state: SessionState): string {
   const decision = resolveDecisionContext(state);
+  const savedMemory = activeSavedMemory(state);
   const sessionData = {
     nfl: {
       season: state.season,
@@ -254,7 +270,16 @@ export function formatSessionData(state: SessionState): string {
       team: state.team,
     },
     decisionContext: decision,
-    ...(hasSessionWorkingMemory(state.memory) ? { workingMemory: state.memory } : {}),
+    ...(hasSessionWorkingMemory(state.memory)
+      ? {
+          workingMemory: {
+            decisions: currentSessionDecisions(state).map((item) => item.text),
+            notedPreferences: state.memory.notedPreferences,
+            trackedPlayers: state.memory.trackedPlayers,
+          },
+        }
+      : {}),
+    ...(savedMemory.length > 0 ? { savedMemory } : {}),
     sleeper: {
       user: state.user,
       userId: state.userId,
@@ -868,15 +893,43 @@ export function clearSessionWorkingMemory(state: SessionState): void {
   delete state.memory;
 }
 
+const RISK_PREFERENCE = /\b(?:(?:i\s+)?(?:do\s+not|don['’]?t|never)\s+)?(?:i\s+)?(?:prefer|need|want|prioritize|play(?:ing)?\s+for)\b[^.!?\n]{0,70}\b(?:safe\s+floor|floor|consistency|high\s+ceiling|ceiling|upside|boom[\s-]*(?:or[\s-]*)?bust)\b/iu;
+const LEAGUE_FACT = /\b(?:my|our|this)\s+league\s+(?:is|uses)\s+[^.!?\n]{3,90}/iu;
+const AVOID_PREFERENCE = /\b(?:avoid|don['’]?t\s+start|never\s+start|skip)\b[^.!?\n]{0,60}\b(thursday|tnf|london|weather|rain|snow)\b/iu;
+const FAAB_PREFERENCE = /\b(?:(?:(?:i\s+)?(?:do\s+not|don['’]?t|never)\s+)?(?:save|conserve|spend|blow)|conservative|aggressive)\b[^.!?\n]{0,50}\bfaab\b/iu;
+const EXPLICIT_NOTE = /\b(?:remember\s+that|note\s+that|keep\s+in\s+mind|constraint\s*:)\s*[^.!?\n]{4,120}/iu;
 const PREFERENCE_PATTERNS: readonly RegExp[] = [
-  /\b(?:(?:i\s+)?(?:do\s+not|don['’]?t|never)\s+)?(?:i\s+)?(?:prefer|need|want|prioritize|play(?:ing)?\s+for)\b[^.!?\n]{0,70}\b(?:safe\s+floor|floor|consistency|high\s+ceiling|ceiling|upside|boom[\s-]*(?:or[\s-]*)?bust)\b/iu,
-  /\b(?:my|our|this)\s+league\s+(?:is|uses)\s+[^.!?\n]{3,90}/iu,
-  /\b(?:avoid|don['’]?t\s+start|never\s+start|skip)\b[^.!?\n]{0,60}\b(?:thursday|tnf|london|weather|rain|snow)\b/iu,
-  /\b(?:(?:(?:i\s+)?(?:do\s+not|don['’]?t|never)\s+)?(?:save|conserve|spend|blow)|conservative|aggressive)\b[^.!?\n]{0,50}\bfaab\b/iu,
-  /\b(?:remember\s+that|note\s+that|keep\s+in\s+mind|constraint\s*:)\s*[^.!?\n]{4,120}/iu,
+  RISK_PREFERENCE,
+  LEAGUE_FACT,
+  AVOID_PREFERENCE,
+  FAAB_PREFERENCE,
+  EXPLICIT_NOTE,
 ];
+const AVOID_TOPICS: Readonly<Record<string, string>> = {
+  london: 'london',
+  rain: 'weather',
+  snow: 'weather',
+  thursday: 'thursday',
+  tnf: 'thursday',
+  weather: 'weather',
+};
 
-function sanitizeMemoryEntry(value: string, maxLength: number): string {
+/**
+ * Names the one slot that a preference fills, so a newer preference replaces an older one.
+ * Text that also states a league fact or fills two slots gets no key, so no replacement can delete it.
+ */
+export function preferenceKey(text: string): string | null {
+  if (LEAGUE_FACT.test(text) || EXPLICIT_NOTE.test(text)) return null;
+  const topic = AVOID_PREFERENCE.exec(text)?.[1]?.toLowerCase();
+  const keys = [
+    ...(RISK_PREFERENCE.test(text) ? ['risk'] : []),
+    ...(FAAB_PREFERENCE.test(text) ? ['faab'] : []),
+    ...(topic ? [`avoid:${AVOID_TOPICS[topic] ?? topic}`] : []),
+  ];
+  return keys.length === 1 ? keys[0]! : null;
+}
+
+export function sanitizeMemoryEntry(value: string, maxLength: number): string {
   const cleaned = value
     .replace(/[\u0000-\u001F\u007F]/gu, ' ')
     .replace(/\s+/gu, ' ')
@@ -884,11 +937,46 @@ function sanitizeMemoryEntry(value: string, maxLength: number): string {
   return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength - 1).trimEnd()}…` : cleaned;
 }
 
-function pushBoundedUnique(list: string[], entry: string, maxItems: number): boolean {
+export function memoryScopeLabel(state: Pick<SessionState, 'leagues'>, scope: string): string {
+  if (scope === 'global') return 'all leagues';
+  return state.leagues.find((league) => league.leagueId === scope)?.name ?? `league ${scope}`;
+}
+
+function currentSessionDecisions(state: SessionState): SessionDecision[] {
+  return (state.memory?.decisions ?? []).filter((item) =>
+    item.season === state.season &&
+    item.week === state.week &&
+    (item.leagueId === null || state.leagueId === null || item.leagueId === state.leagueId));
+}
+
+function activeSavedMemory(
+  state: SessionState,
+): Array<{ league?: string; note: string; savedOn: string }> {
+  // A preference from this session overrides a saved note with the same key.
+  const sessionKeys = new Set((state.memory?.notedPreferences ?? []).map(preferenceKey));
+  return (state.savedMemory ?? [])
+    .filter((note) => note.scope === 'global' || state.leagueId === null || note.scope === state.leagueId)
+    .filter((note) => {
+      const key = preferenceKey(note.text);
+      return key === null || !sessionKeys.has(key);
+    })
+    .map((note) => ({
+      ...(note.scope === 'global' ? {} : { league: memoryScopeLabel(state, note.scope) }),
+      note: note.text,
+      savedOn: note.updatedAt.slice(0, 10),
+    }));
+}
+
+function pushBoundedUnique<T>(
+  list: T[],
+  entry: T,
+  maxItems: number,
+  identity: (item: T) => string = (item) => String(item).toLowerCase(),
+): boolean {
   if (!entry) return false;
   const before = JSON.stringify(list);
-  const lower = entry.toLowerCase();
-  const existing = list.findIndex((item) => item.toLowerCase() === lower);
+  const id = identity(entry);
+  const existing = list.findIndex((item) => identity(item) === id);
   if (existing >= 0) list.splice(existing, 1);
   list.push(entry);
   if (list.length > maxItems) list.splice(0, list.length - maxItems);
@@ -905,7 +993,7 @@ export function recordSessionTurnMemory(
     userPrompt: string;
   },
   now = new Date(),
-): void {
+): string[] {
   const prompt = input.userPrompt.trim();
   const memory: SessionWorkingMemory = state.memory
     ? {
@@ -934,16 +1022,30 @@ export function recordSessionTurnMemory(
     }
   }
 
+  const knownPreferences = new Set(memory.notedPreferences.map((item) => item.toLowerCase()));
+  const preferencesBefore = JSON.stringify(memory.notedPreferences);
   for (const pattern of PREFERENCE_PATTERNS) {
     const match = pattern.exec(prompt);
     if (match?.[0]) {
       const pref = sanitizeMemoryEntry(match[0], 200);
-      if (pref && pushBoundedUnique(memory.notedPreferences, pref, 8)) {
-        touched = true;
+      const key = preferenceKey(pref);
+      if (key) {
+        memory.notedPreferences = memory.notedPreferences.filter((item) =>
+          item.toLowerCase() === pref.toLowerCase() || preferenceKey(item) !== key);
       }
+      pushBoundedUnique(memory.notedPreferences, pref, 8);
     }
   }
+  if (JSON.stringify(memory.notedPreferences) !== preferencesBefore) touched = true;
 
+  const decision = (text: string): SessionDecision => ({
+    leagueId: state.leagueId,
+    season: state.season,
+    text,
+    week: state.week,
+  });
+  const decisionIdentity = (item: SessionDecision) =>
+    `${item.season}:${item.week}:${item.leagueId}:${item.text.toLowerCase()}`;
   const answer = (input.answerText ?? '')
     .replace(/(?:^|\r?\n)##\s+Evidence\r?\n[\s\S]*$/u, '')
     .trim();
@@ -953,7 +1055,7 @@ export function recordSessionTurnMemory(
     : null;
   if (recommendationMatch?.[1]) {
     const rec = sanitizeMemoryEntry(recommendationMatch[1], 240);
-    if (rec && pushBoundedUnique(memory.decisions, rec, 12)) {
+    if (rec && pushBoundedUnique(memory.decisions, decision(rec), 12, decisionIdentity)) {
       touched = true;
     }
   } else if (input.evicted && prompt && answer && !blockedDecision) {
@@ -964,7 +1066,9 @@ export function recordSessionTurnMemory(
       .find((line) => line.length > 0 && !line.startsWith('[Verified tool calls'));
     if (firstAnswerLine && !firstAnswerLine.endsWith('?')) {
       const summary = sanitizeMemoryEntry(`${qSnippet} -> ${firstAnswerLine}`, 240);
-      if (summary && pushBoundedUnique(memory.decisions, summary, 12)) {
+      // A resumed session folds old turns again. Keep the first summary so its week does not move.
+      const known = memory.decisions.some((item) => item.text.toLowerCase() === summary.toLowerCase());
+      if (summary && !known && pushBoundedUnique(memory.decisions, decision(summary), 12, decisionIdentity)) {
         touched = true;
       }
     }
@@ -974,6 +1078,7 @@ export function recordSessionTurnMemory(
     memory.updatedAt = now.toISOString();
     state.memory = memory;
   }
+  return memory.notedPreferences.filter((item) => !knownPreferences.has(item.toLowerCase()));
 }
 
 export function formatSessionWorkingMemory(state: SessionState): string {
@@ -987,6 +1092,8 @@ export function formatSessionWorkingMemory(state: SessionState): string {
     ].join('\n');
   }
   const { decisions, notedPreferences, trackedPlayers, updatedAt } = state.memory;
+  const current = currentSessionDecisions(state);
+  const other = decisions.filter((item) => !current.includes(item));
   return [
     '## Session working memory',
     '',
@@ -998,8 +1105,21 @@ export function formatSessionWorkingMemory(state: SessionState): string {
     ...(trackedPlayers.length > 0
       ? [`### Tracked players (${trackedPlayers.length})`, '', `- ${trackedPlayers.join(', ')}`, '']
       : []),
-    ...(decisions.length > 0
-      ? ['### Pinned decisions & earlier turns', '', ...decisions.map((item) => `- ${item}`), '']
+    ...(current.length > 0
+      ? ['### Pinned decisions & earlier turns', '', ...current.map((item) => `- ${item.text}`), '']
+      : []),
+    ...(other.length > 0
+      ? [
+          '### Decisions from other weeks or leagues (not sent to the model)',
+          '',
+          ...other.map((item) => `- ${item.season}${item.week === null ? '' : ` Week ${item.week}`}${
+            item.leagueId === null ? '' : ` · ${memoryScopeLabel(state, item.leagueId)}`
+          }: ${item.text}`),
+          '',
+        ]
+      : []),
+    ...(notedPreferences.length > 0
+      ? ['Run `/remember` to save the noted preferences for future sessions.']
       : []),
     'Run `/memory clear` to reset pinned session memory.',
   ].join('\n');

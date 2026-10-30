@@ -11,8 +11,11 @@ import { hasSessionWorkingMemory, type SessionState } from './session.js';
 
 const MAX_BYTES = 32 * 1024 * 1024;
 const idSchema = z.string().regex(/^seb-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u);
+const decisionSchema = z.object({
+  leagueId: z.string().max(64).nullable(), season: z.number().int(), text: z.string().max(240), week: z.number().int().nullable(),
+});
 const memorySchema = z.object({
-  decisions: z.array(z.string().max(240)).max(12),
+  decisions: z.array(decisionSchema).max(12),
   notedPreferences: z.array(z.string().max(200)).max(8),
   trackedPlayers: z.array(z.string().max(100)).max(16),
   updatedAt: z.string(),

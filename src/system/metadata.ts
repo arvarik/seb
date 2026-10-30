@@ -174,7 +174,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
       'SQLite database schema 6 with WAL mode, foreign keys, and normal synchronous writes',
       'Directory permissions 0700 and file permissions 0600 restricting access to current OS user',
       'Core tables (cache_entries, snapshots, identities, identity_links, cache_generations, usage_runs, usage_steps, usage_tool_calls) plus SQLite FTS5 BM25 full-text news indexing (news_articles_fts)',
-      'Configuration stored in ~/.config/seb/ (settings.json, profile.json, credentials.json, model-settings.json, history.json, sessions/)',
+      'Configuration stored in ~/.config/seb/ (settings.json, profile.json, credentials.json, model-settings.json, history.json, memory.json, sessions/)',
       'Local usage records exclude prompts, answers, raw tool payloads, and keys. Judgment tracing is optional and off by default.',
     ],
     subsystemsOrFiles: [
@@ -183,6 +183,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
       'src/setup/credentials.ts',
       'src/ai/model-settings.ts',
       'src/interactive/history.ts',
+      'src/interactive/memory.ts',
       'src/interactive/sessions.ts',
     ],
     documentation: 'docs/STORAGE.md',

@@ -78,6 +78,7 @@ import {
 import { serializeReplayReport } from './evaluation/serialization.js';
 import { generateShellCompletion } from './interactive/commands.js';
 import { friendlyToolName } from './interactive/presentation.js';
+import { memoryOwner, UserMemoryStore } from './interactive/memory.js';
 import { SebInteractiveTransport } from './interactive/transport.js';
 import { runSebInteractiveTui } from './interactive/tui.js';
 import { InteractiveUiState } from './interactive/ui-state.js';
@@ -618,6 +619,7 @@ async function startInteractiveChat(
         offline,
       }),
       environment,
+      memoryStore: new UserMemoryStore(environment),
       model: selection.modelProvider.model,
       news: clients.newsClient,
       provider,
@@ -1461,6 +1463,11 @@ async function loadAutomaticContext(
   } catch (error) {
     session.accountError = errorMessage(error);
     session.accountStatus = 'error';
+  }
+  try {
+    session.savedMemory = await new UserMemoryStore(environment).list(memoryOwner(session));
+  } catch {
+    // Saved notes are optional defaults. An unreadable memory file must not block an answer.
   }
   return {
     data: formatSessionData(session),

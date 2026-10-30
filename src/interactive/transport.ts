@@ -99,11 +99,19 @@ import {
 } from '../analysis/portfolio-brief.js';
 import type { NewsClient } from '../news/client.js';
 import {
+  forgetNotes,
+  formatSavedNotes,
+  memoryOwner,
+  saveNotes,
+  type UserMemoryStore,
+} from './memory.js';
+import {
   clearSessionWorkingMemory,
   formatFantasyDashboard,
   formatSessionStatus,
   formatSessionWorkingMemory,
   getContextualSuggestions,
+  memoryScopeLabel,
   normalizeSessionSeasonType,
   recordSessionTurnMemory,
   resolveUserConfirmedToolContext,
@@ -154,6 +162,7 @@ export interface SebInteractiveTransportOptions {
   agent: SebAgent;
   doctor?: (offline: boolean) => Promise<DoctorReport>;
   environment: NodeJS.ProcessEnv;
+  memoryStore?: UserMemoryStore;
   model: string;
   news?: { clearCache(): void; search?: NewsClient['search'] };
   provider?: string;
@@ -329,7 +338,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     );
   }
 
-  private sendInteractivePrompt(
+  private async sendInteractivePrompt(
     options: Parameters<ChatTransport<UIMessage>['sendMessages']>[0],
     userPrompt: string,
     usageTelemetry: SebInteractiveTransportOptions['usageTelemetry'],
@@ -343,6 +352,15 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       this.options.session.player,
     );
     const priorEvidence = this.recentVerifiedEvidence(activeFiltered);
+    // Note stated preferences before the model call so they override saved notes in this turn.
+    const noted = recordSessionTurnMemory(this.options.session, { userPrompt });
+    await this.loadSavedMemory();
+    const saved = this.options.session.savedMemory?.map((note) => note.text.toLowerCase());
+    if (saved && noted.some((item) => !saved.includes(item.toLowerCase()))) {
+      // Saved memory holds only what the user confirms, so ask before a preference outlives the session.
+      this.uiState.notification =
+        'Seb noted a preference for this session. Run /remember to keep it for future sessions.';
+    }
     return traceJudgmentStream({
       name: 'seb.interactive.turn',
       sessionId: options.chatId,
@@ -1085,8 +1103,33 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         if (action !== undefined) {
           throw new Error('Use /memory or /memory clear.');
         }
-        return formatSessionWorkingMemory(state);
+        if (!this.options.memoryStore) return formatSessionWorkingMemory(state);
+        const notes = await this.options.memoryStore.list(memoryOwner(state));
+        return [
+          formatSavedNotes(notes, (scope) => memoryScopeLabel(state, scope)),
+          '',
+          formatSessionWorkingMemory(state),
+        ].join('\n');
       }
+      case 'remember': {
+        const texts = parsed.argumentText
+          ? [parsed.argumentText]
+          : state.memory?.notedPreferences ?? [];
+        if (texts.length === 0) {
+          throw new Error('Seb has no noted preferences in this session. Use /remember NOTE.');
+        }
+        // A note saved while one league is in focus applies only to that league.
+        const scope = state.leagueId ?? 'global';
+        return saveNotes(
+          this.requireMemoryStore(),
+          memoryOwner(state),
+          texts,
+          scope,
+          memoryScopeLabel(state, scope),
+        );
+      }
+      case 'forget':
+        return forgetNotes(this.requireMemoryStore(), memoryOwner(state), arguments_[0]);
       case 'history':
         return arguments_[0]?.toLowerCase() === 'clear'
           ? 'Run `/history clear` in the Seb terminal to delete its private prompt history.'
@@ -1188,6 +1231,25 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   private resetSessionMemoryState(state: SessionState): void {
     clearSessionWorkingMemory(state);
     this.evictedTurnUserIds.clear();
+  }
+
+  // Read saved notes before each model turn so an account change or another process is reflected.
+  private async loadSavedMemory(): Promise<void> {
+    const store = this.options.memoryStore;
+    if (!store) return;
+    try {
+      this.options.session.savedMemory = await store.list(memoryOwner(this.options.session));
+    } catch (error) {
+      this.options.session.savedMemory = [];
+      this.uiState.notification = `Seb could not read saved notes: ${errorMessage(error)}`;
+    }
+  }
+
+  private requireMemoryStore(): UserMemoryStore {
+    if (!this.options.memoryStore) {
+      throw new Error('Saved notes are unavailable in this session.');
+    }
+    return this.options.memoryStore;
   }
 
   private async runSetupCommand(arguments_: string[]): Promise<string> {
@@ -1320,7 +1382,8 @@ Ask a player, team, statistic, schedule, or news question in plain language.
 - \`/fantasy [QUESTION]\`: Use the connected Sleeper account.
 - \`/analyze [QUESTION]\`: Compare choices and add decision context.
 - \`/brief [LEAGUE_ID]\`: Run the multi-league weekly autopilot brief.
-- \`/memory [clear]\`: Inspect or clear pinned session working memory.
+- \`/memory [clear]\`: Show saved notes and session memory, or clear session memory.
+- \`/remember [NOTE]\`: Save a note, or this session's noted preferences, for future sessions.
 - \`/connect USERNAME\`: Save one optional Sleeper username.
 - \`/provider [NAME]\`: Show or switch the configured model provider.
 - \`/model [MODEL]\`: Show or switch the active model.

@@ -10,6 +10,8 @@ import {
   type SystemMetadataResult,
 } from '../src/system/metadata.js';
 import { createSystemTools } from '../src/system/tools.js';
+import { INTERACTIVE_COMMANDS } from '../src/interactive/commands.js';
+import { SEB_SKILLS } from '../src/interactive/skills.js';
 import { createFantasyFootballAgent } from '../src/agent.js';
 import { SebInteractiveTransport } from '../src/interactive/transport.js';
 import { createSessionState } from '../src/interactive/session.js';
@@ -122,6 +124,30 @@ describe('system metadata & self-awareness', () => {
     expect(result.detail?.title).toBe('Multi-Provider Model Support');
   });
 
+  it('builds self-knowledge from the live registries and the shipped docs', async () => {
+    const agent = createFantasyFootballAgent({
+      identityRepository: false,
+      languageModel: new MockLanguageModelV4({}),
+    });
+    const result = (await agent.tools.inspectSystemDocs.execute?.(
+      { query: 'saved notes', topic: 'capabilities' },
+      { context: {}, messages: [], toolCallId: 'self-knowledge' },
+    )) as SystemMetadataResult & { documentation: Array<{ file: string; text: string }> };
+    const lines = result.detail?.keyPrinciples ?? [];
+    // Each list must name exactly what the code registers, so a new tool, command, or skill cannot go missing.
+    const listed = (prefix: RegExp) => new Set(
+      lines.find((line) => prefix.test(line))?.replace(prefix, '').replace(/\.$/u, '').split(', '),
+    );
+    expect(listed(/^\d+ agent tools: /u)).toEqual(new Set(Object.keys(agent.tools)));
+    expect(listed(/^\d+ slash commands: /u))
+      .toEqual(new Set(INTERACTIVE_COMMANDS.map((command) => `/${command.name}`)));
+    expect(listed(/^\d+ skills \(run \/skill NAME \[QUESTION\]\): /u))
+      .toEqual(new Set(SEB_SKILLS.map((skill) => skill.id)));
+    expect(result.activeModel).toContain('mock-model-id');
+    expect(result.documentation.some((section) => section.text.includes('/remember'))).toBe(true);
+    expect(formatSystemMetadata('commands')).toContain('`seb ask` (CLI)');
+  });
+
   it('handles /about and /architecture slash commands in interactive transport', async () => {
     const session = createSessionState();
     const uiState = new InteractiveUiState();
@@ -182,5 +208,8 @@ describe('system metadata & self-awareness', () => {
 
     const archTopic = await sendCommand('/arch projections');
     expect(archTopic).toContain('Deterministic Projection Engine');
+
+    expect(await sendCommand('/about tools')).toContain('inspectSystemDocs');
+    expect(await sendCommand('/about saved notes')).toContain('/remember');
   });
 });

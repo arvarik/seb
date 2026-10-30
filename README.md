@@ -103,7 +103,7 @@ Switch experiences anytime with `/explore`, `/fantasy`, and `/analyze`—your ac
 
 ### Interactive Terminal Highlights
 
-- **Slash Palette & Shortcuts**: Press `/` or `Ctrl+K` to search commands, `Ctrl+G` to inspect active league/player context, and `/about [topic]` to inspect Seb's live architecture, projection math, or storage schema.
+- **Slash Palette & Shortcuts**: Press `/` or `Ctrl+K` to search commands, `Ctrl+G` to inspect active league/player context, and `/about [topic|question]` to see Seb's capabilities, commands, tools, skills, memory, architecture, projection math, or storage schema, or to search its documentation. Ask Seb what it can do, and it answers from the same live list.
 - **Inspectable Tool Rows**: Click any purple tool row in the transcript to expand its exact JSON inputs and outputs; click grouped rows to inspect individual calls and latencies.
 - **Saved & Resumable Sessions**: Run bare `seb resume` to reopen your latest session immediately (or pass a numbered `seb sessions` index, short prefix, or topic keyword), with pinned working memory preserving preferences and earlier decisions across 25+ turn sessions.
 

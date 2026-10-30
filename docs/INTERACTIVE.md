@@ -50,7 +50,7 @@ Most slash commands execute locally without calling a language model:
 | Command | Result |
 | --- | --- |
 | `/help` or `/?` | Shows the complete interactive command catalog. |
-| `/about [TOPIC]` | Explains Seb's design and internals (`overview`, `architecture`, `projections`, `sources`, `storage`, `learning`, `models`, `connectors`, `cli`). |
+| `/about [TOPIC\|QUESTION]` | Explains what Seb can do and how it works (`overview`, `capabilities`, `commands`, `tools`, `skills`, `memory`, `architecture`, `projections`, `sources`, `storage`, `learning`, `models`, `connectors`, `cli`). Seb builds the `capabilities`, `commands`, `tools`, and `skills` lists from its code. Any other text searches the README and `docs/`, for example `/about cache TTL`. |
 | `/explore [QUESTION]` | Switches to Explore or runs an NFL information question. |
 | `/fantasy [QUESTION]` or `/my` | Switches to My Fantasy or runs an account-aware fantasy question. |
 | `/analyze [QUESTION]` | Switches to Analyze or runs a comparison/decision question. |

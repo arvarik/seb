@@ -1,4 +1,5 @@
 import { createPlayoffTools } from './analysis/playoff-tools.js';
+import { createPortfolioBriefTools } from './analysis/portfolio-brief.js';
 import { createLearningTools } from './learning/tools.js';
 import { createGoogle } from '@ai-sdk/google';
 import {
@@ -37,6 +38,7 @@ import {
   createFirstClassNewsTools,
   createGroundedNewsTools,
 } from './news/tools.js';
+import type { ProjectionSnapshotStore } from './projection/service.js';
 import { createProjectionTools } from './projection/tools.js';
 import { createWaiverTools } from './waivers/tools.js';
 import { createTradeTools } from './trades/tools.js';
@@ -56,6 +58,7 @@ const RUNTIME_CONTEXT_KEY_PRIORITY = [
   'userId',
   'subject',
   'decisionContext',
+  'workingMemory',
   'nfl',
   'sleeper',
   'usefulNextRequests',
@@ -107,6 +110,7 @@ export interface FantasyFootballAgentOptions {
   }) => void;
   now?: () => Date;
   sleeperClient?: SleeperClient;
+  snapshotDatabase?: ProjectionSnapshotStore | false;
   telemetryFunctionId?: string;
   telemetryIntegrations?: readonly Telemetry[];
   weatherClient?: WeatherClient;
@@ -273,15 +277,30 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
     : activeProvider === 'google' && toolProvider
     ? 'google'
     : 'direct';
+  const bundledNews = newsToolMode !== 'none' ? newsClient : undefined;
+  const snapshotDatabase = options.snapshotDatabase ?? false;
   const tools = bindToolRequestSignals({
     ...createSleeperTools(sleeperClient),
     ...createPlayoffTools(sleeperClient),
     ...createNflverseTools(nflverseClient),
     ...createWeatherTools(weatherClient, nflverseClient),
     ...createLearningTools(sleeperClient, undefined, undefined, nflverseClient),
-    ...createProjectionTools(sleeperClient, nflverseClient, weatherClient),
-    ...createWaiverTools(sleeperClient, nflverseClient),
-    ...createTradeTools(sleeperClient, nflverseClient),
+    ...createProjectionTools(sleeperClient, nflverseClient, weatherClient, {
+      news: bundledNews,
+      snapshotDatabase,
+    }),
+    ...createWaiverTools(sleeperClient, nflverseClient, bundledNews),
+    ...createPortfolioBriefTools(
+      {
+        news: bundledNews,
+        nflverse: nflverseClient,
+        sleeper: sleeperClient,
+        snapshotDatabase,
+        weather: weatherClient,
+      },
+      () => extractRuntimeSleeperUser(options.getRuntimeContext?.()),
+    ),
+    ...createTradeTools(sleeperClient, nflverseClient, bundledNews),
     ...createIdentityTools(
       sleeperClient,
       nflverseClient,
@@ -296,6 +315,21 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
       : {}),
   });
   return { activeProvider, languageModel, newsToolMode, tools };
+}
+
+function extractRuntimeSleeperUser(runtimeContext: string | undefined): string | null {
+  if (!runtimeContext) return null;
+  try {
+    const parsed = JSON.parse(runtimeContext) as Record<string, unknown>;
+    const sleeper = parsed.sleeper;
+    if (sleeper && typeof sleeper === 'object' && !Array.isArray(sleeper)) {
+      const user = (sleeper as Record<string, unknown>).user;
+      if (typeof user === 'string' && user.trim()) return user.trim();
+    }
+  } catch {
+    // Ignore non-JSON runtime context strings.
+  }
+  return null;
 }
 
 function createLanguageModel(options: FantasyFootballAgentOptions) {
@@ -620,6 +654,9 @@ Check scoreScope and scoring.ignoredSettings. A partial-scoring result omits act
 Current news supplements the statistical projection. Explain any news-based adjustment separately without inventing precision.
 Use compareStartSit to compare starters. Supply the legal starter slot for players at different positions.
 Use optimizeRosterLineup when the user asks to optimize, set, or audit their full starting lineup for a week. It projects starters and bench players and solves the highest-scoring legal slot assignment. Inspect optimalLineup, currentLineup, bench, and recommendedSwaps before saying any rostered player lacks a projection. Do not call optimizeRosterLineup or suggest unrequested lineup swaps when answering a single-player or slot-rule question; use getLeagueOverview or getRosterPlayers to check league slots and current starters.
+Use runWeeklyPortfolioBrief when the user asks for a weekly brief, autopilot rundown, or combined lineup + matchup + waiver audit across all active Sleeper leagues.
+When a projection includes forecastDiff, use its deltaExpectedPoints and drivers to explain why a player's forecast shifted since the previous check.
+When runtime context includes workingMemory, respect earlier session preferences, tracked players, and prior decisions unless the user overrides them.
 projectLeagueMatchup and compareStartSit account for same-game/stack correlations when complete player intervals are available, and searchFirstClassNews clusters corroborated multi-publisher stories via corroboratedBy.
 Explain expected points and the uncertainty interval. Lower volatility (standard deviation) or a narrower interval means higher floor consistency; higher volatility (standard deviation) or a wider interval means higher boom-bust volatility. A D/ST weighted-historical-outcomes range is descriptive, not a calibrated forecast interval. Confidence describes evidence completeness, not a validated accuracy percentage or win probability. Flag close choices and all failed eligibility checks.
 Use simulatePlayoffOdds only with a complete future fantasy schedule. State its simulation and model limits.
@@ -682,6 +719,7 @@ const DIRECT_NEWS_INSTRUCTIONS = `
 Use current news before a final waiver, FAAB, accept, or decline recommendation.
 Do not turn a trade impact result into an accept or decline action without current news evidence.
 Use searchFirstClassNews first for current reporting, injuries, trades, depth-chart changes, and recent team news.
+compareStartSit, optimizeRosterLineup, rankWaiverTargets, analyzeTradeImpact, and runWeeklyPortfolioBrief automatically attach bundledNewsChecks from first-class newsroom sources; reuse those bundledNewsChecks directly without repeating searchFirstClassNews for already-checked players unless fallbackRecommended is true or deeper reporting is requested.
 The first-class tool searches official NFL and team sites, independent reporting, and fantasy-impact sources.
 Treat web reporting as news evidence, not as the source for league data, schedules, or statistics.
 Give the publisher and publication date for each current news claim when those values are available.

@@ -21,9 +21,10 @@ seb doctor
 | Command | Purpose |
 | --- | --- |
 | `seb` or `seb chat` | Launch the interactive terminal interface. |
+| `seb brief` | Run a multi-league weekly autopilot brief (`--json`, `--no-progress`, `--post slack\|discord\|telegram\|groupme`). |
 | `seb ask [PROMPT]` | Answer one question from arguments or standard input (`--json`, `--no-progress`). |
-| `seb resume <SESSION_ID>` | Resume a saved interactive conversation by session ID. |
-| `seb sessions` | List saved interactive conversations and their opening questions. |
+| `seb resume [SESSION_ID\|INDEX\|QUERY]` | Resume the latest saved session, or match by `#index`, ID prefix, title, transcript, or tracked player. |
+| `seb sessions` | List numbered saved interactive conversations and their opening questions (`--json`). |
 | `seb configure` | Run interactive provider/settings setup or import a dotenv file (`--import-env <FILE>`). |
 | `seb setup [USERNAME]` | Initialize account preferences or save an optional Sleeper username. |
 | `seb doctor` | Run all 9 local and network health checks (`--offline`, `--json`). |
@@ -88,14 +89,32 @@ See the [Interactive guide](INTERACTIVE.md) and [Terminal interface guide](TERMI
 
 ## Resume and list sessions (`seb sessions`, `seb resume`)
 
-When you exit interactive chat with `/exit`, Seb saves your conversation snapshot to `~/.config/seb/sessions/` (`0600` permissions) and prints the exact command to pick up where you left off:
+When you exit interactive chat with `/exit`, Seb saves your conversation snapshot to `~/.config/seb/sessions/` (`0600` permissions) and prints the command to pick up where you left off:
 
 ```bash
 seb sessions
+seb sessions --json
+seb resume                                         # Reopens the most recent saved session
+seb resume 1                                       # Reopens session #1 from `seb sessions`
+seb resume waivers                                 # Matches the newest session title, transcript, or tracked player
 seb resume seb-00000000-0000-0000-0000-000000000000
 ```
 
-`seb sessions` lists available snapshots with their session IDs and opening questions (skipping any damaged files), while `seb resume <SESSION_ID>` restores your prior turns, verified tool outputs, source snapshots, and active player/team/skill/league focus against the current NFL state and connected Sleeper account. Set `SEB_SESSIONS=false` to disable session snapshots, or `SEB_HISTORY=false` to disable both prompt history and session saving.
+`seb sessions` lists numbered snapshots with their session IDs and opening questions (skipping local-only slash commands and any damaged files), while `seb resume` restores your prior turns, pinned working memory, verified tool outputs, source snapshots, and active player/team/skill/league focus against the current NFL state and connected Sleeper account. Set `SEB_SESSIONS=false` to disable session snapshots, or `SEB_HISTORY=false` to disable both prompt history and session saving.
+
+## Weekly multi-league autopilot brief (`seb brief`)
+
+Run `seb brief` to generate a deterministic weekly rundown across all active `in_season` Sleeper leagues (up to 10 leagues in parallel, or one focused league via `--league`) without spending LLM tokens:
+
+```bash
+seb brief
+seb brief --user your-sleeper-name --week 8
+seb brief --league 123456789012345678 --roster 3 --json
+seb brief --post slack --channel C0123456789
+seb brief --post discord                           # Uses DISCORD_DEFAULT_CHANNEL_ID when --channel is omitted
+```
+
+Each league section combines urgent action-center alerts, exact combinatorial lineup swaps, suggested bench drops, owner-perspective head-to-head win probability, top waiver/FAAB targets, SQLite `forecastDiff` point shifts (`>= 0.5` pts since your previous check), and deduplicated first-class newsroom wire headlines. For scheduled cron jobs (`--post slack|discord|telegram|groupme`), configure the corresponding bot token (`SLACK_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `TELEGRAM_BOT_TOKEN`, or `GROUPME_BOT_ID`) and optional default target (`SLACK_DEFAULT_CHANNEL_ID`, `DISCORD_DEFAULT_CHANNEL_ID`, or `TELEGRAM_DEFAULT_CHAT_ID`; GroupMe posts directly to the group bound to `GROUPME_BOT_ID`).
 
 ## One-shot queries, stdin pipes, and JSON (`seb ask`)
 

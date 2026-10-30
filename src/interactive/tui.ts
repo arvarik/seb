@@ -15,6 +15,7 @@ import {
   type ModelErrorContext,
 } from '../model-capacity-error.js';
 import { SourceTracker } from '../sources.js';
+import { isLocalOnlyInteractiveCommandInput } from './commands.js';
 import { FilePromptHistory, type PromptHistory } from './history.js';
 import {
   SebTerminalRenderer,
@@ -89,7 +90,7 @@ export class SebConversationRunner {
 
   private async runConversation(): Promise<void> {
     const messages: UIMessage[] = structuredClone([...this.initialMessages]);
-    if (this.checkpoint) await this.checkpoint(messages);
+    if (this.checkpoint && messages.length > 0) await this.checkpoint(messages);
     let prompt: string | undefined;
     let streamWithoutPrompt = false;
     let turnStartIndex = 0;
@@ -223,7 +224,7 @@ export async function runSebInteractiveTui(
   });
   const store = sessionsEnabled(environment) ? new SessionStore(environment) : null;
   if (options.resumeId && !store) throw new Error('Session saving is disabled. Enable SEB_SESSIONS and SEB_HISTORY to resume.');
-  const chatId = options.resumeId ?? `seb-${randomUUID()}`;
+  const chatId = options.resumeId ? await store!.resolve(options.resumeId) : `seb-${randomUUID()}`;
   let locked = false;
   let saved = false;
   let warning = '';
@@ -234,7 +235,9 @@ export async function runSebInteractiveTui(
     }
     const previous = options.resumeId ? await store!.load(chatId) : null;
     if (previous) {
-      if (previous.context.user !== options.session.user) throw new Error('This session belongs to a different Sleeper account. Connect that account before resuming.');
+      if ((previous.context.user ?? '').toLowerCase() !== (options.session.user ?? '').toLowerCase()) {
+        throw new Error('This session belongs to a different Sleeper account. Connect that account before resuming.');
+      }
       Object.assign(options.session, previous.context);
       if (options.session.leagueId && !options.session.leagues.some(l => l.leagueId === options.session.leagueId)) {
         options.session.leagueId = null; options.session.rosterId = null;
@@ -242,9 +245,19 @@ export async function runSebInteractiveTui(
       }
       for (const evidence of previous.evidence) uiState.recordAnswerEvidence(evidence);
       options.transport.restoreLocalOnlyMessages?.(previous.localOnlyMessageIds);
-      const latest = [...previous.messages].reverse().find(m => m.role === 'assistant');
+      const localIds = new Set(previous.localOnlyMessageIds ?? []);
+      const reversed = [...previous.messages].reverse();
+      const latest =
+        reversed.find(m => m.role === 'assistant' && !m.id.startsWith('local-message-')) ??
+        reversed.find(m => m.role === 'assistant');
       uiState.latestAnswer = latest?.parts.filter(p => p.type === 'text').map(p => p.text).join('\n') ?? '';
-      uiState.latestPrompt = [...previous.messages].reverse().find(m => m.role === 'user')?.parts.filter(p => p.type === 'text').map(p => p.text).join('\n') ?? '';
+      const latestUser =
+        reversed.find((m) => {
+          if (m.role !== 'user' || localIds.has(m.id)) return false;
+          const text = m.parts.filter(p => p.type === 'text').map(p => p.text).join('\n');
+          return !isLocalOnlyInteractiveCommandInput(text);
+        }) ?? reversed.find(m => m.role === 'user');
+      uiState.latestPrompt = latestUser?.parts.filter(p => p.type === 'text').map(p => p.text).join('\n') ?? '';
       renderer.restoreMessages(previous.messages);
       uiState.notification ||= `Resumed conversation · ${previous.messages.length} messages`;
       saved = true;
@@ -252,7 +265,7 @@ export async function runSebInteractiveTui(
     await new SebConversationRunner({
       chatId, initialMessages: previous?.messages ?? [],
       checkpoint: async messages => {
-        if (!store || !locked) return;
+        if (!store || !locked || messages.length === 0) return;
         try {
           const localOnlyMessageIds = options.transport.savedLocalOnlyMessages?.();
           await store.save({
@@ -277,7 +290,7 @@ export async function runSebInteractiveTui(
     renderer.close();
     if (locked) await store!.release(chatId);
     if (warning) output.write(`\n${warning}\n`);
-    if (saved) output.write(`\nResume this session: seb resume ${chatId}\n`);
+    if (saved) output.write(`\nResume this session: seb resume ${chatId} (or seb resume)\n`);
   }
 }
 

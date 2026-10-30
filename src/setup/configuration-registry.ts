@@ -10,7 +10,7 @@ export interface SettingDefinition {
   secret?: boolean;
   defaultValue?: string;
   choices?: readonly string[];
-  kind?: 'model' | 'boolean' | 'port' | 'uuid' | 'path' | 'ids' | 'connectors' | 'redis';
+  kind?: 'model' | 'boolean' | 'port' | 'uuid' | 'path' | 'id' | 'ids' | 'connectors' | 'redis';
   provider?: HostedProvider;
   field?: 'model' | 'fallbackModel' | 'key';
 }
@@ -46,14 +46,17 @@ export const CONFIGURATION_SETTINGS: readonly SettingDefinition[] = [
   { name: 'SLACK_BOT_TOKEN', label: 'Slack bot token', group: 'Connectors', secret: true },
   { name: 'SLACK_SIGNING_SECRET', label: 'Slack signing secret', group: 'Connectors', secret: true },
   { name: 'SLACK_APP_TOKEN', label: 'Slack app token', group: 'Connectors', secret: true },
+  { name: 'SLACK_DEFAULT_CHANNEL_ID', label: 'Slack default channel ID for seb brief --post', group: 'Connectors' },
   { name: 'SEB_SLACK_MODE', label: 'Slack connection mode', group: 'Connectors', choices: ['webhook', 'socket'], defaultValue: 'webhook' },
   { name: 'DISCORD_BOT_TOKEN', label: 'Discord bot token', group: 'Connectors', secret: true },
   { name: 'DISCORD_PUBLIC_KEY', label: 'Discord public key', group: 'Connectors' },
   { name: 'DISCORD_APPLICATION_ID', label: 'Discord application ID', group: 'Connectors' },
+  { name: 'DISCORD_DEFAULT_CHANNEL_ID', label: 'Discord default channel ID for seb brief --post', group: 'Connectors', kind: 'id' },
   { name: 'SEB_DISCORD_GATEWAY', label: 'Enable Discord gateway', group: 'Connectors', kind: 'boolean', defaultValue: 'true' },
   { name: 'TELEGRAM_BOT_TOKEN', label: 'Telegram bot token', group: 'Connectors', secret: true },
   { name: 'TELEGRAM_BOT_USERNAME', label: 'Telegram bot username', group: 'Connectors' },
   { name: 'TELEGRAM_WEBHOOK_SECRET_TOKEN', label: 'Telegram webhook secret', group: 'Connectors', secret: true },
+  { name: 'TELEGRAM_DEFAULT_CHAT_ID', label: 'Telegram default chat ID for seb brief --post', group: 'Connectors' },
   { name: 'SEB_TELEGRAM_MODE', label: 'Telegram connection mode', group: 'Connectors', choices: ['auto', 'polling', 'webhook'], defaultValue: 'auto' },
   { name: 'TELEGRAM_ALLOWED_USER_IDS', label: 'Allowed Telegram user IDs (comma-separated)', group: 'Connectors', kind: 'ids' },
   { name: 'GROUPME_BOT_ID', label: 'GroupMe bot ID', group: 'Connectors', secret: true },
@@ -90,6 +93,7 @@ export function validateSetting(setting: SettingDefinition, input: unknown): str
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(value)) return fail();
       break;
     case 'path': if (!isAbsolute(value)) return fail(); break;
+    case 'id': if (!/^\d+$/u.test(value)) return fail(); break;
     case 'ids': if (!/^\d+(?:\s*,\s*\d+)*$/u.test(value)) return fail(); break;
     case 'connectors':
       if (value.split(',').some((name) => !CONNECTOR_NAMES.includes(name.trim() as ConnectorName))) return fail();

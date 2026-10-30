@@ -2,10 +2,120 @@ import { createGoogle } from '@ai-sdk/google';
 import { tool, type JSONValue } from 'ai';
 import { z } from 'zod';
 
+import { throwIfRequestAborted } from '../ai/request-signal.js';
+import { normalizePlayerName } from '../identity/normalize.js';
 import { NewsClient } from './client.js';
 import { FIRST_CLASS_NEWS_SOURCES } from './sources.js';
+import type { NewsSearchResult, NewsSourceCategory } from './types.js';
 
 type GoogleProvider = ReturnType<typeof createGoogle>;
+
+export interface BundledNewsCheck {
+  articles: Array<{
+    category: NewsSourceCategory;
+    corroboratedBy?: string[];
+    excerpt?: string;
+    publishedAt: string;
+    publisherLabel: string;
+    stale?: true;
+    team?: string;
+    title: string;
+    url: string;
+  }>;
+  coverage: {
+    categories: NewsSourceCategory[];
+    failedSourceIds?: string[];
+    publisherCount: number;
+    resultCount: number;
+    selectedSourceCount: number;
+    successfulSourceCount: number;
+  };
+  fallbackRecommended: boolean;
+  playerName: string;
+  query: string;
+  searchedAt: string;
+}
+
+export function compactNewsSearchResult(
+  output: NewsSearchResult,
+): Omit<BundledNewsCheck, 'playerName'> {
+  return {
+    articles: output.articles.map((article) => ({
+      category: article.category,
+      ...(article.corroboratedBy?.length
+        ? { corroboratedBy: article.corroboratedBy }
+        : {}),
+      ...(article.excerpt ? { excerpt: article.excerpt.slice(0, 280) } : {}),
+      publishedAt: article.publishedAt,
+      publisherLabel: article.publisherLabel,
+      ...(article.stale ? { stale: true } : {}),
+      ...(article.team ? { team: article.team } : {}),
+      title: article.title,
+      url: article.url,
+    })),
+    coverage: {
+      categories: output.coverage.categories,
+      ...(output.coverage.failedSources.length > 0
+        ? {
+            failedSourceIds: output.coverage.failedSources.map(
+              (failure) => failure.id,
+            ),
+          }
+        : {}),
+      publisherCount: output.coverage.publisherCount,
+      resultCount: output.coverage.resultCount,
+      selectedSourceCount: output.coverage.selectedSourceCount,
+      successfulSourceCount: output.coverage.successfulSourceCount,
+    },
+    fallbackRecommended: output.fallbackRecommended,
+    query: output.query,
+    searchedAt: output.searchedAt,
+  };
+}
+
+export async function bundleCandidateNewsChecks(
+  news: Pick<NewsClient, 'search'>,
+  candidates: readonly { name: string; team?: string | null | undefined }[],
+  maxCandidates = 6,
+): Promise<BundledNewsCheck[]> {
+  throwIfRequestAborted();
+  const seen = new Set<string>();
+  const selected: Array<{ name: string; team?: string }> = [];
+  for (const candidate of candidates) {
+    if (selected.length >= maxCandidates) break;
+    const name = candidate.name.trim();
+    const key = normalizePlayerName(name);
+    if (!key || key === 'empty slot' || seen.has(key)) continue;
+    seen.add(key);
+    const team = candidate.team?.trim().toUpperCase();
+    selected.push({
+      name,
+      ...(team && /^[A-Z]{2,3}$/u.test(team) ? { team } : {}),
+    });
+  }
+  const settled = await Promise.all(
+    selected.map(async (candidate): Promise<BundledNewsCheck | null> => {
+      const query = candidate.name;
+      try {
+        const output = await news.search({
+          limit: 4,
+          maxAgeDays: 7,
+          query,
+          ...(candidate.team ? { teams: [candidate.team] } : {}),
+        });
+        return {
+          ...compactNewsSearchResult(output),
+          fallbackRecommended: output.coverage.successfulSourceCount === 0,
+          playerName: candidate.name,
+        };
+      } catch {
+        throwIfRequestAborted();
+        return null;
+      }
+    }),
+  );
+  return settled.filter((item): item is BundledNewsCheck => item !== null);
+}
 
 export function createGroundedNewsTools(google: GoogleProvider) {
   return {
@@ -53,38 +163,7 @@ export function createFirstClassNewsTools(news: NewsClient) {
       }),
       toModelOutput: ({ output }) => ({
         type: 'json',
-        value: {
-          articles: output.articles.map((article) => ({
-            category: article.category,
-            ...(article.corroboratedBy?.length
-              ? { corroboratedBy: article.corroboratedBy }
-              : {}),
-            ...(article.excerpt ? { excerpt: article.excerpt.slice(0, 280) } : {}),
-            publishedAt: article.publishedAt,
-            publisherLabel: article.publisherLabel,
-            ...(article.stale ? { stale: true } : {}),
-            ...(article.team ? { team: article.team } : {}),
-            title: article.title,
-            url: article.url,
-          })),
-          coverage: {
-            categories: output.coverage.categories,
-            ...(output.coverage.failedSources.length > 0
-              ? {
-                  failedSourceIds: output.coverage.failedSources.map(
-                    (failure) => failure.id,
-                  ),
-                }
-              : {}),
-            publisherCount: output.coverage.publisherCount,
-            resultCount: output.coverage.resultCount,
-            selectedSourceCount: output.coverage.selectedSourceCount,
-            successfulSourceCount: output.coverage.successfulSourceCount,
-          },
-          fallbackRecommended: output.fallbackRecommended,
-          query: output.query,
-          searchedAt: output.searchedAt,
-        } as unknown as JSONValue,
+        value: compactNewsSearchResult(output) as unknown as JSONValue,
       }),
     }),
   };

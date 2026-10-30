@@ -68,6 +68,13 @@ export interface ResolvedDecisionContext {
   week: DecisionContextField<number>;
 }
 
+export interface SessionWorkingMemory {
+  decisions: string[];
+  notedPreferences: string[];
+  trackedPlayers: string[];
+  updatedAt: string;
+}
+
 export interface SessionState {
   accountError: string | null;
   accountStatus: 'disconnected' | 'error' | 'ready';
@@ -76,6 +83,7 @@ export interface SessionState {
   leagueSeason: number;
   leagues: SessionLeagueContext[];
   leagueOptions: string[];
+  memory?: SessionWorkingMemory | undefined;
   mode: SebExperienceMode;
   player: string | null;
   rosterId: number | null;
@@ -246,6 +254,7 @@ export function formatSessionData(state: SessionState): string {
       team: state.team,
     },
     decisionContext: decision,
+    ...(hasSessionWorkingMemory(state.memory) ? { workingMemory: state.memory } : {}),
     sleeper: {
       user: state.user,
       userId: state.userId,
@@ -282,6 +291,11 @@ export function formatSessionStatus(state: SessionState): string {
     `- Fantasy leagues: ${state.leagues.length}`,
     `- Focused league: ${focusedLeagueName(state)}`,
     `- Looking at: ${state.player ?? state.team ?? 'no specific player or team'}`,
+    ...(hasSessionWorkingMemory(state.memory)
+      ? [
+          `- Working memory: ${state.memory.notedPreferences.length} preferences, ${state.memory.trackedPlayers.length} tracked players, ${state.memory.decisions.length} decisions`,
+        ]
+      : []),
     '',
     '### Decision context',
     '',
@@ -364,6 +378,7 @@ export function getContextualSuggestions(state: SessionState): string[] {
   if (state.mode === 'fantasy') {
     return state.user
       ? [
+          '/brief',
           'Give me my fantasy dashboard across all leagues.',
           'Show urgent news for players on my fantasy rosters.',
           'What needs my attention before the next league deadline?',
@@ -836,4 +851,156 @@ function friendlyLeagueStatus(value: string): string {
 function nflSeason(now: Date): number {
   const month = now.getUTCMonth() + 1;
   return month <= 2 ? now.getUTCFullYear() - 1 : now.getUTCFullYear();
+}
+
+export function hasSessionWorkingMemory(
+  memory: SessionWorkingMemory | undefined,
+): memory is SessionWorkingMemory {
+  return Boolean(
+    memory &&
+      (memory.decisions.length > 0 ||
+        memory.notedPreferences.length > 0 ||
+        memory.trackedPlayers.length > 0),
+  );
+}
+
+export function clearSessionWorkingMemory(state: SessionState): void {
+  delete state.memory;
+}
+
+const PREFERENCE_PATTERNS: readonly RegExp[] = [
+  /\b(?:(?:i\s+)?(?:do\s+not|don['’]?t|never)\s+)?(?:i\s+)?(?:prefer|need|want|prioritize|play(?:ing)?\s+for)\b[^.!?\n]{0,70}\b(?:safe\s+floor|floor|consistency|high\s+ceiling|ceiling|upside|boom[\s-]*(?:or[\s-]*)?bust)\b/iu,
+  /\b(?:my|our|this)\s+league\s+(?:is|uses)\s+[^.!?\n]{3,90}/iu,
+  /\b(?:avoid|don['’]?t\s+start|never\s+start|skip)\b[^.!?\n]{0,60}\b(?:thursday|tnf|london|weather|rain|snow)\b/iu,
+  /\b(?:(?:(?:i\s+)?(?:do\s+not|don['’]?t|never)\s+)?(?:save|conserve|spend|blow)|conservative|aggressive)\b[^.!?\n]{0,50}\bfaab\b/iu,
+  /\b(?:remember\s+that|note\s+that|keep\s+in\s+mind|constraint\s*:)\s*[^.!?\n]{4,120}/iu,
+];
+
+function sanitizeMemoryEntry(value: string, maxLength: number): string {
+  const cleaned = value
+    .replace(/[\u0000-\u001F\u007F]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength - 1).trimEnd()}…` : cleaned;
+}
+
+function pushBoundedUnique(list: string[], entry: string, maxItems: number): boolean {
+  if (!entry) return false;
+  const before = JSON.stringify(list);
+  const lower = entry.toLowerCase();
+  const existing = list.findIndex((item) => item.toLowerCase() === lower);
+  if (existing >= 0) list.splice(existing, 1);
+  list.push(entry);
+  if (list.length > maxItems) list.splice(0, list.length - maxItems);
+  return JSON.stringify(list) !== before;
+}
+
+export function recordSessionTurnMemory(
+  state: SessionState,
+  input: {
+    answerText?: string | undefined;
+    evicted?: boolean | undefined;
+    player?: string | null | undefined;
+    players?: readonly string[] | undefined;
+    userPrompt: string;
+  },
+  now = new Date(),
+): void {
+  const prompt = input.userPrompt.trim();
+  const memory: SessionWorkingMemory = state.memory
+    ? {
+        decisions: [...state.memory.decisions],
+        notedPreferences: [...state.memory.notedPreferences],
+        trackedPlayers: [...state.memory.trackedPlayers],
+        updatedAt: state.memory.updatedAt,
+      }
+    : {
+        decisions: [],
+        notedPreferences: [],
+        trackedPlayers: [],
+        updatedAt: now.toISOString(),
+      };
+  let touched = false;
+
+  const candidatePlayers = input.players
+    ? [...input.players]
+    : input.player
+      ? [input.player]
+      : [];
+  for (const candidate of candidatePlayers) {
+    const cleanPlayer = sanitizeMemoryEntry(candidate, 100);
+    if (cleanPlayer && pushBoundedUnique(memory.trackedPlayers, cleanPlayer, 16)) {
+      touched = true;
+    }
+  }
+
+  for (const pattern of PREFERENCE_PATTERNS) {
+    const match = pattern.exec(prompt);
+    if (match?.[0]) {
+      const pref = sanitizeMemoryEntry(match[0], 200);
+      if (pref && pushBoundedUnique(memory.notedPreferences, pref, 8)) {
+        touched = true;
+      }
+    }
+  }
+
+  const answer = (input.answerText ?? '')
+    .replace(/(?:^|\r?\n)##\s+Evidence\r?\n[\s\S]*$/u, '')
+    .trim();
+  const blockedDecision = /^#*\s*decision unavailable\b/iu.test(answer);
+  const recommendationMatch = !blockedDecision
+    ? /(?:^|\n)\s*[-*•]?\s*\*{0,2}Recommendation\*{0,2}\s*:\s*([^\n]{4,200})/iu.exec(answer)
+    : null;
+  if (recommendationMatch?.[1]) {
+    const rec = sanitizeMemoryEntry(recommendationMatch[1], 240);
+    if (rec && pushBoundedUnique(memory.decisions, rec, 12)) {
+      touched = true;
+    }
+  } else if (input.evicted && prompt && answer && !blockedDecision) {
+    const qSnippet = sanitizeMemoryEntry(prompt, 90);
+    const firstAnswerLine = answer
+      .split(/\r?\n/u)
+      .map((line) => line.replace(/^#+\s*/u, '').trim())
+      .find((line) => line.length > 0 && !line.startsWith('[Verified tool calls'));
+    if (firstAnswerLine && !firstAnswerLine.endsWith('?')) {
+      const summary = sanitizeMemoryEntry(`${qSnippet} -> ${firstAnswerLine}`, 240);
+      if (summary && pushBoundedUnique(memory.decisions, summary, 12)) {
+        touched = true;
+      }
+    }
+  }
+
+  if (touched) {
+    memory.updatedAt = now.toISOString();
+    state.memory = memory;
+  }
+}
+
+export function formatSessionWorkingMemory(state: SessionState): string {
+  if (!hasSessionWorkingMemory(state.memory)) {
+    return [
+      '## Session working memory',
+      '',
+      'No pinned preferences, tracked players, or compacted decisions are stored in this session yet.',
+      '',
+      'Seb automatically captures floor/ceiling preferences, league constraints, tracked players, and earlier decisions across long multi-turn sessions.',
+    ].join('\n');
+  }
+  const { decisions, notedPreferences, trackedPlayers, updatedAt } = state.memory;
+  return [
+    '## Session working memory',
+    '',
+    `Updated: ${updatedAt}`,
+    '',
+    ...(notedPreferences.length > 0
+      ? ['### Noted preferences & constraints', '', ...notedPreferences.map((item) => `- ${item}`), '']
+      : []),
+    ...(trackedPlayers.length > 0
+      ? [`### Tracked players (${trackedPlayers.length})`, '', `- ${trackedPlayers.join(', ')}`, '']
+      : []),
+    ...(decisions.length > 0
+      ? ['### Pinned decisions & earlier turns', '', ...decisions.map((item) => `- ${item}`), '']
+      : []),
+    'Run `/memory clear` to reset pinned session memory.',
+  ].join('\n');
 }

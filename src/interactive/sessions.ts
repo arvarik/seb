@@ -7,14 +7,21 @@ import { z } from 'zod';
 import { readBoundedUtf8File } from '../setup/bounded-file.js';
 import { isLocalOnlyInteractiveCommandInput } from './commands.js';
 import { promptHistoryPath } from './history.js';
-import type { SessionState } from './session.js';
+import { hasSessionWorkingMemory, type SessionState } from './session.js';
 
 const MAX_BYTES = 32 * 1024 * 1024;
 const idSchema = z.string().regex(/^seb-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u);
+const memorySchema = z.object({
+  decisions: z.array(z.string().max(240)).max(12),
+  notedPreferences: z.array(z.string().max(200)).max(8),
+  trackedPlayers: z.array(z.string().max(100)).max(16),
+  updatedAt: z.string(),
+});
 const contextSchema = z.object({
   user: z.string().nullable(), leagueId: z.string().nullable(), rosterId: z.number().int().nullable(),
   player: z.string().nullable(), team: z.string().nullable(), skillId: z.string(),
   mode: z.enum(['explore', 'analyze', 'fantasy']), contextAfterMessageId: z.string().nullable(),
+  memory: memorySchema.optional(),
 });
 const sourceSchema = z.object({ id: z.string(), label: z.string(), url: z.string(), accessedAt: z.string(),
   retrievedAt: z.string().optional(), cacheOutcome: z.enum(['cache-fresh', 'source-updated', 'source-not-modified', 'stale-if-error']).optional(),
@@ -25,7 +32,14 @@ const snapshotSchema = z.object({ version: z.literal(1), id: idSchema, updatedAt
   evidence: z.array(z.object({ answerId: z.string(), capturedAt: z.string(), sources: z.array(sourceSchema) })).max(50),
 });
 export type SavedSession = Omit<z.infer<typeof snapshotSchema>, 'messages' | 'evidence'> & { messages: UIMessage[]; evidence: SourceEvidenceSnapshot[] };
-export function sessionContext(session: SessionState): SavedSession['context'] { return contextSchema.parse(session); }
+export function sessionContext(session: SessionState): SavedSession['context'] {
+  const parsed = contextSchema.parse(session);
+  if (parsed.memory && !hasSessionWorkingMemory(parsed.memory)) {
+    const { memory: _memory, ...rest } = parsed;
+    return rest;
+  }
+  return parsed;
+}
 export function sessionsEnabled(environment: NodeJS.ProcessEnv): boolean {
   return ![environment.SEB_SESSIONS, environment.SEB_HISTORY].some(v => ['0', 'off', 'false', 'no'].includes(v?.trim().toLowerCase() ?? ''));
 }
@@ -60,6 +74,76 @@ export class SessionStore {
       } catch { /* A damaged snapshot remains untouched. */ }
     }
     return entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+  async resolve(selector?: string): Promise<string> {
+    const query = selector?.trim() ?? '';
+    if (!query || query.toLowerCase() === 'latest' || query.toLowerCase() === 'last') {
+      const entries = await this.list();
+      if (entries.length === 0) {
+        throw new Error('No saved sessions found. Start a conversation with seb first.');
+      }
+      const preferred = entries.find(
+        (entry) =>
+          entry.title !== 'Empty conversation' && !isLocalOnlyInteractiveCommandInput(entry.title),
+      );
+      return (preferred ?? entries[0]!).id;
+    }
+    if (idSchema.safeParse(query).success) {
+      await this.load(query);
+      return query;
+    }
+    if (/^[1-9]\d*$/u.test(query)) {
+      const entries = await this.list();
+      if (entries.length === 0) {
+        throw new Error('No saved sessions found. Start a conversation with seb first.');
+      }
+      const chosen = entries[Number(query) - 1];
+      if (!chosen) {
+        throw new Error(
+          `Saved session #${query} does not exist (${entries.length} available). Use seb sessions to list saved sessions.`,
+        );
+      }
+      return chosen.id;
+    }
+    const entries = await this.list();
+    if (entries.length === 0) {
+      throw new Error('No saved sessions found. Start a conversation with seb first.');
+    }
+    const needle = query.toLowerCase();
+    const prefixMatches = entries.filter(
+      (entry) =>
+        entry.id.toLowerCase().startsWith(needle) ||
+        entry.id.slice(4).toLowerCase().startsWith(needle),
+    );
+    if (prefixMatches.length === 1) return prefixMatches[0]!.id;
+    if (prefixMatches.length > 1) {
+      throw new Error(
+        `Session prefix "${query}" matches ${prefixMatches.length} saved sessions. Use a longer prefix or run seb sessions.`,
+      );
+    }
+    const titleMatches = entries.filter((entry) => entry.title.toLowerCase().includes(needle));
+    if (titleMatches.length > 0) return titleMatches[0]!.id;
+    for (const entry of entries) {
+      try {
+        const saved = await this.load(entry.id);
+        const localIds = new Set(saved.localOnlyMessageIds ?? []);
+        const matchedTranscript = saved.messages.some((message) => {
+          if (message.role !== 'user' || localIds.has(message.id)) return false;
+          const text = userMessageText(message);
+          return !isLocalOnlyInteractiveCommandInput(text) && text.toLowerCase().includes(needle);
+        });
+        const matchedContext =
+          Boolean(saved.context.player?.toLowerCase().includes(needle)) ||
+          Boolean(saved.context.leagueId?.toLowerCase().includes(needle)) ||
+          Boolean(saved.context.memory?.trackedPlayers.some((p) => p.toLowerCase().includes(needle)));
+        if (matchedTranscript || matchedContext) return entry.id;
+      } catch {
+        // Ignore unreadable sessions during search.
+      }
+    }
+    throw new Error(
+      `No saved session matched "${query}". Use seb sessions to list saved sessions.`,
+    );
   }
   async acquire(id: string): Promise<void> {
     const lock = `${this.path(id)}.lock`;

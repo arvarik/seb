@@ -258,6 +258,7 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
       'Bot connectors for Discord, Slack, Telegram, and GroupMe built on Hono and Chat SDK, enabling multi-platform team league intelligence.',
     keyPrinciples: [
       'Discord, Slack (Socket Mode & Webhook), Telegram, and GroupMe adapters',
+      'Outbound weekly brief push delivery (`seb brief --post slack|discord|telegram|groupme`)',
       'Multi-channel isolation and state persistence via memory or Redis',
       'Bounded 2-minute deadline per reply with graceful cancellation',
     ],
@@ -298,8 +299,9 @@ const TOPIC_DETAILS: Readonly<Record<SystemTopic, SystemTopicDetail>> = {
     content: [
       '# Terminal UI & Commands',
       '',
-      '- Interactive TUI: Complete terminal environment with scrollback and custom color themes.',
-      '- Slash Commands: /explore, /fantasy, /analyze, /connect, /leagues, /skill matchup, /about, /doctor, /usage.',
+      '- Interactive TUI: Complete terminal environment with scrollback, resumable sessions (`seb resume`, `seb sessions`), and working memory (`/memory`).',
+      '- Weekly Autopilot Brief: `seb brief` or `/brief` fans out across active Sleeper leagues for lineup swaps, matchup odds, FAAB/waiver targets, and verified news.',
+      '- Slash Commands: /explore, /fantasy, /analyze, /brief, /memory, /connect, /leagues, /skill matchup, /about, /doctor, /usage.',
       '- Quick Keys: Ctrl+G inspects session context; Ctrl+K opens the command catalog.',
     ].join('\n'),
   },

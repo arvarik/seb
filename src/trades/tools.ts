@@ -1,6 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 
+import type { NewsClient } from '../news/client.js';
+import { bundleCandidateNewsChecks } from '../news/tools.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import { TradeImpactService } from './service.js';
@@ -20,12 +22,13 @@ function normalizePlayerName(value: string): string {
 export function createTradeTools(
   sleeper: SleeperClient,
   nflverse: NflverseClient,
+  news?: Pick<NewsClient, 'search'>,
 ) {
   const service = new TradeImpactService(sleeper, nflverse);
   return {
     analyzeTradeImpact: tool({
       description:
-        'Compare both sides of a trade with league scoring, completed production, player status, and roster depth. This tool does not issue the final recommendation.',
+        'Compare both sides of a trade with league scoring, completed production, player status, roster depth, and automatically bundled first-class newsroom checks. This tool does not issue the final recommendation.',
       inputSchema: z.object({
         leagueId: z.string().trim().regex(/^\d+$/),
         rosterId: z.number().int().positive(),
@@ -51,14 +54,26 @@ export function createTradeTools(
         receivePlayerNames,
         analysisSeason,
         throughWeek,
-      }) => service.analyze({
-        givePlayerNames,
-        leagueId,
-        receivePlayerNames,
-        rosterId,
-        ...(analysisSeason === undefined ? {} : { analysisSeason }),
-        ...(throughWeek === undefined ? {} : { throughWeek }),
-      }),
+      }) => {
+        const result = await service.analyze({
+          givePlayerNames,
+          leagueId,
+          receivePlayerNames,
+          rosterId,
+          ...(analysisSeason === undefined ? {} : { analysisSeason }),
+          ...(throughWeek === undefined ? {} : { throughWeek }),
+        });
+        if (!news) return result;
+        const bundledNewsChecks = await bundleCandidateNewsChecks(
+          news,
+          [...result.give.players, ...result.receive.players].map((player) => ({
+            name: player.name,
+            team: player.team,
+          })),
+          8,
+        );
+        return { ...result, bundledNewsChecks };
+      },
     }),
   };
 }

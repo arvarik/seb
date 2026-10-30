@@ -20,6 +20,15 @@ import {
   type FantasyAnalysis,
 } from './analysis/output.js';
 import {
+  buildWeeklyPortfolioBrief,
+  formatWeeklyPortfolioBrief,
+  stripPortfolioBriefRawData,
+} from './analysis/portfolio-brief.js';
+import {
+  postOutboundConnectorMessage,
+  validateOutboundConnectorTarget,
+} from './connectors/bot.js';
+import {
   buildFreeformRecommendationEvidence,
   buildRecommendationEvidence,
   buildRecommendationRecoveryPrompt,
@@ -377,8 +386,86 @@ export async function runCli(
     }
     case 'sessions': {
       const saved = await new SessionStore(environment).list();
-      streams.stdout.write(saved.length ? saved.map(s => `${s.id}  ${s.updatedAt}\n  ${sanitizeTerminalText(s.title)}`).join('\n') + '\n' : 'No saved sessions.\n');
+      if (command.json) {
+        streams.stdout.write(`${JSON.stringify(saved)}\n`);
+        return 0;
+      }
+      streams.stdout.write(
+        saved.length
+          ? `${saved.map((s, idx) => `${idx + 1}. ${s.id}  ${s.updatedAt}\n   ${sanitizeTerminalText(s.title)}`).join('\n')}\n`
+          : 'No saved sessions.\n',
+      );
       return 0;
+    }
+    case 'brief': {
+      if (command.post) {
+        validateOutboundConnectorTarget({
+          ...(command.channel ? { channel: command.channel } : {}),
+          connector: command.post,
+          environment,
+        });
+      }
+      const profile = await new FileSetupProfileStore({ environment }).load();
+      const username =
+        command.username ??
+        (command.rosterId === undefined
+          ? (profile?.sleeper?.username ?? environment.SEB_SLEEPER_USER?.trim() ?? undefined)
+          : undefined);
+      const sources = new SourceTracker();
+      const clients = createDataClients(environment.NWS_USER_AGENT?.trim() || undefined, sources);
+      const stopProgress = startAnswerProgress(
+        streams.stderr,
+        !command.noProgress && !command.json,
+      );
+      let brief: Awaited<ReturnType<typeof buildWeeklyPortfolioBrief>>;
+      try {
+        brief = await buildWeeklyPortfolioBrief(
+          {
+            news: clients.newsClient,
+            nflverse: clients.nflverseClient,
+            sleeper: clients.sleeperClient,
+            snapshotDatabase: getSharedSebDatabase(),
+            weather: clients.weatherClient,
+          },
+          {
+            ...(command.leagueId ? { leagueId: command.leagueId } : {}),
+            ...(command.rosterId !== undefined ? { rosterId: command.rosterId } : {}),
+            ...(command.season !== undefined ? { season: command.season } : {}),
+            ...(username ? { username } : {}),
+            ...(command.week !== undefined ? { week: command.week } : {}),
+          },
+        );
+      } finally {
+        stopProgress();
+      }
+      const formatted = formatWeeklyPortfolioBrief(brief);
+      const allFailed = brief.leagues.length > 0 && brief.leagues.every((l) => Boolean(l.error));
+      const delivery = command.post && !allFailed
+        ? await postOutboundConnectorMessage({
+            ...(command.channel ? { channel: command.channel } : {}),
+            connector: command.post,
+            environment,
+            text: formatted,
+          })
+        : undefined;
+      if (command.json) {
+        streams.stdout.write(
+          `${JSON.stringify({
+            ...stripPortfolioBriefRawData(brief),
+            ...(delivery ? { delivery } : {}),
+            markdown: formatted.trimEnd(),
+            sources: sources.list(),
+          })}\n`,
+        );
+      } else {
+        streams.stdout.write(formatted);
+        if (delivery) {
+          streams.stdout.write(
+            `\nPosted weekly brief to ${delivery.connector}${delivery.channel ? ` (${delivery.channel})` : ''} (${delivery.chunksSent} message${delivery.chunksSent === 1 ? '' : 's'}).\n`,
+          );
+        }
+      }
+      return allFailed ? 1 : 0;
     }
     case 'chat':
       await startInteractiveChat(command, streams, environment);
@@ -462,9 +549,12 @@ async function startInteractiveChat(
     );
   }
 
+  let resolvedResumeId: string | undefined;
   if (command.resumeId) {
     if (!sessionsEnabled(environment)) throw new CliUsageError('Session saving is disabled. Enable SEB_SESSIONS and SEB_HISTORY to resume.');
-    await new SessionStore(environment).load(command.resumeId);
+    const sessionStore = new SessionStore(environment);
+    resolvedResumeId = await sessionStore.resolve(command.resumeId);
+    await sessionStore.load(resolvedResumeId);
   }
   const selection = await selectModels(
     environment,
@@ -503,6 +593,7 @@ async function startInteractiveChat(
       ...clients,
       getRuntimeContext: () => formatSessionData(session),
       getRuntimeInstructions: () => formatSessionInstructions(session),
+      snapshotDatabase: database,
       telemetryFunctionId: 'seb.interactive.research',
       telemetryIntegrations: [telemetry],
     });
@@ -511,7 +602,7 @@ async function startInteractiveChat(
   const provider = activeModelProvider.provider;
   const providerLabel = MODEL_PROVIDER_LABELS[provider];
   await runSebInteractiveTui({
-    ...(command.resumeId ? { resumeId: command.resumeId } : {}),
+    ...(resolvedResumeId ? { resumeId: resolvedResumeId } : {}),
     transport: new SebInteractiveTransport({
       agent,
       doctor: (offline) => runDoctor({
@@ -871,6 +962,7 @@ async function generateWithModel(
     ...clients,
     getRuntimeContext: () => automaticContext.data,
     getRuntimeInstructions: () => automaticContext.instructions,
+    snapshotDatabase: getSharedSebDatabase(),
     telemetryFunctionId: 'seb.cli.research',
     telemetryIntegrations: [new SebUsageTelemetry({
       agentKind: 'research',
@@ -1214,6 +1306,7 @@ async function streamAnswer(
       ...clients,
       getRuntimeContext: () => automaticContext.data,
       getRuntimeInstructions: () => automaticContext.instructions,
+      snapshotDatabase: getSharedSebDatabase(),
       telemetryFunctionId: 'seb.cli.research',
       telemetryIntegrations: [usageTelemetry],
     });
@@ -1315,8 +1408,12 @@ async function streamAnswer(
   if (!wroteText) {
     throw new Error('The model provider returned an empty answer. Try again.');
   }
+  const directList = directSources.list();
+  const discoveryFeeds = directList.filter((source) => source.id.startsWith('news-source:'));
+  const collapseDiscoveryFeeds = discoveryFeeds.length > 5;
   const sources = new Map<string, string>();
-  for (const source of directSources.list()) {
+  for (const source of directList) {
+    if (collapseDiscoveryFeeds && source.id.startsWith('news-source:')) continue;
     const details = [
       source.label,
       source.cacheOutcome?.replace(/-/g, ' '),
@@ -1324,6 +1421,12 @@ async function streamAnswer(
       source.warnings?.join(' '),
     ].filter(Boolean).join(' · ');
     sources.set(source.url, details);
+  }
+  if (collapseDiscoveryFeeds) {
+    sources.set(
+      'https://github.com/arvarik/seb#newsroom',
+      `Seb NFL newsroom (${discoveryFeeds.length} feeds checked)`,
+    );
   }
   for (const source of webSources.values()) {
     if (!sources.has(source.url)) {

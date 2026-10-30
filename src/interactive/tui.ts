@@ -191,7 +191,10 @@ export interface SebInteractiveTuiOptions {
   session: SessionState;
   sources?: SourceTracker;
   title: string;
-  transport: ChatTransport<UIMessage>;
+  transport: ChatTransport<UIMessage> & {
+    restoreLocalOnlyMessages?(ids: readonly string[] | undefined): void;
+    savedLocalOnlyMessages?(): string[];
+  };
   uiState?: InteractiveUiState;
   version?: string;
 }
@@ -238,6 +241,7 @@ export async function runSebInteractiveTui(
         uiState.notification = 'The saved league is no longer available. Choose a current league.';
       }
       for (const evidence of previous.evidence) uiState.recordAnswerEvidence(evidence);
+      options.transport.restoreLocalOnlyMessages?.(previous.localOnlyMessageIds);
       const latest = [...previous.messages].reverse().find(m => m.role === 'assistant');
       uiState.latestAnswer = latest?.parts.filter(p => p.type === 'text').map(p => p.text).join('\n') ?? '';
       uiState.latestPrompt = [...previous.messages].reverse().find(m => m.role === 'user')?.parts.filter(p => p.type === 'text').map(p => p.text).join('\n') ?? '';
@@ -250,8 +254,12 @@ export async function runSebInteractiveTui(
       checkpoint: async messages => {
         if (!store || !locked) return;
         try {
-          await store.save({ version: 1, id: chatId, updatedAt: new Date().toISOString(), messages: [...messages],
-            context: sessionContext(options.session), evidence: uiState.savedEvidence() });
+          const localOnlyMessageIds = options.transport.savedLocalOnlyMessages?.();
+          await store.save({
+            version: 1, id: chatId, updatedAt: new Date().toISOString(), messages: [...messages],
+            context: sessionContext(options.session), evidence: uiState.savedEvidence(),
+            ...(localOnlyMessageIds && localOnlyMessageIds.length > 0 ? { localOnlyMessageIds } : {}),
+          });
           saved = true;
           if (uiState.notification === warning) uiState.notification = '';
           warning = '';

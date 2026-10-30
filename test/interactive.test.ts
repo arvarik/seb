@@ -2679,5 +2679,20 @@ describe('interactive context compaction under character budget', () => {
     expect(secondPromptJson).toContain('Turn 1 anchor: Breece Hall check.');
     expect(secondPromptJson).toContain('Verified tool calls in this turn (outputs compacted): projectPlayer');
     expect(secondPromptJson).toContain('Verified tool calls in this turn (outputs compacted): optimizeRosterLineup');
+
+    capturedPrompts.length = 0;
+    transport.restoreLocalOnlyMessages(['local-err-u']);
+    expect(transport.savedLocalOnlyMessages()).toEqual(['local-err-u']);
+    await sendConversation(transport, [
+      { id: 'slash-u', role: 'user', parts: [{ type: 'text', text: '/help' }] },
+      { id: 'slash-a', role: 'assistant', parts: [{ type: 'text', text: 'Slash help catalog output.' }] },
+      { id: 'local-err-u', role: 'user', parts: [{ type: 'text', text: 'Oversized local error prompt.' }] },
+      { id: 'local-err-a', role: 'assistant', parts: [{ type: 'text', text: 'Input error: too long.' }] },
+      { id: 'real-u', role: 'user', parts: [{ type: 'text', text: 'Who won Week 7?' }] },
+    ]);
+    const resumedPromptJson = JSON.stringify(capturedPrompts[0]);
+    expect(resumedPromptJson).not.toContain('Slash help catalog output.');
+    expect(resumedPromptJson).not.toContain('Oversized local error prompt.');
+    expect(resumedPromptJson).toContain('Who won Week 7?');
   });
 });

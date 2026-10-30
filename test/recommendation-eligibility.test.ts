@@ -1423,6 +1423,150 @@ describe('dogfood edge cases: bye comparisons, proactive streamers, unfound foil
       projection: 'eligible',
     });
   });
+
+  it('ignores negated recommendation disclaimers, preserves pure all-option refusals, and scopes lineup/waiver status checks', () => {
+    expect(questionRequestsRecommendation(
+      'Explain how PPR vs Half-PPR vs TEP affects league 1389392984620953600; do not make any player recommendations.',
+    )).toBe(false);
+    expect(questionRequestsRecommendation('Summarize roster rules with no player recommendations.')).toBe(false);
+    expect(questionRequestsRecommendation(
+      'Do not make waiver recommendations, just tell me: should I start Josh Allen?',
+    )).toBe(true);
+
+    const incompleteEvidence: RecommendationEvidence = {
+      currentEvidence: 'fresh',
+      identity: 'missing',
+      injury: 'missing',
+      leagueScoring: 'missing',
+      projection: 'ineligible',
+    };
+    expect(enforceFreeformRecommendation(
+      '**None of the three can fill your Week 8 flex.** Nabers is on bye, Brady is retired, and Vortex is unfound.',
+      incompleteEvidence,
+    ).eligibility.outcome).toBe('not-applicable');
+    expect(enforceFreeformRecommendation(
+      "**Short answer:** Don't start any of the three.",
+      incompleteEvidence,
+    ).eligibility.outcome).toBe('not-applicable');
+    expect(enforceFreeformRecommendation(
+      'None of the three works. Start Josh Allen instead.',
+      incompleteEvidence,
+    ).eligibility.outcome).toBe('blocked');
+
+    const freshSources: DataSourceRecord[] = [
+      { accessedAt: '2026-10-29T00:00:00Z', cacheOutcome: 'source-updated', id: 'sleeper:1', label: 'Sleeper', retrievedAt: '2026-10-29T00:00:00Z', url: 'https://api.sleeper.app' },
+      { accessedAt: '2026-10-29T00:00:00Z', cacheOutcome: 'source-updated', id: 'news-article:1', label: 'ESPN', retrievedAt: '2026-10-29T00:00:00Z', url: 'https://www.espn.com/nfl/story' },
+    ];
+    const zeroSwapToolResult: RecommendationToolResult = {
+      input: { leagueId: '1389392984620953600', rosterId: 1 },
+      output: {
+        league: { leagueId: '1389392984620953600' },
+        projections: [
+          { playerName: 'Josh Allen', projection: { limitations: [], player: { injuryStatus: null, name: 'Josh Allen', playerId: 'qb1', position: 'QB', team: 'BUF' }, recommendationEligible: true, scoring: { ignoredSettings: [], usedSettings: ['pass_td'] } }, status: 'projected' },
+          { playerName: 'Amon-Ra St. Brown', projection: { limitations: [], player: { injuryStatus: 'Questionable', name: 'Amon-Ra St. Brown', playerId: 'wr1', position: 'WR', team: 'DET' }, recommendationEligible: true, scoring: { ignoredSettings: [], usedSettings: ['rec'] } }, status: 'projected' },
+        ],
+        recommendationEligible: true,
+        recommendedSwaps: [],
+      },
+      toolName: 'optimizeRosterLineup',
+    };
+    expect(buildFreeformRecommendationEvidence({
+      question: 'Optimize my full Week 8 starting lineup in league 1389392984620953600.',
+      sources: freshSources,
+      toolResults: [zeroSwapToolResult],
+    })).toMatchObject({
+      injury: 'missing',
+      missingStatusSubjects: ['amon ra st brown'],
+    });
+    const zeroSwapLineup = buildFreeformRecommendationEvidence({
+      question: 'Optimize my full Week 8 starting lineup in league 1389392984620953600.',
+      sources: freshSources,
+      toolResults: [
+        zeroSwapToolResult,
+        {
+          input: { query: 'Amon-Ra St. Brown' },
+          output: { articles: [{ publishedAt: '2026-10-29T00:00:00Z', stale: false, summary: 'Amon-Ra St. Brown practiced Thursday.', title: 'Amon-Ra St. Brown injury update' }] },
+          toolName: 'searchFirstClassNews',
+        },
+      ],
+    });
+    expect(zeroSwapLineup.injury).toBe('present');
+
+    const swapMissingBenchNews = buildFreeformRecommendationEvidence({
+      question: 'Optimize my full Week 8 starting lineup in league 1389392984620953600.',
+      sources: freshSources,
+      toolResults: [
+        {
+          input: { leagueId: '1389392984620953600', rosterId: 1 },
+          output: {
+            league: { leagueId: '1389392984620953600' },
+            projections: [
+              { playerName: 'MarShawn Lloyd', projection: { limitations: [], player: { injuryStatus: null, name: 'MarShawn Lloyd', playerId: 'rb2', position: 'RB', team: 'GB' }, recommendationEligible: true, scoring: { ignoredSettings: [], usedSettings: ['rec'] } }, status: 'projected' },
+            ],
+            recommendationEligible: true,
+            recommendedSwaps: [{ benchPlayer: { name: 'Rome Odunze' }, deltaMean: 0.4, slot: 'FLEX', startPlayer: { name: 'MarShawn Lloyd' } }],
+          },
+          toolName: 'optimizeRosterLineup',
+        },
+      ],
+    });
+    expect(swapMissingBenchNews.injury).toBe('missing');
+    expect(swapMissingBenchNews.missingStatusSubjects).toEqual(['marshawn lloyd']);
+    expect(buildRecommendationRecoveryPrompt({
+      blockedAnswer: 'Swap MarShawn Lloyd into FLEX.',
+      missingStatusSubjects: swapMissingBenchNews.missingStatusSubjects,
+      question: 'Optimize my full Week 8 starting lineup.',
+      reasons: ['Current player status and injury evidence is missing.'],
+    })).toContain('Missing current reporting verification for: marshawn lloyd.');
+
+    const openWaiverFollowUp = buildFreeformRecommendationEvidence({
+      question: 'Check waivers in league 1389392984620953600 for an upgrade at that position and suggest a FAAB bid.',
+      sources: freshSources,
+      toolResults: [
+        {
+          output: { league_id: '1389392984620953600', missingPlayerIds: [], players: [{ injuryStatus: null, name: 'Emanuel Wilson', playerId: 'rostered1', position: 'RB' }] },
+          toolName: 'getRosterPlayers',
+        },
+        {
+          output: {
+            league: { leagueId: '1389392984620953600' },
+            methodology: { scoringKeysIgnored: [], scoringKeysUsed: ['rec'] },
+            targets: [
+              { player: { injuryStatus: null, name: 'Unprojected Wideout', playerId: 'wr9', position: 'WR' } },
+              { player: { injuryStatus: null, name: 'Tank Bigsby', playerId: 'rb1', position: 'RB' } },
+              { player: { injuryStatus: null, name: 'Ray Davis', playerId: 'rb2', position: 'RB' } },
+              { player: { injuryStatus: null, name: 'Braelon Allen', playerId: 'rb3', position: 'RB' } },
+              { player: { injuryStatus: null, name: 'Fourth Back', playerId: 'rb4', position: 'RB' } },
+            ],
+          },
+          toolName: 'rankWaiverTargets',
+        },
+        {
+          input: { leagueId: '1389392984620953600', playerNames: ['Emanuel Wilson', 'Tank Bigsby', 'Ray Davis', 'Braelon Allen', 'Fourth Back'] },
+          output: {
+            results: ['Emanuel Wilson', 'Tank Bigsby', 'Ray Davis', 'Braelon Allen', 'Fourth Back'].map((name, idx) => ({
+              playerName: name,
+              projection: {
+                league: { leagueId: '1389392984620953600', name: 'Judgment Labs' },
+                limitations: [],
+                player: { injuryStatus: null, name, playerId: `p${idx}`, position: 'RB', team: 'JAX' },
+                recommendationEligible: true,
+                scoring: { ignoredSettings: [], usedSettings: ['rec'] },
+              },
+              status: 'projected',
+            })),
+          },
+          toolName: 'projectPlayers',
+        },
+        ...['Tank Bigsby', 'Ray Davis', 'Braelon Allen'].map((name) => ({
+          input: { query: name },
+          output: { articles: [{ publishedAt: '2026-10-29T00:00:00Z', stale: false, summary: `${name} practiced in full.`, title: `${name} update` }] },
+          toolName: 'searchFirstClassNews',
+        })),
+      ],
+    });
+    expect(openWaiverFollowUp.injury).toBe('present');
+  });
 });
 
 

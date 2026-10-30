@@ -1,5 +1,5 @@
 import { MODEL_FAMILIES, type ModelProviderId } from '../ai/model-provider.js';
-import { findSkill, SEB_SKILLS } from './skills.js';
+import { findSkill, parseSkillInvocation, SEB_SKILLS } from './skills.js';
 import { SYSTEM_TOPICS } from '../system/metadata.js';
 
 export type CompletionShell = 'bash' | 'fish' | 'zsh';
@@ -216,6 +216,23 @@ export function parseInteractiveCommandInput(
     command: findInteractiveCommand(name),
     name,
   };
+}
+
+export function isLocalOnlyInteractiveCommandInput(input: string): boolean {
+  const parsed = parseInteractiveCommandInput(input);
+  if (!parsed) return false;
+  if (parsed.command?.name === 'skill' && parseSkillInvocation(parsed.argumentText)?.prompt) {
+    return false;
+  }
+  if (
+    parsed.argumentText &&
+    (parsed.command?.name === 'analyze' ||
+      parsed.command?.name === 'explore' ||
+      parsed.command?.name === 'fantasy')
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function interactiveCommandArgumentError(

@@ -87,6 +87,7 @@ import {
   generateShellCompletion,
   interactiveCommandArgumentError,
   interactiveCommandPrivacyError,
+  isLocalOnlyInteractiveCommandInput,
   MODEL_PROVIDER_VALUES,
   parseInteractiveCommandInput,
   type CompletionShell,
@@ -392,6 +393,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           type: 'text' as const,
           text: buildRecommendationRecoveryPrompt({
             blockedAnswer: context.blockedAnswer,
+            missingStatusSubjects: context.evidence.missingStatusSubjects,
             question,
             reasons: context.reasons,
           }),
@@ -453,6 +455,17 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     return Promise.resolve(null);
   }
 
+  restoreLocalOnlyMessages(ids: readonly string[] | undefined): void {
+    this.localOnlyMessageIds.clear();
+    for (const id of ids ?? []) {
+      if (id) this.markLocalOnlyMessage(id);
+    }
+  }
+
+  savedLocalOnlyMessages(): string[] {
+    return [...this.localOnlyMessageIds];
+  }
+
   private markLocalOnlyMessage(messageId: string): void {
     this.localOnlyMessageIds.delete(messageId);
     this.localOnlyMessageIds.add(messageId);
@@ -472,7 +485,10 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     const filtered: UIMessage[] = [];
     let skipNextAssistant = false;
     for (const message of active) {
-      if (this.localOnlyMessageIds.has(message.id)) {
+      if (
+        this.localOnlyMessageIds.has(message.id) ||
+        (message.role === 'user' && isLocalOnlyInteractiveCommandInput(messageText(message)))
+      ) {
         skipNextAssistant = true;
         continue;
       }

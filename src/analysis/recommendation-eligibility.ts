@@ -18,6 +18,7 @@ export interface RecommendationEvidence {
   identity: IdentityEvidenceState;
   injury: RequiredEvidenceState;
   leagueScoring: RequiredEvidenceState;
+  missingStatusSubjects?: string[];
   projection: ProjectionEligibilityState;
   requiresRefusalOnly?: boolean;
   unfoundPlayers?: string[];
@@ -57,6 +58,8 @@ const PLAYER_DECISION =
   /\b(?:add|bench|claim|drop|faab|lineup|pick\s*up|player|rest of season|ros|sit|start|trade|waiver)\b/iu;
 const NON_DECISION_RETROSPECTIVE_OR_SYSTEM =
   /\b(?:should|would|could)\s+(?:i|we|you)\s+have\b|\bdid\s+(?:i|we)\s+(?:start|sit|bench|add|drop|claim|trade)\b|\b(?:learn|learning|calibrate|calibration)\b|\b(?:can|could|do|may|should|let'?s)\s+(?:i|we)\s+start\s+(?:a\s+|the\s+|this\s+|that\s+|our\s+)?(?:process|proicess|update|session|workflow|over)\b/iu;
+const NEGATED_RECOMMENDATION_DISCLAIMER =
+  /\b(?:do\s+not|don['’]?t|never|without)\s+(?:(?:mak(?:e|ing)|giv(?:e|ing)|offer(?:ing)|provid(?:e|ing)|includ(?:e|ing))\s+)?(?:any\s+|a\s+)?(?:player\s+|lineup\s+|roster\s+|fantasy\s+)?recommend(?:ation|ations)?\b|\bno\s+(?:player\s+|lineup\s+|roster\s+|fantasy\s+)?recommend(?:ation|ations)?\b/giu;
 const EXPLICIT_DECISION_REQUEST =
   /\b(?:should\s+(?:i|we)|would\s+you|recommend(?:ation|ations)?|what\s+(?:do|would)\s+(?:i|we|you)\s+(?:do|start|sit|bench|add|drop|claim|pick\s*up|trade|bid|offer|target|flex|play|stream|make|take)\b|start\s+or\s+sit)\b/iu;
 const DIRECT_DECISION_QUESTION =
@@ -80,6 +83,8 @@ const HAS_RECOMMENDATION_VERDICT =
   /(?:^|\n)\s*(?:#+\s*decision\b|\*{0,2}recommendation\*{0,2}\s*:|(?:[-*•]\s+|\d+\.\s+)?\*{0,2}(?:start|sit|bench|add|drop|claim|pick\s*up|accept|decline)\*{0,2}\s+(?!(?:times?|spots?|slots?|points|scoring|rate|rates|off|a|an|the|your|my|our|their|his|her|this|that|over|process|lineup|week)\b)[A-Z])|(?:,\s*(?:so\s+)?|;\s*|[.!?]\s+|\s+[-–—]\s*|\b(?:i'?d|we'?d)\s+)\*{0,2}(?:start|sit|bench|add|drop|claim|pick\s*up|accept|decline)\*{0,2}\s+(?!(?:times?|spots?|slots?|points|scoring|rate|rates|off|a|an|the|your|my|our|their|his|her|this|that|over|process|lineup|week)\b)[A-Z]|\b(?:i|we)\s+(?:would\s+)?(?:recommend|suggest|advise)\s+(?:starting|sitting|benching|adding|dropping|claiming|trading|accepting|declining)\b|\byou\s+should\s+(?:start|sit|bench|add|drop|claim|pick\s*up|trade|accept|decline)\b/imu;
 const EXPLICIT_UNAVAILABLE_STATEMENT =
   /\b(?:decision\s+is\s+unavailable|can(?:'t|not)\s+(?:make|give|provide|pick|choose|select|compare)\b[\s\S]{0,60}\b(?:recommendation|decision|winner|starter|slot)\b|cannot\s+verify\s+current\s+reporting|withholding\s+(?:a\s+|the\s+)?recommendation|(?:(?:does\s+not|doesn'?t)\s+have\s+a|(?:has|is)\s+no)\s+[a-z0-9_-]+\s+slot\b)\b/iu;
+const EXPLICIT_ALL_OPTIONS_REFUSAL =
+  /\b(?:none|neither)\s+of\s+(?:the\s+(?:two|three|four|\d+|options?|players?|choices?|candidates?)|them|these|those)\b[\s\S]{0,60}\b(?:can|is|are|projects?|scores?|plays?|works?|eligib|start|fill|viable|available|option)\b|\b(?:do\s+not|don['’]?t)\s+(?:start|add|claim|pick\s+up|play|use)\s+(?:any|either)\s+of\s+(?:the\s+(?:two|three|four|\d+|options?|players?|choices?|candidates?)|them|these|those)\b/iu;
 const MAX_EVIDENCE_TRAVERSAL_DEPTH = 24;
 const MAX_EVIDENCE_TRAVERSAL_NODES = 10_000;
 
@@ -122,16 +127,17 @@ const SCORING_TOOLS = new Set([
 
 export function questionRequestsRecommendation(question: string): boolean {
   if (NON_DECISION_RETROSPECTIVE_OR_SYSTEM.test(question)) return false;
+  const sanitized = question.replace(NEGATED_RECOMMENDATION_DISCLAIMER, ' ');
   if (
-    EXPLICIT_DECISION_REQUEST.test(question) ||
-    DIRECT_DECISION_QUESTION.test(question) ||
-    LEADING_FANTASY_ACTION.test(question.trim()) ||
-    TIMEBOXED_PLAYER_COMPARISON.test(question)
+    EXPLICIT_DECISION_REQUEST.test(sanitized) ||
+    DIRECT_DECISION_QUESTION.test(sanitized) ||
+    LEADING_FANTASY_ACTION.test(sanitized.trim()) ||
+    TIMEBOXED_PLAYER_COMPARISON.test(sanitized)
   ) {
     return true;
   }
-  return CONTEXTUAL_FANTASY_ACTION.test(question) &&
-    !THIRD_PARTY_LINEUP_CONTEXT.test(question);
+  return CONTEXTUAL_FANTASY_ACTION.test(sanitized) &&
+    !THIRD_PARTY_LINEUP_CONTEXT.test(sanitized);
 }
 
 export function recommendationContextQuestion(
@@ -202,19 +208,29 @@ export function buildFreeformRecommendationEvidence(input: {
 export function answerWithholdsOrClarifies(answer: string): boolean {
   const trimmed = answer.trim();
   if (!trimmed || HAS_RECOMMENDATION_VERDICT.test(trimmed)) return false;
-  if (EXPLICIT_UNAVAILABLE_STATEMENT.test(trimmed)) return true;
+  if (
+    EXPLICIT_UNAVAILABLE_STATEMENT.test(trimmed) ||
+    (EXPLICIT_ALL_OPTIONS_REFUSAL.test(trimmed) && !hasPositiveActionEndorsement(trimmed))
+  ) {
+    return true;
+  }
   return trimmed.includes('?') && trimmed.length <= 1_200;
 }
 
 export function buildRecommendationRecoveryPrompt(input: {
   blockedAnswer: string;
+  missingStatusSubjects?: readonly string[] | undefined;
   question: string;
   reasons: readonly string[];
 }): string {
   const draft = input.blockedAnswer.trim().slice(0, 1_200);
+  const missingNames = input.missingStatusSubjects?.filter(Boolean).slice(0, 6) ?? [];
   return [
     'Internal verification check: your draft recommendation could not be shown yet because required live tool evidence is incomplete:',
     ...input.reasons.map((reason) => `- ${reason}`),
+    ...(missingNames.length > 0
+      ? [`- Missing current reporting verification for: ${missingNames.join(', ')}.`]
+      : []),
     '',
     'Automatically gather the missing evidence now using the available tools (for example: Sleeper league/roster tools, scoring-aware projections via projectPlayer / compareStartSit / optimizeRosterLineup / rankWaiverTargets / analyzeTradeImpact, and current reporting via searchFirstClassNews) and then write the complete grounded answer.',
     'Do not mention this internal verification step to the user. If a required user choice genuinely cannot be resolved from session context or tools, ask one concise clarifying question without recommending a player yet.',
@@ -356,17 +372,41 @@ export function buildRecommendationEvidence(
       const swapNames = new Set(swaps
         .map((swap) => asRecord(asRecord(swap)?.startPlayer)?.name)
         .filter((name): name is string => typeof name === 'string'));
-      const optimalNames = new Set((Array.isArray(out?.optimalLineup) ? out.optimalLineup : [])
-        .map((entry) => asRecord(entry)?.name)
+      const optimalEntries = (Array.isArray(out?.optimalLineup) ? out.optimalLineup : [])
+        .map(asRecord)
+        .filter((entry): entry is Record<string, unknown> => entry !== null);
+      const optimalNames = new Set(optimalEntries
+        .map((entry) => entry.name)
         .filter((name): name is string => typeof name === 'string'));
+      const injuredOptimalNames = new Set(optimalEntries
+        .filter((entry) => typeof entry.injuryStatus === 'string' && entry.injuryStatus.trim().length > 0)
+        .map((entry) => entry.name)
+        .filter((name): name is string => typeof name === 'string')
+        .map(normalizePlayerName));
       const targetNames = swapNames.size > 0 ? swapNames : optimalNames;
+      const zeroSwapLineup = generalLineup && swaps.length === 0;
       const selected = targetNames.size > 0
         ? mapped.filter((item) => typeof item.input.playerName === 'string' && targetNames.has(item.input.playerName))
         : mapped;
-      return (selected.length > 0 ? selected : mapped).map((item) => ({
-        ...item,
-        input: { ...item.input, ...(generalLineup ? { fromLineupOptimization: true } : {}) },
-      }));
+      return (selected.length > 0 ? selected : mapped).map((item) => {
+        const normalizedItemName = typeof item.input.playerName === 'string'
+          ? normalizePlayerName(item.input.playerName)
+          : '';
+        const itemInjury = asRecord(asRecord(item.output)?.player)?.injuryStatus;
+        const hasItemInjury =
+          (typeof itemInjury === 'string' && itemInjury.trim().length > 0) ||
+          injuredOptimalNames.has(normalizedItemName);
+        return {
+          ...item,
+          input: {
+            ...item.input,
+            ...(generalLineup ? { fromLineupOptimization: true } : {}),
+            ...(zeroSwapLineup && !hasItemInjury
+              ? { healthyKeptLineupStarter: true }
+              : {}),
+          },
+        };
+      });
     }
     if (result.toolName !== 'compareStartSit') return [result];
     const out = asRecord(result.output);
@@ -416,6 +456,9 @@ export function buildRecommendationEvidence(
     projection === 'not-required' &&
     inactiveOrTeamlessPlayers.length > 0 &&
     !input.toolResults.some((result) => result.toolName === 'projectPlayer');
+  const statusResult = needsPlayerStatus
+    ? evaluatePlayerStatusEvidence(input.toolResults, input.sources, input.question)
+    : { missingSubjects: [] as string[], state: 'not-required' as const };
   return {
     currentEvidence: input.toolResults.length > 0
       ? sourceEvidenceState(input.sources)
@@ -424,12 +467,13 @@ export function buildRecommendationEvidence(
     identity: needsPlayerIdentity
       ? identityEvidenceState(input.toolResults, input.question)
       : 'not-required',
-    injury: needsPlayerStatus
-      ? playerStatusEvidenceState(input.toolResults, input.sources, input.question)
-      : 'not-required',
+    injury: statusResult.state,
     leagueScoring: needsLeagueScoring
       ? leagueScoringEvidenceState(input.toolResults, input.question)
       : 'not-required',
+    ...(statusResult.state === 'missing' && statusResult.missingSubjects.length > 0
+      ? { missingStatusSubjects: statusResult.missingSubjects }
+      : {}),
     projection,
     ...(requiresRefusalOnly ? { requiresRefusalOnly: true } : {}),
     ...(unfoundPlayers.length > 0 ? { unfoundPlayers } : {}),
@@ -668,43 +712,65 @@ function deduplicateExplicitResolutions(
   return [...unnamed, ...latestByName.values()];
 }
 
-function playerStatusEvidenceState(
+function evaluatePlayerStatusEvidence(
   toolResults: readonly RecommendationToolResult[],
   sources: readonly DataSourceRecord[],
   question: string,
-): RequiredEvidenceState {
+): { missingSubjects: string[]; state: RequiredEvidenceState } {
   const subjects = relevantPlayerSubjects(toolResults, question);
-  if (subjects.length === 0) return 'missing';
+  if (subjects.length === 0) return { missingSubjects: [], state: 'missing' };
   const hasFreshNewsArticleSource = sources.some((source) =>
     source.id.startsWith('news-article:') && source.cacheOutcome !== 'stale-if-error'
   );
   const hasFreshNewsSource = hasFreshNewsArticleSource || sources.some((source) =>
     source.id.startsWith('news-source:') && source.cacheOutcome !== 'stale-if-error'
   );
+  const hasAnyWebNewsSource = sources.some((source) => source.id.startsWith('web:'));
+  const healthyKeptLineupSet = new Set(
+    toolResults
+      .filter((result) => asRecord(result.input)?.healthyKeptLineupStarter === true)
+      .flatMap((result) => [...toolInputPlayerSubjects(result), ...playerSubjects([result.output])])
+      .map(normalizePlayerName)
+      .filter((name) => Boolean(name) && !textMentionsSubject(question, name)),
+  );
   const inactiveOrTeamlessSet = new Set(extractInactiveOrTeamlessPlayers(toolResults));
-  const supported = subjects.every((subject) => {
+  const missingSubjects: string[] = [];
+  for (const subject of subjects) {
+    const normalizedSubject = normalizePlayerName(subject);
     const hasPlayerStatus = toolResults.some((result) =>
       PLAYER_STATUS_TOOLS.has(result.toolName) &&
       evidenceMatchesSubjects([result.output], [subject]) &&
       (result.toolName === 'projectPlayer' ? hasProjectionPlayerStatus(result.output) : hasPlayerStatusFields(result.output)));
-    if (inactiveOrTeamlessSet.has(normalizePlayerName(subject))) {
+    if (inactiveOrTeamlessSet.has(normalizedSubject)) {
       const hasResolvedIdentity = toolResults.some((result) =>
         result.toolName === 'resolvePlayerIdentity' &&
         findIdentityStatus(result.output) === 'resolved' &&
         evidenceMatchesSubjects([result.input, result.output], [subject]),
       );
-      return hasPlayerStatus || hasResolvedIdentity;
+      if (!(hasPlayerStatus || hasResolvedIdentity)) missingSubjects.push(subject);
+      continue;
+    }
+    if (healthyKeptLineupSet.has(normalizedSubject)) {
+      if (!(hasPlayerStatus && (hasFreshNewsSource || hasAnyWebNewsSource))) {
+        missingSubjects.push(subject);
+      }
+      continue;
     }
     const hasGroundedWebNews = toolResults.some((result) => result.toolName === 'searchCurrentNews' &&
-      evidenceMatchesSubjects([result.output], [subject])) && sources.some((source) => source.id.startsWith('web:'));
+      evidenceMatchesSubjects([result.output], [subject])) && hasAnyWebNewsSource;
     const hasFirstClassNews = (hasFreshNewsArticleSource && toolResults.some((result) =>
       result.toolName === 'searchFirstClassNews' && hasUsableFirstClassNews(result.output, [subject])
     )) || (hasFreshNewsSource && toolResults.some((result) =>
       result.toolName === 'searchFirstClassNews' && hasCleanZeroHeadlineNewsCheck(result, subject)
     ));
-    return hasPlayerStatus && (hasGroundedWebNews || hasFirstClassNews);
-  });
-  return supported ? 'present' : 'missing';
+    if (!(hasPlayerStatus && (hasGroundedWebNews || hasFirstClassNews))) {
+      missingSubjects.push(subject);
+    }
+  }
+  return {
+    missingSubjects,
+    state: missingSubjects.length === 0 ? 'present' : 'missing',
+  };
 }
 
 function hasUsableFirstClassNews(
@@ -1030,6 +1096,23 @@ function relevantPlayerSubjects(
     matchedProjections.some((result) =>
       individualPlayerResultMatchesQuestion(result, question, rosterOnlyNames),
     );
+  const waiverTargetNames = new Set(
+    filteredResults
+      .filter((result) => result.toolName === 'rankWaiverTargets')
+      .flatMap((result) => playerSubjects([result.output]))
+      .map(normalizePlayerName)
+      .filter(Boolean),
+  );
+  const topProjectedWaiverSet = new Set(
+    !hasQuestionMatch && hasWaiverRanking
+      ? [...new Set(
+          matchedProjections
+            .flatMap((result) => [...toolInputPlayerSubjects(result), ...playerSubjects([result.output])])
+            .map(normalizePlayerName)
+            .filter((name) => Boolean(name) && waiverTargetNames.has(name) && !rosterOnlyNames.has(name)),
+        )].slice(0, 3)
+      : [],
+  );
   const subjects = filteredResults.flatMap((result) => {
     if (!PLAYER_IDENTITY_TOOLS.has(result.toolName)) return [];
     if (
@@ -1042,12 +1125,26 @@ function relevantPlayerSubjects(
       return [];
     }
     if (!hasQuestionMatch && (result.toolName === 'rankWaiverTargets' || result.toolName === 'getTrendingPlayers')) {
+      if (result.toolName === 'rankWaiverTargets' && topProjectedWaiverSet.size > 0) return [];
       return openEndedCandidateSubjects(result, question);
     }
     const candidates = [
       ...toolInputPlayerSubjects(result),
       ...playerSubjects([result.output]),
     ];
+    if (
+      !hasQuestionMatch &&
+      hasWaiverRanking &&
+      result.toolName === 'projectPlayer' &&
+      asRecord(result.input)?.fromLineupOptimization !== true
+    ) {
+      return candidates.filter((subject) => {
+        const normalized = normalizePlayerName(subject);
+        return topProjectedWaiverSet.size > 0
+          ? topProjectedWaiverSet.has(normalized)
+          : !rosterOnlyNames.has(normalized);
+      });
+    }
     if (
       includeStreamerProjections &&
       result.toolName === 'projectPlayer' &&

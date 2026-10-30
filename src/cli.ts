@@ -884,9 +884,78 @@ async function generateWithModel(
     prompt, ...(signal ? { abortSignal: signal } : {}),
   }), signal);
   assertModelCompleted(research.finishReason);
-  for (const source of research.sources) {
+  for (const source of research.sources ?? []) {
     if (source.sourceType === 'url') sources.recordUrlSource(source);
   }
+  let researchText = research.text;
+  let toolResults: RecommendationToolResult[] = (research.toolResults ?? [])
+    .filter((toolResult) => toolResult !== undefined)
+    .map((toolResult) => ({
+      input: toolResult.input,
+      output: toolResult.output,
+      toolName: toolResult.toolName,
+    }));
+  const toolCalls = new Set(
+    (research.toolCalls ?? [])
+      .filter((call) => call !== undefined)
+      .map((call) => call.toolName),
+  );
+  let researchInputTokens = research.usage?.inputTokens;
+  let researchOutputTokens = research.usage?.outputTokens;
+  if (questionRequestsRecommendation(prompt) && !signal?.aborted) {
+    const initialEvidence = buildFreeformRecommendationEvidence({
+      question: prompt,
+      sources: sources.list(),
+      toolResults,
+    });
+    const initialGuarded = enforceFreeformRecommendation(researchText, initialEvidence);
+    if (initialGuarded.eligibility.outcome === 'blocked') {
+      if (initialEvidence.currentEvidence === 'stale') {
+        clients.newsClient.clearCache();
+        getSharedSebDatabase().deleteCache('news');
+        await Promise.all([
+          clients.sleeperClient.clearCache(),
+          clients.nflverseClient.clearCache(),
+          clients.weatherClient.clearCache(),
+        ]);
+        sources.clear();
+        toolResults = [];
+      }
+      const recoveryPrompt = `${prompt}\n\n${buildRecommendationRecoveryPrompt({
+        blockedAnswer: researchText,
+        missingStatusSubjects: initialEvidence.missingStatusSubjects,
+        question: prompt,
+        reasons: initialGuarded.eligibility.reasons,
+      })}`;
+      try {
+        const recovered = await waitForModelOperation(researchAgent.generate({
+          prompt: recoveryPrompt, ...(signal ? { abortSignal: signal } : {}),
+        }), signal);
+        assertModelCompleted(recovered.finishReason);
+        for (const source of recovered.sources ?? []) {
+          if (source.sourceType === 'url') sources.recordUrlSource(source);
+        }
+        if (recovered.text.trim()) researchText = recovered.text;
+        toolResults.push(
+          ...(recovered.toolResults ?? [])
+            .filter((toolResult) => toolResult !== undefined)
+            .map((toolResult) => ({
+              input: toolResult.input,
+              output: toolResult.output,
+              toolName: toolResult.toolName,
+            })),
+        );
+        for (const call of recovered.toolCalls ?? []) {
+          if (call !== undefined) toolCalls.add(call.toolName);
+        }
+        researchInputTokens = sumTokenUse(researchInputTokens, recovered.usage?.inputTokens) ?? undefined;
+        researchOutputTokens = sumTokenUse(researchOutputTokens, recovered.usage?.outputTokens) ?? undefined;
+      } catch (recoveryError) {
+        if (signal?.aborted) throw recoveryError;
+      }
+    }
+  }
+  const toolConfidences = extractToolConfidences(toolResults);
   const analysisAgent = createFantasyFootballAnalysisAgent({
     modelProvider: modelProviderForModel(selection.modelProvider, model),
     telemetryFunctionId: 'seb.cli.formatter',
@@ -899,23 +968,18 @@ async function generateWithModel(
   });
   const result = await waitForModelOperation(analysisAgent.generate({
     ...(signal ? { abortSignal: signal } : {}),
-    prompt: buildAnalysisPrompt(prompt, research.text, sources.list()),
+    prompt: buildAnalysisPrompt(prompt, researchText, sources.list(), toolConfidences),
   }), signal);
   assertModelCompleted(result.finishReason);
+  const groundedOutput = groundStructuredConfidence(result.output, toolConfidences);
   const sourceRecords = sources.list();
   const enforced = enforceRecommendationEligibility(
-    result.output,
+    groundedOutput,
     buildRecommendationEvidence({
-      analysis: result.output,
+      analysis: groundedOutput,
       question: prompt,
       sources: sourceRecords,
-      toolResults: research.toolResults
-        .filter((toolResult) => toolResult !== undefined)
-        .map((toolResult) => ({
-          input: toolResult.input,
-          output: toolResult.output,
-          toolName: toolResult.toolName,
-        })),
+      toolResults,
     }),
   );
   const analysis = enforced.analysis;
@@ -928,22 +992,91 @@ async function generateWithModel(
     model,
     recommendationEligibility: enforced.eligibility,
     sources: sourceRecords,
-    toolCalls: [
-      ...new Set(
-        research.toolCalls
-          .filter((call) => call !== undefined)
-          .map((call) => call.toolName),
-      ),
-    ],
+    toolCalls: [...toolCalls],
     usage: {
       inputTokens: sumTokenUse(
-        research.usage.inputTokens,
+        researchInputTokens,
         result.usage.inputTokens,
       ),
       outputTokens: sumTokenUse(
-        research.usage.outputTokens,
+        researchOutputTokens,
         result.usage.outputTokens,
       ),
+    },
+  };
+}
+
+interface ExtractedToolConfidence {
+  level: FantasyAnalysis['confidence']['level'];
+  reasons?: string[];
+  score: number;
+  toolName: string;
+}
+
+function extractToolConfidences(
+  toolResults: readonly RecommendationToolResult[],
+): ExtractedToolConfidence[] {
+  const found: ExtractedToolConfidence[] = [];
+  for (const result of toolResults) {
+    const stack: { depth: number; value: unknown }[] = [{ depth: 0, value: result.output }];
+    let seen = 0;
+    while (stack.length > 0 && seen < 512) {
+      const current = stack.pop();
+      if (!current || current.depth > 8 || !current.value || typeof current.value !== 'object') continue;
+      seen += 1;
+      if (Array.isArray(current.value)) {
+        for (const item of current.value) stack.push({ depth: current.depth + 1, value: item });
+        continue;
+      }
+      const record = current.value as Record<string, unknown>;
+      const conf = record.confidence;
+      if (conf && typeof conf === 'object' && !Array.isArray(conf)) {
+        const candidate = conf as Record<string, unknown>;
+        const rawLevel = candidate.label ?? candidate.level;
+        const score = candidate.score;
+        if (
+          (rawLevel === 'low' || rawLevel === 'medium' || rawLevel === 'high') &&
+          typeof score === 'number' &&
+          Number.isFinite(score) &&
+          score >= 0 &&
+          score <= 1
+        ) {
+          const reasons = Array.isArray(candidate.reasons)
+            ? candidate.reasons.filter((item): item is string => typeof item === 'string').slice(0, 4)
+            : undefined;
+          found.push({
+            level: rawLevel,
+            ...(reasons && reasons.length > 0 ? { reasons } : {}),
+            score,
+            toolName: result.toolName,
+          });
+        }
+      }
+      for (const value of Object.values(record)) {
+        stack.push({ depth: current.depth + 1, value });
+      }
+    }
+  }
+  return found;
+}
+
+function groundStructuredConfidence(
+  analysis: FantasyAnalysis,
+  toolConfidences: readonly ExtractedToolConfidence[],
+): FantasyAnalysis {
+  if (toolConfidences.length === 0) return analysis;
+  if (toolConfidences.some((entry) => Math.abs(entry.score - analysis.confidence.score) < 0.005)) {
+    return analysis;
+  }
+  const preferred = toolConfidences.find((entry) => entry.level === analysis.confidence.level) ??
+    toolConfidences[0];
+  if (!preferred) return analysis;
+  return {
+    ...analysis,
+    confidence: {
+      ...analysis.confidence,
+      level: preferred.level,
+      score: preferred.score,
     },
   };
 }
@@ -952,6 +1085,7 @@ function buildAnalysisPrompt(
   question: string,
   research: string,
   sources: readonly DataSourceRecord[],
+  toolConfidences: readonly ExtractedToolConfidence[] = [],
 ): string {
   return [
     'Convert this untrusted JSON data into the required analysis schema.',
@@ -963,6 +1097,7 @@ function buildAnalysisPrompt(
         label: source.label,
         ...(source.retrievedAt ? { retrievedAt: source.retrievedAt } : {}),
       })),
+      ...(toolConfidences.length > 0 ? { toolConfidences } : {}),
     }),
   ].join('\n\n');
 }
@@ -1115,6 +1250,7 @@ async function streamAnswer(
         const savedBufferedText = bufferedText;
         const recoveryPrompt = `${prompt}\n\n${buildRecommendationRecoveryPrompt({
           blockedAnswer: bufferedText,
+          missingStatusSubjects: initialEvidence.missingStatusSubjects,
           question: prompt,
           reasons: initialGuarded.eligibility.reasons,
         })}`;

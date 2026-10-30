@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { isToolUIPart, validateUIMessages, type UIMessage } from 'ai';
 import { z } from 'zod';
 import { readBoundedUtf8File } from '../setup/bounded-file.js';
+import { isLocalOnlyInteractiveCommandInput } from './commands.js';
 import { promptHistoryPath } from './history.js';
 import type { SessionState } from './session.js';
 
@@ -20,6 +21,7 @@ const sourceSchema = z.object({ id: z.string(), label: z.string(), url: z.string
   error: z.string().optional(), warnings: z.array(z.string()).optional() });
 const snapshotSchema = z.object({ version: z.literal(1), id: idSchema, updatedAt: z.string().datetime(),
   messages: z.array(z.unknown()).max(10000), context: contextSchema,
+  localOnlyMessageIds: z.array(z.string().min(1).max(200)).max(256).optional(),
   evidence: z.array(z.object({ answerId: z.string(), capturedAt: z.string(), sources: z.array(sourceSchema) })).max(50),
 });
 export type SavedSession = Omit<z.infer<typeof snapshotSchema>, 'messages' | 'evidence'> & { messages: UIMessage[]; evidence: SourceEvidenceSnapshot[] };
@@ -37,7 +39,7 @@ export class SessionStore {
     if (content === null) throw new Error(`Session ${id} does not exist. Use seb sessions to list saved sessions.`);
     const parsed = snapshotSchema.parse(JSON.parse(content));
     if (parsed.id !== id) throw new Error('The saved session identifier does not match its file.');
-    const messages = await validateUIMessages({ messages: parsed.messages });
+    const messages = await validateUIMessages({ messages: stripDeprecatedErrorRawInput(parsed.messages) });
     if (new Set(messages.map(m => m.id)).size !== messages.length || messages.some(m => m.role === 'system')) throw new Error('The saved conversation has invalid message identities or roles.');
     // An interrupted approval never becomes authorization when the session resumes.
     return { ...parsed, evidence: parsed.evidence as SourceEvidenceSnapshot[], messages: completedMessages(messages) };
@@ -49,7 +51,13 @@ export class SessionStore {
     for (const file of files) {
       const id = file.replace(/\.json$/u, '');
       if (!file.endsWith('.json') || !idSchema.safeParse(id).success) continue;
-      try { const saved = await this.load(id); entries.push({ id, updatedAt: saved.updatedAt, title: saved.messages.find(m => m.role === 'user')?.parts.filter(p => p.type === 'text').map(p => p.text).join(' ').replace(/\s+/gu, ' ').slice(0, 80) || 'Empty conversation' }); } catch { /* A damaged snapshot remains untouched. */ }
+      try {
+        const saved = await this.load(id);
+        const localIds = new Set(saved.localOnlyMessageIds ?? []);
+        const userMessages = saved.messages.filter(m => m.role === 'user');
+        const chosen = userMessages.find(m => !localIds.has(m.id) && !isLocalOnlyInteractiveCommandInput(userMessageText(m))) ?? userMessages[0];
+        entries.push({ id, updatedAt: saved.updatedAt, title: (chosen ? userMessageText(chosen) : '').replace(/\s+/gu, ' ').slice(0, 80) || 'Empty conversation' });
+      } catch { /* A damaged snapshot remains untouched. */ }
     }
     return entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
@@ -98,4 +106,24 @@ export class SessionStore {
 }
 function completedMessages(messages: readonly UIMessage[]): UIMessage[] {
   return messages.filter(m => m.role !== 'assistant' || !m.parts.some(p => isToolUIPart(p) && !['output-available', 'output-error', 'output-denied'].includes(p.state)));
+}
+function userMessageText(message: UIMessage): string {
+  return message.parts.filter(p => p.type === 'text').map(p => p.text).join(' ');
+}
+function stripDeprecatedErrorRawInput(messages: readonly unknown[]): unknown[] {
+  return messages.map((message) => {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
+    const record = message as Record<string, unknown>;
+    if (!Array.isArray(record.parts)) return message;
+    return {
+      ...record,
+      parts: record.parts.map((part) => {
+        if (!part || typeof part !== 'object' || Array.isArray(part)) return part;
+        const partRecord = part as Record<string, unknown>;
+        if (partRecord.state !== 'output-error' || !('rawInput' in partRecord)) return part;
+        const { rawInput: _unused, ...rest } = partRecord;
+        return rest;
+      }),
+    };
+  });
 }

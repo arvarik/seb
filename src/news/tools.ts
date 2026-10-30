@@ -95,7 +95,7 @@ export async function bundleCandidateNewsChecks(
   }
   const settled = await Promise.all(
     selected.map(async (candidate): Promise<BundledNewsCheck | null> => {
-      const query = `${candidate.name} injury status and fantasy impact`;
+      const query = candidate.name;
       try {
         const output = await news.search({
           limit: 4,
@@ -105,6 +105,7 @@ export async function bundleCandidateNewsChecks(
         });
         return {
           ...compactNewsSearchResult(output),
+          fallbackRecommended: output.coverage.successfulSourceCount === 0,
           playerName: candidate.name,
         };
       } catch {

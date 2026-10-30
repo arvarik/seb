@@ -367,12 +367,14 @@ function argumentCompletionDescription(
   if (candidate.name === 'team') {
     return value === 'clear' ? 'Clear the active NFL team.' : `Set the NFL team to ${value}.`;
   }
-  if (candidate.name === 'league') {
+  if (candidate.name === 'league' || candidate.name === 'brief') {
     if (['all', 'clear'].includes(value)) return 'Use every discovered fantasy league.';
     const league = context.leagues?.find((candidate) => candidate.leagueId === value);
-    return league
-      ? `Focus My Fantasy on ${league.name}.`
-      : `Focus My Fantasy on league ${value}.`;
+    return candidate.name === 'brief'
+      ? `Run weekly autopilot brief for ${league?.name ?? `league ${value}`}.`
+      : league
+        ? `Focus My Fantasy on ${league.name}.`
+        : `Focus My Fantasy on league ${value}.`;
   }
   if (candidate.name === 'provider') {
     return `Switch to ${MODEL_PROVIDER_DISPLAY_NAMES[value] ?? value}.`;
@@ -581,6 +583,7 @@ function argumentSuggestions(
       }
       break;
     case 'league':
+    case 'brief':
       values.unshift(...(context.leagueOptions ?? []));
       if (context.leagueId) values.unshift(context.leagueId);
       break;
@@ -674,7 +677,9 @@ _seb_completion() {
   done
   case "\${COMP_WORDS[1]}" in
     chat) COMPREPLY=( $(compgen -W "--provider --model --help" -- "\${current}") ) ;;
-    brief) COMPREPLY=( $(compgen -W "--user --league --roster --season --week --post --channel --json --help" -- "\${current}") ) ;;
+    resume) COMPREPLY=( $(compgen -W "latest --help" -- "\${current}") ) ;;
+    sessions) COMPREPLY=( $(compgen -W "--json --help" -- "\${current}") ) ;;
+    brief) COMPREPLY=( $(compgen -W "--user --league --roster --season --week --post --channel --no-progress --json --help" -- "\${current}") ) ;;
     ask) COMPREPLY=( $(compgen -W "--json --provider --model --no-progress --help" -- "\${current}") ) ;;
     doctor) COMPREPLY=( $(compgen -W "--offline --json --help" -- "\${current}") ) ;;
     cache) COMPREPLY=( $(compgen -W "status clear prune --max-size-mb --max-age-days --retain --json --help" -- "\${current}") ) ;;
@@ -732,8 +737,16 @@ complete -c seb -n '__fish_use_subcommand' -a help -d 'Show help'
 complete -c seb -n '__fish_use_subcommand' -a version -d 'Show the version'
 complete -c seb -n '__fish_seen_subcommand_from chat ask' -l provider -s p -r -a 'google anthropic openai openai-compatible' -d 'Select a model provider'
 complete -c seb -n '__fish_seen_subcommand_from chat ask' -l model -r -d 'Select a model'
+complete -c seb -n '__fish_seen_subcommand_from sessions brief' -l json -d 'Print JSON'
+complete -c seb -n '__fish_seen_subcommand_from brief' -l user -r -d 'Sleeper username'
+complete -c seb -n '__fish_seen_subcommand_from brief' -l league -r -d 'Sleeper league ID'
+complete -c seb -n '__fish_seen_subcommand_from brief' -l roster -r -d 'Roster ID'
+complete -c seb -n '__fish_seen_subcommand_from brief' -l season -r -d 'NFL season'
+complete -c seb -n '__fish_seen_subcommand_from brief' -l week -r -d 'NFL week (1-18)'
+complete -c seb -n '__fish_seen_subcommand_from brief' -l post -r -a 'slack discord telegram groupme' -d 'Push brief to connector'
+complete -c seb -n '__fish_seen_subcommand_from brief' -l channel -r -d 'Target channel or chat ID'
+complete -c seb -n '__fish_seen_subcommand_from ask brief' -l no-progress -d 'Hide tool activity'
 complete -c seb -n '__fish_seen_subcommand_from ask doctor' -l json -d 'Print JSON'
-complete -c seb -n '__fish_seen_subcommand_from ask' -l no-progress -d 'Hide tool activity'
 complete -c seb -n '__fish_seen_subcommand_from doctor' -l offline -d 'Skip network checks'
 complete -c seb -n '__fish_seen_subcommand_from cache' -a 'status clear prune'
 complete -c seb -n '__fish_seen_subcommand_from cache' -l max-size-mb -r -d 'Set the snapshot size limit'
@@ -788,6 +801,9 @@ _seb() {
     arguments)
       case "$words[2]" in
         chat) _arguments '--provider[Select a model provider]:provider:(google anthropic openai openai-compatible)' '--model[Select a model]:model:' '--help[Show help]' ;;
+        resume) _arguments '1:session:' '--help[Show help]' ;;
+        sessions) _arguments '--json[Print JSON]' '--help[Show help]' ;;
+        brief) _arguments '--user[Sleeper username]:username:' '--league[Sleeper league ID]:league:' '--roster[Roster ID]:roster:' '--season[NFL season]:year:' '--week[NFL week]:week:' '--post[Push brief to connector]:connector:(slack discord telegram groupme)' '--channel[Target channel or chat ID]:channel:' '--no-progress[Hide progress spinner]' '--json[Print JSON]' '--help[Show help]' ;;
         ask) _arguments '--json[Print JSON]' '--provider[Select a model provider]:provider:(google anthropic openai openai-compatible)' '--model[Select a model]:model:' '--no-progress[Hide tool activity]' '--help[Show help]' '*:question:' ;;
         doctor) _arguments '--offline[Skip network checks]' '--json[Print JSON]' '--help[Show help]' ;;
         cache) _arguments '1:action:(status clear prune)' '--max-size-mb[Set the snapshot size limit]:megabytes:' '--max-age-days[Delete older snapshots]:days:' '--retain[Retain snapshots per source key]:count:' '--json[Print JSON]' '--help[Show help]' ;;

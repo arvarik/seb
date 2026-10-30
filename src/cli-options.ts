@@ -7,13 +7,14 @@ export type CliCommand =
       channel?: string;
       json: boolean;
       leagueId?: string;
+      noProgress?: true;
       post?: ConnectorName;
       rosterId?: number;
       season?: number;
       username?: string;
       week?: number;
     }
-  | { name: 'sessions' }
+  | { name: 'sessions'; json?: true }
   | { name: 'help' }
   | { name: 'version' }
   | { name: 'configure'; importEnv?: string }
@@ -86,8 +87,8 @@ Usage:
   seb
   seb chat [--provider NAME] [--model MODEL]
   seb resume [SESSION_ID|INDEX|QUERY]
-  seb sessions
-  seb brief [--user USERNAME] [--league ID] [--roster N] [--season YEAR] [--week N] [--post slack|discord|telegram|groupme] [--channel ID] [--json]
+  seb sessions [--json]
+  seb brief [--user USERNAME] [--league ID] [--roster N] [--season YEAR] [--week N] [--post slack|discord|telegram|groupme] [--channel ID] [--no-progress] [--json]
   seb ask [OPTIONS] [QUESTION]
   seb doctor [--offline] [--json]
   seb configure
@@ -138,6 +139,9 @@ Doctor options:
 
 Examples:
   seb
+  seb resume
+  seb brief
+  seb brief --post discord --channel 123456789012345678
   seb configure
   seb ask "Show the current NFL state."
   seb ask --provider anthropic --model claude-sonnet-5 "Compare two players."
@@ -187,6 +191,8 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
       requireNoArguments(rest, first);
       return { name: 'version' };
     case 'sessions':
+      if (rest[0] === '--help' || rest[0] === '-h') return { name: 'help' };
+      if (rest.length === 1 && rest[0] === '--json') return { name: 'sessions', json: true };
       requireNoArguments(rest, first);
       return { name: 'sessions' };
     case 'resume':
@@ -204,6 +210,7 @@ export function parseCliArguments(arguments_: readonly string[]): CliCommand {
     case 'doctor':
       return parseDoctorArguments(rest);
     case 'configure':
+      if (rest[0] === '--help' || rest[0] === '-h') return { name: 'help' };
       if (rest.length === 2 && rest[0] === '--import-env' && rest[1] && !rest[1].startsWith('--')) {
         return { name: 'configure', importEnv: rest[1] };
       }
@@ -454,6 +461,10 @@ function parseSnapshotArguments(arguments_: readonly string[]): CliCommand {
       }
       continue;
     }
+    if (!id && argument && !argument.startsWith('-')) {
+      id = argument;
+      continue;
+    }
     throw new CliUsageError(`Unknown snapshots option: ${argument}`);
   }
   return {
@@ -659,6 +670,7 @@ function parseBriefArguments(args: readonly string[]): CliCommand {
   let channel: string | undefined;
   let json = false;
   let leagueId: string | undefined;
+  let noProgress = false;
   let post: ConnectorName | undefined;
   let rosterId: number | undefined;
   let season: number | undefined;
@@ -669,6 +681,10 @@ function parseBriefArguments(args: readonly string[]): CliCommand {
     const arg = args[index]!;
     if (arg === '--json') {
       json = true;
+      continue;
+    }
+    if (arg === '--no-progress') {
+      noProgress = true;
       continue;
     }
     if (
@@ -723,6 +739,9 @@ function parseBriefArguments(args: readonly string[]): CliCommand {
   if (channel && !post) {
     throw new CliUsageError('Use --post slack|discord|telegram with --channel <ID>.');
   }
+  if (channel && post === 'groupme') {
+    throw new CliUsageError('GroupMe posts to the group bound to GROUPME_BOT_ID and does not take --channel.');
+  }
   if (rosterId !== undefined && !leagueId) {
     throw new CliUsageError('Use --league <ID> when specifying --roster <N>.');
   }
@@ -732,6 +751,7 @@ function parseBriefArguments(args: readonly string[]): CliCommand {
     name: 'brief',
     ...(channel ? { channel } : {}),
     ...(leagueId ? { leagueId } : {}),
+    ...(noProgress ? { noProgress: true } : {}),
     ...(post ? { post } : {}),
     ...(rosterId !== undefined ? { rosterId } : {}),
     ...(season !== undefined ? { season } : {}),

@@ -18,6 +18,28 @@ export interface ProjectionToolsOptions {
   snapshotDatabase?: ProjectionSnapshotStore | false | undefined;
 }
 
+function extractForecastShifts(
+  projections: Awaited<ReturnType<typeof projectPlayers>>['results'] | undefined,
+) {
+  if (!Array.isArray(projections)) return [];
+  return projections.flatMap((item) => {
+    if (item.status !== 'projected' || !item.projection.forecastDiff) return [];
+    const diff = item.projection.forecastDiff;
+    if (
+      Math.abs(diff.deltaExpectedPoints) < 0.01 &&
+      diff.drivers.every((driver) => driver === 'Unchanged since previous forecast')
+    ) {
+      return [];
+    }
+    return [{
+      diff,
+      expectedPoints: item.projection.expectedPoints,
+      playerName: item.projection.player.name,
+      position: item.projection.player.position,
+    }];
+  });
+}
+
 export function createProjectionTools(
   sleeper: SleeperClient,
   nflverse: NflverseClient,
@@ -49,27 +71,26 @@ export function createProjectionTools(
             teamById.set(item.projection.player.playerId, item.projection.player.team);
           }
         }
-        const candidates: Array<{ name: string; team?: string | undefined }> = [];
-        for (const swap of result.recommendedSwaps) {
-          candidates.push({
+        const candidates: Array<{ name: string; team?: string | undefined }> = [
+          ...result.recommendedSwaps.map((swap) => ({
             name: swap.startPlayer.name,
             team: teamById.get(swap.startPlayer.playerId),
-          });
-          if (swap.sitPlayer && swap.sitPlayer.playerId !== '0') {
-            candidates.push({
-              name: swap.sitPlayer.name,
-              team: teamById.get(swap.sitPlayer.playerId),
-            });
-          }
-        }
-        for (const starter of result.optimalLineup) {
-          if (starter.injuryStatus) {
-            candidates.push({
+          })),
+          ...result.optimalLineup
+            .filter((starter) => Boolean(starter.injuryStatus))
+            .map((starter) => ({
               name: starter.name,
               team: teamById.get(starter.playerId),
-            });
-          }
-        }
+            })),
+          ...result.recommendedSwaps.flatMap((swap) =>
+            swap.sitPlayer && swap.sitPlayer.playerId !== '0'
+              ? [{
+                  name: swap.sitPlayer.name,
+                  team: teamById.get(swap.sitPlayer.playerId),
+                }]
+              : [],
+          ),
+        ];
         if (candidates.length === 0 && result.optimalLineup.length > 0) {
           const topStarter = [...result.optimalLineup]
             .sort((a, b) => (b.points ?? -Infinity) - (a.points ?? -Infinity))[0]!;
@@ -78,13 +99,19 @@ export function createProjectionTools(
             team: teamById.get(topStarter.playerId),
           });
         }
-        const bundledNewsChecks = await bundleCandidateNewsChecks(options.news, candidates, 6);
+        const bundledNewsChecks = await bundleCandidateNewsChecks(options.news, candidates, 8);
         return { ...result, bundledNewsChecks };
       },
-      toModelOutput: ({ output: { projections: _projections, ...rest } }) => ({
-        type: 'json',
-        value: rest as unknown as JSONValue,
-      }),
+      toModelOutput: ({ output: { projections, ...rest } }) => {
+        const forecastShifts = extractForecastShifts(projections);
+        return {
+          type: 'json',
+          value: {
+            ...rest,
+            ...(forecastShifts.length > 0 ? { forecastShifts } : {}),
+          } as unknown as JSONValue,
+        };
+      },
     }),
     projectLeagueMatchup: tool({
       description: 'Calculate both roster subtotals for a selected league matchup. Reads the selected week starters, completed player scores, and remaining projections. Use the returned totals directly instead of adding player scores yourself. Includes team D/ST and individual special teams. Missing scores and unsupported scoring rules remain explicit.',
@@ -95,10 +122,16 @@ export function createProjectionTools(
         week: z.number().int().min(1).max(18),
       }),
       execute: (request) => projectLeagueMatchup(sleeper, nflverse, service, request),
-      toModelOutput: ({ output: { projections: _projections, ...rest } }) => ({
-        type: 'json',
-        value: rest as unknown as JSONValue,
-      }),
+      toModelOutput: ({ output: { projections, ...rest } }) => {
+        const forecastShifts = extractForecastShifts(projections);
+        return {
+          type: 'json',
+          value: {
+            ...rest,
+            ...(forecastShifts.length > 0 ? { forecastShifts } : {}),
+          } as unknown as JSONValue,
+        };
+      },
     }),
     projectPlayers: tool({
       description: 'Project several QB, RB, WR, TE, K, or team D/ST starters in one selected league. Use this for roster or matchup analysis instead of repeated projectPlayer calls. Each result includes uncertainty and eligibility. Use a team name or code for D/ST. Missing projections remain unavailable. This tool does not add news adjustments or infer missing scores.',

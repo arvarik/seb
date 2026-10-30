@@ -1,4 +1,4 @@
-import { tool } from 'ai';
+import { tool, type JSONValue } from 'ai';
 import { z } from 'zod';
 
 import type { NewsClient } from '../news/client.js';
@@ -80,6 +80,40 @@ export function createWaiverTools(
         );
         return { ...result, bundledNewsChecks };
       },
+      toModelOutput: ({ output }) => ({
+        type: 'json',
+        value: (
+          !output || !Array.isArray(output.targets)
+            ? output
+            : {
+                ...output,
+                ...(output.methodology
+                  ? {
+                      methodology: {
+                        ...output.methodology,
+                        scoringKeysUsed: Array.isArray(output.methodology.scoringKeysUsed)
+                          ? output.methodology.scoringKeysUsed.length
+                          : output.methodology.scoringKeysUsed,
+                      },
+                    }
+                  : {}),
+                targets: output.targets.map((target) => ({
+                  ...target,
+                  production: target.production
+                    ? {
+                        analysisSeason: target.production.analysisSeason,
+                        expectedPoints: target.production.expectedPoints,
+                        games: target.production.games,
+                        latestWeek: target.production.latestWeek,
+                        recentAverage: target.production.recentAverage,
+                        seasonAverage: target.production.seasonAverage,
+                        trend: target.production.trend,
+                      }
+                    : null,
+                })),
+              }
+        ) as unknown as JSONValue,
+      }),
     }),
   };
 }

@@ -13,13 +13,13 @@ import type { NflversePlayerWeek } from '../nflverse/types.js';
 import { SleeperClient } from '../sleeper/client.js';
 import type { SleeperPlayer } from '../sleeper/types.js';
 import type { SebDatabase } from '../data/sqlite-store.js';
+import { createDirectProvenanceManifest } from '../provenance/direct.js';
 import { GameWeatherService } from '../weather/game-weather.js';
 import { WeatherClient } from '../weather/client.js';
 import {
   projectPlayer,
   scorePlayerWeek,
   type ForecastDiff,
-  type ProjectionConfidence,
   type ScoringAwarePlayerProjection,
 } from './player-projection.js';
 import { DEFAULT_PROJECTION_PARAMETERS, rollingResiduals, type ProjectionParameters } from './statistics.js';
@@ -30,7 +30,6 @@ interface PlayerProjectionSnapshotPayload {
   adjustments: Array<{ factor: number; label: string; reason: string }>;
   analysisSeason: number;
   ceiling: number;
-  confidenceLabel: ProjectionConfidence;
   expectedPoints: number;
   floor: number;
   games: number;
@@ -40,8 +39,6 @@ interface PlayerProjectionSnapshotPayload {
   opponent: string | null;
   playerName: string;
   position: string;
-  recommendationEligible: boolean;
-  scoreScope: ScoringAwarePlayerProjection['scoreScope'];
   team: string;
   throughWeek: number;
 }
@@ -61,6 +58,7 @@ export class PlayerProjectionService {
   private readonly priorCache = new Map<string, { sum: number; count: number; byPlayer: Map<string, { sum: number; count: number }> }>();
   private readonly residualCache = new Map<string, number[]>();
   private readonly learningFlights = new Map<string, Promise<{ overrides: Awaited<ReturnType<LearningStore['overrides']>> | null; learned: Awaited<ReturnType<LearningStore['latest']>> | null }>>();
+  private readonly projectFlights = new Map<string, Promise<ScoringAwarePlayerProjection>>();
 
   constructor(
     private readonly sleeper: SleeperClient,
@@ -75,6 +73,23 @@ export class PlayerProjectionService {
   async project(request: PlayerProjectionRequest): Promise<ScoringAwarePlayerProjection> {
     throwIfRequestAborted();
     const team = this.teams.resolve(request.playerName.replace(/\s+(?:D\/ST|DST|DEF|defense)$/iu, ''));
+    const subjectKey = team.status === 'resolved'
+      ? `DEF:${team.identity.code}`
+      : normalizeName(request.playerName);
+    const flightKey = `${request.leagueId}:${request.season}:${request.week}:${request.analysisSeason ?? ''}:${request.throughWeek ?? ''}:${subjectKey}`;
+    const existingFlight = this.projectFlights.get(flightKey);
+    if (existingFlight) return existingFlight;
+    const flight = this.computeProjection(request, team).finally(() => {
+      this.projectFlights.delete(flightKey);
+    });
+    this.projectFlights.set(flightKey, flight);
+    return flight;
+  }
+
+  private async computeProjection(
+    request: PlayerProjectionRequest,
+    team: ReturnType<TeamIdentityRegistry['resolve']>,
+  ): Promise<ScoringAwarePlayerProjection> {
     let analysisSeason = request.analysisSeason ??
       (request.week === 1 ? request.season - 1 : request.season);
     let throughWeek = request.throughWeek ??
@@ -98,6 +113,12 @@ export class PlayerProjectionService {
       throughWeek = completed.throughWeek;
     }
     resolveCompletedAnalysisWindow(String(request.season), state, { analysisSeason, throughWeek });
+    const historicalTarget = request.season < Number(state.season) ||
+      (request.season === Number(state.season) && request.week < state.week);
+    const customBacktestWindow =
+      (request.analysisSeason !== undefined && request.analysisSeason !== completed.analysisSeason) ||
+      (request.throughWeek !== undefined && request.throughWeek !== completed.throughWeek);
+    const skipSnapshot = historicalTarget || customBacktestWindow;
     if (team.status === 'resolved') {
       const code = team.identity.code;
       const [league, data, schedule] = await Promise.all([
@@ -120,15 +141,14 @@ export class PlayerProjectionService {
       if (schedule.length > 1) throw new ResearchDataError('The defense has multiple scheduled games.');
       const game = schedule[0];
       const kickoff = game ? easternKickoff(game.gameDate, game.gameTime) : null;
-      return this.withForecastSnapshot(projectDefense({ rows: data.weeks, team: code, name: `${team.identity.city} ${team.identity.name}`,
+      const defenseProjection = projectDefense({ rows: data.weeks, team: code, name: `${team.identity.city} ${team.identity.name}`,
         opponent: game ? game.homeTeam === code ? game.awayTeam : game.homeTeam : null,
         analysisSeason, throughWeek, season: request.season, week: request.week,
         leagueId: league.league_id, leagueName: league.name, scoringSettings: league.scoring_settings,
-        scheduled: Boolean(kickoff), gameStarted: Boolean(kickoff && kickoff.getTime() <= Date.now()) }), null);
+        scheduled: Boolean(kickoff), gameStarted: Boolean(kickoff && kickoff.getTime() <= Date.now()) });
+      return skipSnapshot ? defenseProjection : this.withForecastSnapshot(defenseProjection, null);
     }
     const automaticCurrentSeason = request.analysisSeason === undefined && request.throughWeek === undefined && analysisSeason === request.season;
-    const historicalTarget = request.season < Number(state.season) ||
-      (request.season === Number(state.season) && request.week < state.week);
     const [league, initialRows, playerMatches] = await Promise.all([
       this.sleeper.getLeague(request.leagueId),
       this.nflverse.getPlayerWeeklyStats({
@@ -226,7 +246,7 @@ export class PlayerProjectionService {
         ? pooledResiduals
         : learnedResiduals;
     const injuryStatus = [player?.injury_status, player?.status].filter(Boolean).join(' ') || null;
-    return this.withForecastSnapshot(projectPlayer({
+    const computedProjection = projectPlayer({
       projectionSeason: request.season,
       scheduled: Boolean(game),
       kickoffKnown: !game || Boolean(easternKickoff(game.gameDate, game.gameTime)),
@@ -254,7 +274,8 @@ export class PlayerProjectionService {
       weatherRisk: weather?.risk ?? null,
       weatherStatus: weather?.status ?? null,
       week: request.week,
-    }), injuryStatus);
+    });
+    return skipSnapshot ? computedProjection : this.withForecastSnapshot(computedProjection, injuryStatus);
   }
 
   private withForecastSnapshot(
@@ -271,7 +292,6 @@ export class PlayerProjectionService {
       })),
       analysisSeason: projection.analysisSeason,
       ceiling: projection.ceiling,
-      confidenceLabel: projection.confidence.label,
       expectedPoints: projection.expectedPoints,
       floor: projection.floor,
       games: projection.games,
@@ -281,8 +301,6 @@ export class PlayerProjectionService {
       opponent: projection.opponent,
       playerName: projection.player.name,
       position: projection.player.position,
-      recommendationEligible: projection.recommendationEligible,
-      scoreScope: projection.scoreScope,
       team: projection.player.team,
       throughWeek: projection.throughWeek,
     };
@@ -301,12 +319,28 @@ export class PlayerProjectionService {
         latest.payload.analysisSeason !== current.analysisSeason ||
         latest.payload.injuryStatus !== current.injuryStatus ||
         latest.payload.opponent !== current.opponent ||
-        latest.payload.team !== current.team;
+        latest.payload.team !== current.team ||
+        (latest.payload.learningThroughWeek ?? null) !== current.learningThroughWeek ||
+        latest.payload.modelVersion !== current.modelVersion;
       if (changed) {
+        const nowIso = new Date().toISOString();
         this.snapshotDatabase.createSnapshot({
+          asOf: nowIso,
           entityKey,
           kind: 'player-projection',
           payload: current,
+          provenance: createDirectProvenanceManifest(current, {
+            envelopeId: `snapshot:player-projection:${entityKey}:${nowIso}`,
+            now: nowIso,
+            source: {
+              freshnessPolicy: { freshForMs: 6 * 60 * 60 * 1_000 },
+              id: `projection:${projection.model.version}`,
+              label: `Seb player projection (${projection.model.version})`,
+              provider: 'seb',
+              retrievedAt: nowIso,
+              version: projection.model.version,
+            },
+          }),
           schemaVersion: 'player-projection-v1',
         }, 16);
         return latest
@@ -550,17 +584,24 @@ function computeForecastDiff(
     const after = currAdj.get(label);
     const beforeFactor = before?.factor ?? 1;
     const afterFactor = after?.factor ?? 1;
-    if (
-      Math.abs(afterFactor - beforeFactor) >= 0.005 ||
-      (before?.reason ?? '') !== (after?.reason ?? '')
-    ) {
+    if (Math.abs(afterFactor - beforeFactor) >= 0.005) {
       drivers.push(
         `${label} shifted (${(beforeFactor * 100).toFixed(1)}% -> ${(afterFactor * 100).toFixed(1)}%)`,
       );
+    } else if (
+      before &&
+      after &&
+      before.reason !== after.reason &&
+      (Math.abs(beforeFactor - 1) >= 0.005 || Math.abs(afterFactor - 1) >= 0.005)
+    ) {
+      drivers.push(`${label} context updated (${after.reason})`);
     }
   }
   if (drivers.length === 0 && Math.abs(deltaExpectedPoints) >= 0.01) {
     drivers.push('League scoring or positional peer prior updated');
+  }
+  if (drivers.length === 0 && (Math.abs(deltaFloor) >= 0.01 || Math.abs(deltaCeiling) >= 0.01)) {
+    drivers.push('Forecast uncertainty interval updated');
   }
   if (drivers.length === 0) {
     drivers.push('Unchanged since previous forecast');

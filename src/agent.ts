@@ -300,7 +300,7 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
       },
       () => extractRuntimeSleeperUser(options.getRuntimeContext?.()),
     ),
-    ...createTradeTools(sleeperClient, nflverseClient),
+    ...createTradeTools(sleeperClient, nflverseClient, bundledNews),
     ...createIdentityTools(
       sleeperClient,
       nflverseClient,
@@ -719,7 +719,7 @@ const DIRECT_NEWS_INSTRUCTIONS = `
 Use current news before a final waiver, FAAB, accept, or decline recommendation.
 Do not turn a trade impact result into an accept or decline action without current news evidence.
 Use searchFirstClassNews first for current reporting, injuries, trades, depth-chart changes, and recent team news.
-compareStartSit, optimizeRosterLineup, rankWaiverTargets, and runWeeklyPortfolioBrief automatically attach bundledNewsChecks from first-class newsroom sources; reuse those bundledNewsChecks directly without repeating searchFirstClassNews for already-checked players unless fallbackRecommended is true or deeper reporting is requested.
+compareStartSit, optimizeRosterLineup, rankWaiverTargets, analyzeTradeImpact, and runWeeklyPortfolioBrief automatically attach bundledNewsChecks from first-class newsroom sources; reuse those bundledNewsChecks directly without repeating searchFirstClassNews for already-checked players unless fallbackRecommended is true or deeper reporting is requested.
 The first-class tool searches official NFL and team sites, independent reporting, and fantasy-impact sources.
 Treat web reporting as news evidence, not as the source for league data, schedules, or statistics.
 Give the publisher and publication date for each current news claim when those values are available.

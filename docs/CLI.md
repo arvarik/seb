@@ -21,10 +21,10 @@ seb doctor
 | Command | Purpose |
 | --- | --- |
 | `seb` or `seb chat` | Launch the interactive terminal interface. |
-| `seb brief` | Run a multi-league weekly autopilot brief (`--json`, `--post slack\|discord\|telegram\|groupme`). |
+| `seb brief` | Run a multi-league weekly autopilot brief (`--json`, `--no-progress`, `--post slack\|discord\|telegram\|groupme`). |
 | `seb ask [PROMPT]` | Answer one question from arguments or standard input (`--json`, `--no-progress`). |
-| `seb resume [SESSION_ID\|INDEX\|QUERY]` | Resume the latest saved session, or match by `#index`, ID prefix, or title. |
-| `seb sessions` | List numbered saved interactive conversations and their opening questions. |
+| `seb resume [SESSION_ID\|INDEX\|QUERY]` | Resume the latest saved session, or match by `#index`, ID prefix, title, transcript, or tracked player. |
+| `seb sessions` | List numbered saved interactive conversations and their opening questions (`--json`). |
 | `seb configure` | Run interactive provider/settings setup or import a dotenv file (`--import-env <FILE>`). |
 | `seb setup [USERNAME]` | Initialize account preferences or save an optional Sleeper username. |
 | `seb doctor` | Run all 9 local and network health checks (`--offline`, `--json`). |
@@ -93,9 +93,10 @@ When you exit interactive chat with `/exit`, Seb saves your conversation snapsho
 
 ```bash
 seb sessions
+seb sessions --json
 seb resume                                         # Reopens the most recent saved session
 seb resume 1                                       # Reopens session #1 from `seb sessions`
-seb resume waivers                                 # Matches the newest session title containing "waivers"
+seb resume waivers                                 # Matches the newest session title, transcript, or tracked player
 seb resume seb-00000000-0000-0000-0000-000000000000
 ```
 

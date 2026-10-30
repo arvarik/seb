@@ -23,6 +23,7 @@ import {
   buildFreeformRecommendationEvidence,
   buildRecommendationRecoveryPrompt,
   enforceFreeformRecommendation,
+  hasNonToleratedStaleSource,
   questionRequestsRecommendation,
   isRetryPrompt,
   recommendationContextQuestion,
@@ -199,6 +200,7 @@ function cloneSessionState(state: SessionState): SessionState {
 }
 
 export class SebInteractiveTransport implements ChatTransport<UIMessage> {
+  private readonly evictedTurnUserIds = new Set<string>();
   private readonly localOnlyMessageIds = new Set<string>();
   private delegate: ChatTransport<UIMessage>;
   private lastRefreshedAt = 0;
@@ -436,7 +438,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           !Number.isFinite(capturedMs) ||
           capturedMs < this.lastRefreshedAt ||
           now - capturedMs > FRESH_EVIDENCE_REUSE_TTL_MS ||
-          snapshot.sources.some((source) => source.cacheOutcome === 'stale-if-error')
+          hasNonToleratedStaleSource(snapshot.sources)
         ) {
           continue;
         }
@@ -559,7 +561,15 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     );
     for (const turn of allTurns) {
       const userMessage = turn[0];
-      if (!userMessage || userMessage.role !== 'user' || keptUserIds.has(userMessage.id)) continue;
+      if (
+        !userMessage ||
+        userMessage.role !== 'user' ||
+        keptUserIds.has(userMessage.id) ||
+        this.evictedTurnUserIds.has(userMessage.id)
+      ) {
+        continue;
+      }
+      this.evictedTurnUserIds.add(userMessage.id);
       const answerText = turn
         .slice(1)
         .filter((message) => message.role === 'assistant')
@@ -625,18 +635,22 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       case 'connect': {
         const username = arguments_[0];
         if (!username) throw new Error('Use /connect <Sleeper username>.');
+        const previousUser = state.user;
         const staged = cloneSessionState(state);
         await refreshAutomaticSession(this.options.sleeper, staged, username);
         throwIfRequestAborted();
         const profile = createSetupProfile(staged.user);
         await this.profileStore.save(profile);
         Object.assign(state, staged);
+        if ((previousUser ?? '').toLowerCase() !== (state.user ?? '').toLowerCase()) {
+          this.resetSessionMemoryState(state);
+        }
         return `${formatFantasyDashboard(state)}\n\nSeb saved this username for future sessions.`;
       }
       case 'disconnect': {
         await this.profileStore.save(createSetupProfile());
         disconnectSleeperSession(state);
-        clearSessionWorkingMemory(state);
+        this.resetSessionMemoryState(state);
         return 'Seb disconnected the Sleeper account. Explore and Analyze remain available.';
       }
       case 'account':
@@ -652,6 +666,12 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         if (!state.user && !targetLeagueId) {
           throw new Error('Connect a Sleeper account with `/connect <username>` or pass `/brief <league_id>`.');
         }
+        if (state.week !== null && (state.week < 1 || state.week > 18)) {
+          throw new Error(
+            'Weekly briefs support NFL weeks 1 through 18. Run `/week current` or `/week 1..18`.',
+          );
+        }
+        this.options.sources.clear();
         const brief = await buildWeeklyPortfolioBrief(
           {
             ...(this.options.news?.search
@@ -667,9 +687,12 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
             ...(targetLeagueId && state.rosterId !== null ? { rosterId: state.rosterId } : {}),
             season: state.leagueSeason || state.season,
             ...(state.user ? { username: state.user } : {}),
-            ...(state.week && state.week >= 1 && state.week <= 18 ? { week: state.week } : {}),
+            ...(state.week ? { week: state.week } : {}),
           },
         );
+        if (this.options.sources.list().length > 0) {
+          this.uiState.recordAnswerEvidence(this.options.sources.snapshot(messageId));
+        }
         return formatWeeklyPortfolioBrief(brief).trimEnd();
       }
       case 'about':
@@ -767,10 +790,14 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
             'league season',
           );
         }
+        const previousUser = state.user;
         await connectSleeperSession(this.options.sleeper, staged, username);
         throwIfRequestAborted();
         await this.profileStore.save(createSetupProfile(staged.user));
         Object.assign(state, staged);
+        if ((previousUser ?? '').toLowerCase() !== (state.user ?? '').toLowerCase()) {
+          this.resetSessionMemoryState(state);
+        }
         return formatFantasyDashboard(state);
       }
       case 'rosters': {
@@ -854,14 +881,19 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
           disconnectSleeperSession(staged);
           await this.profileStore.save(createSetupProfile());
           Object.assign(state, staged);
+          this.resetSessionMemoryState(state);
           return 'Seb disconnected the Sleeper account.';
         }
         if (!username) throw new Error('Use /connect <Sleeper username>.');
+        const previousUser = state.user;
         const staged = cloneSessionState(state);
         await refreshAutomaticSession(this.options.sleeper, staged, username);
         throwIfRequestAborted();
         await this.profileStore.save(createSetupProfile(staged.user));
         Object.assign(state, staged);
+        if ((previousUser ?? '').toLowerCase() !== (state.user ?? '').toLowerCase()) {
+          this.resetSessionMemoryState(state);
+        }
         return formatFantasyDashboard(state);
       }
       case 'team':
@@ -1036,16 +1068,18 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
         state.player = null;
         state.skillId = 'general';
         state.team = null;
-        clearSessionWorkingMemory(state);
+        this.resetSessionMemoryState(state);
         this.lastRefreshedAt = Date.now();
         this.options.sources.clear();
         this.uiState.clearAnswerEvidence();
+        this.uiState.latestAnswer = '';
+        this.uiState.latestPrompt = '';
         this.uiState.showSuggestions = true;
         return 'Seb started a new Explore context. It kept the automatic NFL state and Sleeper account.';
       case 'memory': {
         const action = arguments_[0]?.toLowerCase();
         if (action === 'clear') {
-          clearSessionWorkingMemory(state);
+          this.resetSessionMemoryState(state);
           return 'Seb cleared the pinned session working memory.';
         }
         if (action !== undefined) {
@@ -1151,8 +1185,14 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     }
   }
 
+  private resetSessionMemoryState(state: SessionState): void {
+    clearSessionWorkingMemory(state);
+    this.evictedTurnUserIds.clear();
+  }
+
   private async runSetupCommand(arguments_: string[]): Promise<string> {
     if (arguments_.length > 1) throw new Error('Use /setup [Sleeper username].');
+    const previousUser = this.options.session.user;
     const staged = cloneSessionState(this.options.session);
     if (arguments_[0]) {
       await refreshAutomaticSession(
@@ -1165,6 +1205,9 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     const profile = createSetupProfile(staged.user);
     await this.profileStore.save(profile);
     Object.assign(this.options.session, staged);
+    if ((previousUser ?? '').toLowerCase() !== (this.options.session.user ?? '').toLowerCase()) {
+      this.resetSessionMemoryState(this.options.session);
+    }
     return [
       'Seb saved the account preference.',
       '',
@@ -1248,6 +1291,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       return 'Seb found no local preferences file. Run `/setup` to create one.';
     }
     if (normalizedAction === 'load') {
+      const previousUser = this.options.session.user;
       const staged = cloneSessionState(this.options.session);
       applySetupProfile(profile, staged);
       if (profile.sleeper) {
@@ -1259,6 +1303,9 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       }
       throwIfRequestAborted();
       Object.assign(this.options.session, staged);
+      if ((previousUser ?? '').toLowerCase() !== (this.options.session.user ?? '').toLowerCase()) {
+        this.resetSessionMemoryState(this.options.session);
+      }
       return `Seb loaded the profile.\n\n${formatSetupProfile(profile, this.profileStore.path)}`;
     }
     return formatSetupProfile(profile, this.profileStore.path);
@@ -1272,6 +1319,8 @@ Ask a player, team, statistic, schedule, or news question in plain language.
 - \`/explore [QUESTION]\`: Find NFL information.
 - \`/fantasy [QUESTION]\`: Use the connected Sleeper account.
 - \`/analyze [QUESTION]\`: Compare choices and add decision context.
+- \`/brief [LEAGUE_ID]\`: Run the multi-league weekly autopilot brief.
+- \`/memory [clear]\`: Inspect or clear pinned session working memory.
 - \`/connect USERNAME\`: Save one optional Sleeper username.
 - \`/provider [NAME]\`: Show or switch the configured model provider.
 - \`/model [MODEL]\`: Show or switch the active model.
@@ -1305,10 +1354,11 @@ export const SHORTCUT_HELP = `## Keyboard shortcuts
 - \`Ctrl+C\`: Exit Seb.`;
 
 function localTextStream(text: string): ReadableStream<UIMessageChunk> {
+  const messageId = `local-message-${crypto.randomUUID()}`;
   const textId = `local-${crypto.randomUUID()}`;
   return createUIMessageStream<UIMessage>({
     execute: ({ writer }) => {
-      writer.write({ type: 'start' });
+      writer.write({ type: 'start', messageId });
       writer.write({ type: 'start-step' });
       writer.write({ type: 'text-start', id: textId });
       writer.write({ type: 'text-delta', id: textId, delta: text });
@@ -1606,9 +1656,17 @@ export function decorateResponseStream(
         controller.enqueue({ type: 'finish-step' });
       }
       if (completed) {
+        const turnPlayers = [...new Set([...playerCandidates, ...requestedPlayers])];
+        if (
+          turnPlayers.length === 0 &&
+          state.player &&
+          userPrompt.toLowerCase().includes(state.player.toLowerCase())
+        ) {
+          turnPlayers.push(state.player);
+        }
         recordSessionTurnMemory(state, {
           answerText: finalAnswerForMemory,
-          player: state.player,
+          players: turnPlayers,
           userPrompt,
         });
       }

@@ -291,6 +291,11 @@ export function formatSessionStatus(state: SessionState): string {
     `- Fantasy leagues: ${state.leagues.length}`,
     `- Focused league: ${focusedLeagueName(state)}`,
     `- Looking at: ${state.player ?? state.team ?? 'no specific player or team'}`,
+    ...(hasSessionWorkingMemory(state.memory)
+      ? [
+          `- Working memory: ${state.memory.notedPreferences.length} preferences, ${state.memory.trackedPlayers.length} tracked players, ${state.memory.decisions.length} decisions`,
+        ]
+      : []),
     '',
     '### Decision context',
     '',
@@ -373,6 +378,7 @@ export function getContextualSuggestions(state: SessionState): string[] {
   if (state.mode === 'fantasy') {
     return state.user
       ? [
+          '/brief',
           'Give me my fantasy dashboard across all leagues.',
           'Show urgent news for players on my fantasy rosters.',
           'What needs my attention before the next league deadline?',
@@ -863,10 +869,10 @@ export function clearSessionWorkingMemory(state: SessionState): void {
 }
 
 const PREFERENCE_PATTERNS: readonly RegExp[] = [
-  /\b(?:i\s+)?(?:prefer|need|want|prioritize|play(?:ing)?\s+for)\b[^.!?\n]{0,70}\b(?:safe\s+floor|floor|consistency|high\s+ceiling|ceiling|upside|boom[\s-]*(?:or[\s-]*)?bust)\b/iu,
+  /\b(?:(?:i\s+)?(?:do\s+not|don['’]?t|never)\s+)?(?:i\s+)?(?:prefer|need|want|prioritize|play(?:ing)?\s+for)\b[^.!?\n]{0,70}\b(?:safe\s+floor|floor|consistency|high\s+ceiling|ceiling|upside|boom[\s-]*(?:or[\s-]*)?bust)\b/iu,
   /\b(?:my|our|this)\s+league\s+(?:is|uses)\s+[^.!?\n]{3,90}/iu,
   /\b(?:avoid|don['’]?t\s+start|never\s+start|skip)\b[^.!?\n]{0,60}\b(?:thursday|tnf|london|weather|rain|snow)\b/iu,
-  /\b(?:save|conserve|conservative|aggressive)\b[^.!?\n]{0,50}\bfaab\b/iu,
+  /\b(?:(?:(?:i\s+)?(?:do\s+not|don['’]?t|never)\s+)?(?:save|conserve|spend|blow)|conservative|aggressive)\b[^.!?\n]{0,50}\bfaab\b/iu,
   /\b(?:remember\s+that|note\s+that|keep\s+in\s+mind|constraint\s*:)\s*[^.!?\n]{4,120}/iu,
 ];
 
@@ -878,13 +884,15 @@ function sanitizeMemoryEntry(value: string, maxLength: number): string {
   return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength - 1).trimEnd()}…` : cleaned;
 }
 
-function pushBoundedUnique(list: string[], entry: string, maxItems: number): void {
-  if (!entry) return;
+function pushBoundedUnique(list: string[], entry: string, maxItems: number): boolean {
+  if (!entry) return false;
+  const before = JSON.stringify(list);
   const lower = entry.toLowerCase();
   const existing = list.findIndex((item) => item.toLowerCase() === lower);
   if (existing >= 0) list.splice(existing, 1);
   list.push(entry);
   if (list.length > maxItems) list.splice(0, list.length - maxItems);
+  return JSON.stringify(list) !== before;
 }
 
 export function recordSessionTurnMemory(
@@ -893,6 +901,7 @@ export function recordSessionTurnMemory(
     answerText?: string | undefined;
     evicted?: boolean | undefined;
     player?: string | null | undefined;
+    players?: readonly string[] | undefined;
     userPrompt: string;
   },
   now = new Date(),
@@ -913,10 +922,14 @@ export function recordSessionTurnMemory(
       };
   let touched = false;
 
-  if (input.player) {
-    const cleanPlayer = sanitizeMemoryEntry(input.player, 100);
-    if (cleanPlayer) {
-      pushBoundedUnique(memory.trackedPlayers, cleanPlayer, 16);
+  const candidatePlayers = input.players
+    ? [...input.players]
+    : input.player
+      ? [input.player]
+      : [];
+  for (const candidate of candidatePlayers) {
+    const cleanPlayer = sanitizeMemoryEntry(candidate, 100);
+    if (cleanPlayer && pushBoundedUnique(memory.trackedPlayers, cleanPlayer, 16)) {
       touched = true;
     }
   }
@@ -925,8 +938,7 @@ export function recordSessionTurnMemory(
     const match = pattern.exec(prompt);
     if (match?.[0]) {
       const pref = sanitizeMemoryEntry(match[0], 200);
-      if (pref) {
-        pushBoundedUnique(memory.notedPreferences, pref, 8);
+      if (pref && pushBoundedUnique(memory.notedPreferences, pref, 8)) {
         touched = true;
       }
     }
@@ -935,26 +947,26 @@ export function recordSessionTurnMemory(
   const answer = (input.answerText ?? '')
     .replace(/(?:^|\r?\n)##\s+Evidence\r?\n[\s\S]*$/u, '')
     .trim();
-  const recommendationMatch = /(?:^|\n)\s*[-*•]?\s*\*{0,2}Recommendation\*{0,2}\s*:\s*([^\n]{4,200})/iu.exec(answer);
+  const blockedDecision = /^#*\s*decision unavailable\b/iu.test(answer);
+  const recommendationMatch = !blockedDecision
+    ? /(?:^|\n)\s*[-*•]?\s*\*{0,2}Recommendation\*{0,2}\s*:\s*([^\n]{4,200})/iu.exec(answer)
+    : null;
   if (recommendationMatch?.[1]) {
     const rec = sanitizeMemoryEntry(recommendationMatch[1], 240);
-    if (rec) {
-      pushBoundedUnique(memory.decisions, rec, 12);
+    if (rec && pushBoundedUnique(memory.decisions, rec, 12)) {
       touched = true;
     }
-  } else if (input.evicted && prompt) {
+  } else if (input.evicted && prompt && answer && !blockedDecision) {
     const qSnippet = sanitizeMemoryEntry(prompt, 90);
     const firstAnswerLine = answer
       .split(/\r?\n/u)
       .map((line) => line.replace(/^#+\s*/u, '').trim())
       .find((line) => line.length > 0 && !line.startsWith('[Verified tool calls'));
-    const summary = sanitizeMemoryEntry(
-      firstAnswerLine ? `${qSnippet} -> ${firstAnswerLine}` : qSnippet,
-      240,
-    );
-    if (summary) {
-      pushBoundedUnique(memory.decisions, summary, 12);
-      touched = true;
+    if (firstAnswerLine && !firstAnswerLine.endsWith('?')) {
+      const summary = sanitizeMemoryEntry(`${qSnippet} -> ${firstAnswerLine}`, 240);
+      if (summary && pushBoundedUnique(memory.decisions, summary, 12)) {
+        touched = true;
+      }
     }
   }
 

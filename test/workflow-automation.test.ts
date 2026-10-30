@@ -9,6 +9,8 @@ import { simulateReadableStream, type UIMessage, type UIMessageChunk } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { EventEmitter } from 'node:events';
+
 import { createFantasyFootballAgent } from '../src/agent.js';
 import { runWithRequestSignal } from '../src/ai/request-signal.js';
 import {
@@ -20,11 +22,17 @@ import {
 import {
   buildFreeformRecommendationEvidence,
   enforceFreeformRecommendation,
+  hasNonToleratedStaleSource,
 } from '../src/analysis/recommendation-eligibility.js';
 import { parseCliArguments } from '../src/cli-options.js';
 import { runCli } from '../src/cli.js';
-import { postOutboundConnectorMessage } from '../src/connectors/bot.js';
+import {
+  latestRecommendationQuestion,
+  postOutboundConnectorMessage,
+  validateOutboundConnectorTarget,
+} from '../src/connectors/bot.js';
 import { SebDatabase } from '../src/data/sqlite-store.js';
+import { MemoryPromptHistory } from '../src/interactive/history.js';
 import {
   clearSessionWorkingMemory,
   createSessionState,
@@ -35,6 +43,7 @@ import {
 } from '../src/interactive/session.js';
 import { sessionContext, SessionStore, type SavedSession } from '../src/interactive/sessions.js';
 import { SebInteractiveTransport } from '../src/interactive/transport.js';
+import { runSebInteractiveTui } from '../src/interactive/tui.js';
 import { InteractiveUiState } from '../src/interactive/ui-state.js';
 import type { NewsClient } from '../src/news/client.js';
 import { bundleCandidateNewsChecks } from '../src/news/tools.js';
@@ -53,6 +62,7 @@ import type {
   SleeperUser,
 } from '../src/sleeper/types.js';
 import { SourceTracker, type DataSourceRecord } from '../src/sources.js';
+import { createTradeTools } from '../src/trades/tools.js';
 import { createWaiverTools } from '../src/waivers/tools.js';
 import type { WeatherClient } from '../src/weather/client.js';
 import { game, league, stat } from './analysis-fixtures.js';
@@ -475,13 +485,13 @@ describe('Feature 1: auto-bundled newsroom checks & single-call decision gate', 
     expect(searchSpy).toHaveBeenNthCalledWith(1, {
       limit: 4,
       maxAgeDays: 7,
-      query: 'Runner Zero injury status and fantasy impact',
+      query: 'Runner Zero',
       teams: ['BUF'],
     });
     expect(searchSpy).toHaveBeenNthCalledWith(2, {
       limit: 4,
       maxAgeDays: 7,
-      query: 'Failing Player injury status and fantasy impact',
+      query: 'Failing Player',
     });
     expect(checks.map((c) => c.playerName)).toEqual(['Runner Zero', 'Runner One']);
 
@@ -1122,5 +1132,461 @@ describe('Feature 3: zero-UUID seb resume, session working memory, and SQLite fo
     expect(db.listSnapshotMetadata({ kind: 'player-projection' })).toHaveLength(2);
     expect(fourth.forecastDiff?.deltaExpectedPoints).toBe(third.forecastDiff?.deltaExpectedPoints);
     expect(fourth.forecastDiff?.unchangedSince).toBeTruthy();
+  });
+});
+
+describe('Review & live-E2E audit regressions', () => {
+  it('resolves D/ST aliases, single-call analyzeTradeImpact bundled checks, tolerated RSS stale-if-error, and cross-turn brief waiver reuse', async () => {
+    const { nflverse, sleeper } = buildMultiPlayerFixture();
+    const defNflverse = {
+      ...nflverse,
+      getDefenseData: vi.fn(async () => ({
+        specialTeams: {},
+        weeks: [
+          {
+            gameId: '2025_05_ARI_SEA',
+            opponent: 'ARI',
+            season: 2025,
+            stats: { fum_rec: 1, int: 2, pts_allow: 13, sack: 4 },
+            team: 'SEA',
+            week: 5,
+          },
+          {
+            gameId: '2025_05_MIA_BUF',
+            opponent: 'MIA',
+            season: 2025,
+            stats: { fum_rec: 1, int: 1, pts_allow: 17, sack: 3 },
+            team: 'BUF',
+            week: 5,
+          },
+        ],
+      })),
+      getSchedule: vi.fn(async (q: { team?: string; week?: number }) => {
+        if (q.team === 'SEA') {
+          return [game({ awayTeam: 'SF', gameDate: '2099-10-12', homeTeam: 'SEA', season: 2025, week: q.week ?? 6 })];
+        }
+        if (q.team === 'BUF') {
+          return [game({ awayTeam: 'NYJ', gameDate: '2099-10-12', homeTeam: 'BUF', season: 2025, week: q.week ?? 6 })];
+        }
+        return nflverse.getSchedule(q as Parameters<typeof nflverse.getSchedule>[0]);
+      }),
+    } as unknown as NflverseClient;
+    const defSleeper = {
+      ...sleeper,
+      getLeague: vi.fn(async (id: string) => {
+        const base = await sleeper.getLeague(id);
+        return {
+          ...base,
+          roster_positions: [...base.roster_positions, 'DEF'],
+          scoring_settings: { ...base.scoring_settings, fum_rec: 2, int: 2, pts_allow_14_20: 1, pts_allow_7_13: 4, sack: 1 },
+        };
+      }),
+    } as unknown as SleeperClient;
+    const news = createMockNews();
+    const projTools = createProjectionTools(defSleeper, defNflverse, {} as WeatherClient, { news });
+    const dstOutput = await execTool(projTools.compareStartSit, {
+      leagueId: '1001',
+      playerNames: ['Seattle Defense', 'Buffalo Defense'],
+      season: 2025,
+      slot: 'DEF',
+      week: 6,
+    });
+    const staleOneRssSources: DataSourceRecord[] = [
+      ...freshSources(),
+      {
+        accessedAt: new Date().toISOString(),
+        cacheOutcome: 'stale-if-error',
+        id: 'news-source:flaky-beat',
+        label: 'Flaky Beat RSS',
+        url: 'https://example.com/rss',
+      },
+    ];
+    expect(hasNonToleratedStaleSource(staleOneRssSources)).toBe(false);
+    const dstEvidence = buildFreeformRecommendationEvidence({
+      question: 'Should I start Seattle Defense or Buffalo Defense in Week 6 in league 1001?',
+      sources: staleOneRssSources,
+      toolResults: [
+        {
+          input: { leagueId: '1001', playerNames: ['Seattle Defense', 'Buffalo Defense'], season: 2025, week: 6 },
+          output: dstOutput,
+          toolName: 'compareStartSit',
+        },
+      ],
+    });
+    expect(dstEvidence.currentEvidence).toBe('fresh');
+    expect(
+      enforceFreeformRecommendation(
+        'Recommendation: Start Seattle Defense over Buffalo Defense.',
+        dstEvidence,
+      ).eligibility.outcome,
+    ).toBe('allowed');
+
+    // Single-call analyzeTradeImpact with bundledNewsChecks + "trade ... to start" phrasing
+    const tradeTools = createTradeTools(sleeper, nflverse, news);
+    const tradeOutput = await execTool(tradeTools.analyzeTradeImpact, {
+      givePlayerNames: ['Runner One'],
+      leagueId: '1001',
+      receivePlayerNames: ['Peer Runner 3'],
+      rosterId: 1,
+    });
+    expect('bundledNewsChecks' in tradeOutput && tradeOutput.bundledNewsChecks.length).toBe(2);
+    const tradeEvidence = buildFreeformRecommendationEvidence({
+      question: 'Should I trade Runner One for Peer Runner 3 to start at RB in league 1001?',
+      sources: freshSources(),
+      toolResults: [
+        {
+          input: { givePlayerNames: ['Runner One'], leagueId: '1001', receivePlayerNames: ['Peer Runner 3'], rosterId: 1 },
+          output: tradeOutput,
+          toolName: 'analyzeTradeImpact',
+        },
+      ],
+    });
+    expect(
+      enforceFreeformRecommendation(
+        'Recommendation: Trade Runner One for Peer Runner 3.',
+        tradeEvidence,
+      ).eligibility.outcome,
+    ).toBe('allowed');
+
+    // Follow-up waiver question reusing prior runWeeklyPortfolioBrief evidence does not trip on lineup projections
+    const briefTools = createPortfolioBriefTools(
+      { news, nflverse, sleeper, snapshotDatabase: false, weather: {} as WeatherClient },
+      () => 'arvind',
+    );
+    const briefOut = await execTool(briefTools.runWeeklyPortfolioBrief, { leagueId: '1001' });
+    const followUpWaiver = buildFreeformRecommendationEvidence({
+      question: 'Should I claim Wide Waiver off waivers in league 1001?',
+      sources: freshSources(),
+      toolResults: [{ input: { leagueId: '1001' }, output: briefOut, toolName: 'runWeeklyPortfolioBrief' }],
+    });
+    expect(
+      enforceFreeformRecommendation(
+        'Recommendation: Add Wide Waiver with a $15 FAAB bid.',
+        followUpWaiver,
+      ).eligibility.outcome,
+    ).toBe('allowed');
+  });
+
+  it('deduplicates concurrent PlayerProjectionService calls, isolates custom backtest windows, and records snapshot provenance manifests', async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'seb-proj-dedupe-'));
+    tempDirs.push(dir);
+    const db = new SebDatabase(resolve(dir, 'seb.sqlite'));
+    databases.push(db);
+
+    const { nflverse, sleeper } = buildMultiPlayerFixture({ throughWeek: 5 });
+    const statsSpy = vi.spyOn(nflverse, 'getPlayerWeeklyStats');
+    const service = new PlayerProjectionService(sleeper, nflverse, {} as WeatherClient, false, db);
+
+    const [p1, p2] = await Promise.all([
+      service.project({ leagueId: '1001', playerName: 'Runner Zero', season: 2025, week: 6 }),
+      service.project({ leagueId: '1001', playerName: 'Runner Zero', season: 2025, week: 6 }),
+    ]);
+    expect(p1.expectedPoints).toBe(p2.expectedPoints);
+    // In-flight deduplication executes the underlying player stats fetch once across concurrent callers
+    const playerStatCalls = statsSpy.mock.calls.filter((c) => c[0]?.playerName === 'Runner Zero');
+    expect(playerStatCalls).toHaveLength(1);
+
+    const metas = db.listSnapshotMetadata({ kind: 'player-projection' });
+    expect(metas).toHaveLength(1);
+    const stored = db.getSnapshot(metas[0]!.id);
+    expect(stored?.provenance).toMatchObject({
+      freshness: { state: 'fresh' },
+    });
+    expect(Object.keys((stored?.provenance as { fields?: Record<string, unknown> })?.fields ?? {}).length).toBeGreaterThan(5);
+
+    // Custom historical throughWeek override (throughWeek: 2 while live completed is 5) does NOT write a snapshot
+    await service.project({
+      leagueId: '1001',
+      playerName: 'Runner Zero',
+      season: 2025,
+      throughWeek: 2,
+      week: 6,
+    });
+    expect(db.listSnapshotMetadata({ kind: 'player-projection' })).toHaveLength(1);
+  });
+
+  it('handles best-ball & disable_adds leagues, per-league fault isolation, platform-native --post formatting, and group-chat author prefixes', async () => {
+    const { nflverse, sleeper } = buildMultiPlayerFixture();
+    const bestBallLeague = league({
+      league_id: '1001',
+      name: 'Best Ball Guillotine',
+      roster_positions: ['RB', 'RB', 'BN', 'BN', 'BN'], // 5 spots, only 3 players -> open bench spot!
+      season: '2025',
+      settings: { best_ball: 1, disable_adds: 1, waiver_budget: 100, waiver_type: 2 },
+    });
+    const customSleeper = {
+      ...sleeper,
+      getLeague: vi.fn(async (id: string) => {
+        if (id === '1002') throw new Error('Sleeper 502 upstream');
+        return bestBallLeague;
+      }),
+      getLeagueRosters: vi.fn(async (id: string) => {
+        if (id === '1002') throw new Error('Sleeper 502 upstream');
+        return sleeper.getLeagueRosters(id);
+      }),
+      getUserLeagues: vi.fn(async () => [
+        bestBallLeague,
+        league({ league_id: '1002', name: 'Failing League', season: '2025' }),
+      ]),
+    } as unknown as SleeperClient;
+    const news = createMockNews();
+    const brief = await buildWeeklyPortfolioBrief(
+      { news, nflverse, sleeper: customSleeper, snapshotDatabase: false, weather: {} as WeatherClient },
+      { username: 'arvind' },
+    );
+    expect(brief.leagues).toHaveLength(2);
+    expect(brief.leagues[0]?.lineup).toBeNull();
+    expect(brief.leagues[0]?.lineupNote).toContain('Best-ball');
+    expect(brief.leagues[0]?.waiverTargets).toEqual([]);
+    expect(brief.leagues[0]?.suggestedDrops).toEqual([]);
+    expect(brief.leagues[1]?.error).toContain('Sleeper 502 upstream');
+    expect(formatWeeklyPortfolioBrief(brief)).toContain('Best-ball league');
+
+    // Outbound connector formatting: Slack mrkdwn, Telegram MarkdownV2 + HTTP 400 description, GroupMe plain text
+    const payloads: Array<{ body: Record<string, unknown>; url: string }> = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      payloads.push({ body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>, url: urlStr });
+      if (urlStr.includes('botbad-tok')) {
+        return new Response(JSON.stringify({ description: 'Bad Request: chat not found', ok: false }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await postOutboundConnectorMessage({
+      channel: 'C1',
+      connector: 'slack',
+      environment: { SLACK_BOT_TOKEN: 'xoxb-1' },
+      fetchImpl: fetchMock,
+      text: '## Heading\nStart **Runner Zero** ([link](https://example.com))',
+    });
+    expect(String(payloads[0]?.body.text)).toContain('*Runner Zero*');
+    expect(String(payloads[0]?.body.text)).not.toContain('**Runner Zero**');
+
+    await postOutboundConnectorMessage({
+      channel: '-1001',
+      connector: 'telegram',
+      environment: { TELEGRAM_BOT_TOKEN: 'tg-1' },
+      fetchImpl: fetchMock,
+      text: 'Start **Runner Zero** (+4.2 pts)',
+    });
+    expect(payloads[1]?.body.parse_mode).toBe('MarkdownV2');
+    expect(String(payloads[1]?.body.text)).toContain('*Runner Zero*');
+
+    await expect(
+      postOutboundConnectorMessage({
+        channel: '-1001',
+        connector: 'telegram',
+        environment: { TELEGRAM_BOT_TOKEN: 'bad-tok' },
+        fetchImpl: fetchMock,
+        text: 'Hello',
+      }),
+    ).rejects.toThrow('Bad Request: chat not found');
+
+    await postOutboundConnectorMessage({
+      connector: 'groupme',
+      environment: { GROUPME_BOT_ID: 'gm-1' },
+      fetchImpl: fetchMock,
+      text: '## Brief\nStart **Runner Zero**',
+    });
+    expect(String(payloads[3]?.body.text)).not.toContain('**');
+    expect(String(payloads[3]?.body.text)).not.toContain('##');
+
+    expect(() =>
+      validateOutboundConnectorTarget({
+        channel: 'room',
+        connector: 'groupme',
+        environment: { GROUPME_BOT_ID: 'gm-1' },
+      }),
+    ).toThrow('does not take --channel');
+
+    // Group-chat [author]: prefix stripping in connector Decision Gate prompt extraction
+    expect(
+      latestRecommendationQuestion([
+        { content: '[alice]: Start Josh Allen or Lamar Jackson this week?', role: 'user' },
+      ]),
+    ).toBe('Start Josh Allen or Lamar Jackson this week?');
+  });
+
+  it('preserves /help ### Sources in TUI, skips empty session files, folds evicted turns once, preserves negations, and searches transcripts in seb resume', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'seb-tui-regressions-'));
+    tempDirs.push(dir);
+    const environment = { NO_COLOR: '1', SEB_CONFIG_HOME: dir };
+    const store = new SessionStore(environment);
+
+    class FakeInput extends EventEmitter {
+      isTTY = true;
+      pause() { return this; }
+      resume() { return this; }
+      setRawMode() { return this; }
+      type(text: string) { this.emit('data', Buffer.from(text)); }
+    }
+    class FakeOutput extends EventEmitter {
+      columns = 100;
+      rows = 160;
+      text = '';
+      write(chunk: string | Uint8Array) { this.text += String(chunk); return true; }
+    }
+
+    const { nflverse, sleeper } = buildMultiPlayerFixture();
+    const mockModel = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { id: 't1', type: 'text-start' },
+            { delta: 'Acknowledged.', id: 't1', type: 'text-delta' },
+            { id: 't1', type: 'text-end' },
+            {
+              finishReason: { raw: 'stop', unified: 'stop' },
+              type: 'finish',
+              usage: {
+                inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: 5, total: 5 },
+                outputTokens: { reasoning: undefined, text: 2, total: 2 },
+              },
+            },
+          ],
+        }),
+      }),
+    });
+    const makeTransport = (session = createSessionState()) =>
+      new SebInteractiveTransport({
+        agent: createFantasyFootballAgent({
+          identityRepository: false,
+          languageModel: mockModel,
+          nflverseClient: nflverse,
+          sleeperClient: sleeper,
+          weatherClient: {} as WeatherClient,
+        }),
+        environment,
+        model: 'mock',
+        nflverse,
+        profileStore: {
+          load: async () => null,
+          path: join(dir, 'profile.json'),
+          remove: async () => false,
+          save: async () => undefined,
+        } as SetupProfileStore,
+        session,
+        sleeper,
+        sources: new SourceTracker(),
+        version: '1.1.3',
+        weather: {} as WeatherClient,
+      });
+
+    // 1. Opening TUI and exiting immediately writes NO empty session snapshot
+    const emptyIn = new FakeInput();
+    const emptyOut = new FakeOutput();
+    const emptyRun = runSebInteractiveTui({
+      environment,
+      history: new MemoryPromptHistory(),
+      input: emptyIn,
+      output: emptyOut,
+      session: createSessionState(),
+      title: 'Seb · mock',
+      transport: makeTransport(),
+    });
+    await expect.poll(() => emptyIn.listenerCount('data')).toBe(1);
+    emptyIn.type('\x1b'); // Escape on empty prompt exits immediately
+    await emptyRun;
+    expect(await store.list()).toEqual([]);
+
+    // 2. Running /help in live TUI preserves the ### Sources section instead of eating it as an Evidence block
+    const helpIn = new FakeInput();
+    const helpOut = new FakeOutput();
+    const helpRun = runSebInteractiveTui({
+      environment,
+      history: new MemoryPromptHistory(),
+      input: helpIn,
+      output: helpOut,
+      session: createSessionState(),
+      title: 'Seb · mock',
+      transport: makeTransport(),
+    });
+    await expect.poll(() => helpIn.listenerCount('data')).toBe(1);
+    helpIn.type('/help\r');
+    await expect.poll(() => helpOut.text).toContain('/sources');
+    expect(helpOut.text).toContain('Sources');
+    helpIn.type('/exit\r');
+    await helpRun;
+
+    // 3. Working memory: preserves negations, tracks multiple players, skips Decision unavailable, and keeps updatedAt stable on no-op
+    const memState = createSessionState();
+    const t0 = new Date('2026-10-29T10:00:00.000Z');
+    recordSessionTurnMemory(
+      memState,
+      {
+        answerText: '## Decision unavailable\n\nRecommendation: Do not store blocked advice.',
+        players: ['CeeDee Lamb', 'Amon-Ra St. Brown'],
+        userPrompt: "I don't want boom-or-bust options and never spend all my FAAB.",
+      },
+      t0,
+    );
+    expect(memState.memory?.notedPreferences[0]).toMatch(/don't want boom-or-bust/iu);
+    expect(memState.memory?.trackedPlayers).toEqual(['CeeDee Lamb', 'Amon-Ra St. Brown']);
+    expect(memState.memory?.decisions).toEqual([]);
+    const beforeUpdated = memState.memory?.updatedAt;
+    recordSessionTurnMemory(
+      memState,
+      {
+        answerText: 'No action needed.',
+        players: ['Amon-Ra St. Brown'],
+        userPrompt: 'What is the weather?',
+      },
+      new Date('2026-10-29T11:00:00.000Z'),
+    );
+    expect(memState.memory?.updatedAt).toBe(beforeUpdated);
+
+    // 4. seb resume <query> matches mid-transcript turns & tracked players, and seb sessions --json emits valid JSON
+    const richId = `seb-${randomUUID()}`;
+    const richSession = createSessionState();
+    richSession.memory = {
+      decisions: ['Start Jahmyr Gibbs'],
+      notedPreferences: [],
+      trackedPlayers: ['Jahmyr Gibbs'],
+      updatedAt: '2026-10-29T12:00:00.000Z',
+    };
+    const richSnap: SavedSession = {
+      context: sessionContext(richSession),
+      evidence: [],
+      id: richId,
+      messages: [
+        { id: 'u1', parts: [{ text: 'Check my Week 8 lineup', type: 'text' }], role: 'user' },
+        { id: 'a1', parts: [{ text: 'Lineup looks solid.', type: 'text' }], role: 'assistant' },
+        { id: 'u2', parts: [{ text: 'What about Jayden Reed trade value?', type: 'text' }], role: 'user' },
+      ],
+      updatedAt: '2026-10-29T12:00:00.000Z',
+      version: 1,
+    };
+    await store.acquire(richId);
+    await store.save(richSnap);
+    await store.release(richId);
+
+    // Latest prefers real conversation over the /help-only session!
+    expect(await store.resolve('latest')).toBe(richId);
+    // Mid-transcript user turn match ("jayden reed") and trackedPlayers match ("gibbs")
+    expect(await store.resolve('jayden reed')).toBe(richId);
+    expect(await store.resolve('gibbs')).toBe(richId);
+
+    let outJson = '';
+    const code = await runCli(
+      ['sessions', '--json'],
+      {
+        stderr: new Writable({ write(_c, _e, cb) { cb(); } }),
+        stdin: Object.assign(new EventEmitter(), { isTTY: false }) as unknown as NodeJS.ReadStream,
+        stdout: Object.assign(
+          new Writable({
+            write(chunk, _e, cb) {
+              outJson += String(chunk);
+              cb();
+            },
+          }),
+          { isTTY: false },
+        ) as unknown as NodeJS.WriteStream,
+      },
+      environment,
+    );
+    expect(code).toBe(0);
+    const parsedSessions = JSON.parse(outJson) as Array<{ id: string }>;
+    expect(parsedSessions.some((s) => s.id === richId)).toBe(true);
   });
 });

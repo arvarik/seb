@@ -82,7 +82,11 @@ export class SessionStore {
       if (entries.length === 0) {
         throw new Error('No saved sessions found. Start a conversation with seb first.');
       }
-      return entries[0]!.id;
+      const preferred = entries.find(
+        (entry) =>
+          entry.title !== 'Empty conversation' && !isLocalOnlyInteractiveCommandInput(entry.title),
+      );
+      return (preferred ?? entries[0]!).id;
     }
     if (idSchema.safeParse(query).success) {
       await this.load(query);
@@ -119,6 +123,24 @@ export class SessionStore {
     }
     const titleMatches = entries.filter((entry) => entry.title.toLowerCase().includes(needle));
     if (titleMatches.length > 0) return titleMatches[0]!.id;
+    for (const entry of entries) {
+      try {
+        const saved = await this.load(entry.id);
+        const localIds = new Set(saved.localOnlyMessageIds ?? []);
+        const matchedTranscript = saved.messages.some((message) => {
+          if (message.role !== 'user' || localIds.has(message.id)) return false;
+          const text = userMessageText(message);
+          return !isLocalOnlyInteractiveCommandInput(text) && text.toLowerCase().includes(needle);
+        });
+        const matchedContext =
+          Boolean(saved.context.player?.toLowerCase().includes(needle)) ||
+          Boolean(saved.context.leagueId?.toLowerCase().includes(needle)) ||
+          Boolean(saved.context.memory?.trackedPlayers.some((p) => p.toLowerCase().includes(needle)));
+        if (matchedTranscript || matchedContext) return entry.id;
+      } catch {
+        // Ignore unreadable sessions during search.
+      }
+    }
     throw new Error(
       `No saved session matched "${query}". Use seb sessions to list saved sessions.`,
     );

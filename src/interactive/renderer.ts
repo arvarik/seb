@@ -899,7 +899,10 @@ export class SebTerminalRenderer {
       const id = `${message.id}:${index}`;
       if (part.type === 'text' && part.text.trim()) {
         const snapshot = this.options.uiState.evidenceForAnswer(message.id);
-        for (const [sectionIndex, section] of splitEvidenceText(part.text).entries()) {
+        const sections = message.id.startsWith('local-message-')
+          ? [{ content: part.text, evidence: false }]
+          : splitEvidenceText(part.text);
+        for (const [sectionIndex, section] of sections.entries()) {
           const sectionId = `${id}:${sectionIndex}`;
           active.add(sectionId);
           this.upsert({

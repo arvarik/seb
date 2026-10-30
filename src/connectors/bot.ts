@@ -1,14 +1,15 @@
 import { resolveModelFamilies } from '../ai/model-families.js';
 import { createDiscordAdapter } from '@chat-adapter/discord';
-import { createSlackAdapter } from '@chat-adapter/slack';
+import { createSlackAdapter, SlackFormatConverter } from '@chat-adapter/slack';
 import { createMemoryState } from '@chat-adapter/state-memory';
 import { createRedisState } from '@chat-adapter/state-redis';
-import { createTelegramAdapter } from '@chat-adapter/telegram';
+import { createTelegramAdapter, TelegramFormatConverter } from '@chat-adapter/telegram';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import {
   Chat,
   fromFullStream,
+  markdownToPlainText,
   type Adapter,
   type Message,
   type MessageContext,
@@ -293,33 +294,46 @@ function createAgentReply(environment: Environment): ConnectorReply {
   const clients = { sleeperClient, nflverseClient, newsClient, weatherClient };
   const database = getSharedSebDatabase();
   let cachedSelection: ResolvedModelProvider | undefined;
-  let cachedContext: { data: string; expiresAt: number; instructions: string } | undefined;
+  const cachedContexts = new Map<
+    'dm' | 'shared',
+    { data: string; expiresAt: number; instructions: string }
+  >();
 
-  const getRuntimeContextSnapshot = async () => {
-    if (cachedContext && Date.now() < cachedContext.expiresAt) return cachedContext;
+  const getRuntimeContextSnapshot = async (isDM: boolean) => {
+    const scope = isDM ? 'dm' : 'shared';
+    const cached = cachedContexts.get(scope);
+    if (cached && Date.now() < cached.expiresAt) return cached;
     const session = createSessionState();
     const preferredUser = environment.SEB_SLEEPER_USER?.trim();
-    try {
-      const profile = await new FileSetupProfileStore({ environment }).load();
-      if (profile) applySetupProfile(profile, session);
-    } catch {
-      // Ignore optional profile errors in connector mode.
+    if (isDM || preferredUser) {
+      try {
+        const profile = await new FileSetupProfileStore({ environment }).load();
+        if (
+          profile &&
+          (isDM || profile.sleeper?.username?.toLowerCase() === preferredUser?.toLowerCase())
+        ) {
+          applySetupProfile(profile, session);
+        }
+      } catch {
+        // Ignore optional profile errors in connector mode.
+      }
     }
     try {
       await refreshAutomaticSession(
         contextSleeperClient,
         session,
-        preferredUser || session.user || undefined,
+        preferredUser || (isDM ? session.user : null) || undefined,
       );
     } catch {
       // Degrade gracefully when Sleeper is unreachable.
     }
-    cachedContext = {
+    const next = {
       data: formatSessionData(session),
       expiresAt: Date.now() + CONNECTOR_CONTEXT_TTL_MS,
       instructions: formatSessionInstructions(session),
     };
-    return cachedContext;
+    cachedContexts.set(scope, next);
+    return next;
   };
 
   return async (thread, message, context, requestSignal) => {
@@ -331,7 +345,7 @@ function createAgentReply(environment: Environment): ConnectorReply {
             cachedSelection = resolved;
             return resolved;
           }),
-      getRuntimeContextSnapshot(),
+      getRuntimeContextSnapshot(Boolean(thread.isDM)),
     ]);
     const primaryModel = selection.model;
     const fallbackModel = selection.fallbackModel;
@@ -709,9 +723,13 @@ function sourcePartId(value: unknown): string {
   return typeof id === 'string' ? id : crypto.randomUUID();
 }
 
-function latestRecommendationQuestion(prompt: unknown): string {
+export function latestRecommendationQuestion(prompt: unknown): string {
   const prompts = userPrompts(prompt);
   return recommendationContextQuestion(prompts.at(-1) ?? '', prompts.at(-2));
+}
+
+function stripGroupAuthorPrefix(text: string): string {
+  return text.replace(/^(?:\[[^\]\r\n]{1,80}\]:\s*)+/gmu, '').trim();
 }
 
 function userPrompts(prompt: unknown): string[] {
@@ -723,18 +741,21 @@ function userPrompts(prompt: unknown): string[] {
     const record = message as Record<string, unknown>;
     if (record.role !== 'user') continue;
     if (typeof record.content === 'string') {
-      prompts.unshift(record.content);
+      const cleaned = stripGroupAuthorPrefix(record.content);
+      if (cleaned) prompts.unshift(cleaned);
       if (prompts.length === 2) break;
       continue;
     }
     if (!Array.isArray(record.content)) continue;
-    const text = record.content.flatMap((part) => {
-      if (!part || typeof part !== 'object') return [];
-      const partRecord = part as Record<string, unknown>;
-      return partRecord.type === 'text' && typeof partRecord.text === 'string'
-        ? [partRecord.text]
-        : [];
-    }).join('\n');
+    const text = stripGroupAuthorPrefix(
+      record.content.flatMap((part) => {
+        if (!part || typeof part !== 'object') return [];
+        const partRecord = part as Record<string, unknown>;
+        return partRecord.type === 'text' && typeof partRecord.text === 'string'
+          ? [partRecord.text]
+          : [];
+      }).join('\n'),
+    );
     if (text) prompts.unshift(text);
     if (prompts.length === 2) break;
   }
@@ -1072,18 +1093,10 @@ export interface OutboundConnectorMessageOptions {
   text: string;
 }
 
-export async function postOutboundConnectorMessage(
-  options: OutboundConnectorMessageOptions,
-): Promise<{ channel: string | null; chunksSent: number; connector: ConnectorName }> {
+export function validateOutboundConnectorTarget(
+  options: Pick<OutboundConnectorMessageOptions, 'channel' | 'connector' | 'environment'>,
+): { botId?: string; channel: string | null; connector: ConnectorName; token?: string } {
   const environment = options.environment ?? process.env;
-  const fetchFn = options.fetchImpl ?? fetch;
-  const signal = options.signal ?? AbortSignal.timeout(30_000);
-  const limit = connectorChunkLimit(options.connector) ?? 3_800;
-  const chunks = splitConnectorMessage(options.text.trim(), limit).filter((c) => c.trim().length > 0);
-  if (chunks.length === 0) {
-    throw new Error('Cannot post an empty message to a connector.');
-  }
-
   if (options.connector === 'slack') {
     const token = environment.SLACK_BOT_TOKEN?.trim();
     if (!token) throw new Error('Set SLACK_BOT_TOKEN before posting to Slack.');
@@ -1091,27 +1104,8 @@ export async function postOutboundConnectorMessage(
     if (!channel) {
       throw new Error('Pass --channel <CHANNEL_ID> or set SLACK_DEFAULT_CHANNEL_ID for Slack delivery.');
     }
-    for (const chunk of chunks) {
-      const response = await fetchFn('https://slack.com/api/chat.postMessage', {
-        body: JSON.stringify({ channel, text: chunk, unfurl_links: false }),
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json; charset=utf-8',
-        },
-        method: 'POST',
-        signal,
-      });
-      if (!response.ok) {
-        throw new Error(`Slack post failed with HTTP ${response.status}.`);
-      }
-      const payload = (await response.json()) as { error?: string; ok?: boolean };
-      if (payload.ok !== true) {
-        throw new Error(`Slack post failed: ${payload.error ?? 'unknown error'}.`);
-      }
-    }
-    return { channel, chunksSent: chunks.length, connector: 'slack' };
+    return { channel, connector: 'slack', token };
   }
-
   if (options.connector === 'discord') {
     const token = environment.DISCORD_BOT_TOKEN?.trim();
     if (!token) throw new Error('Set DISCORD_BOT_TOKEN before posting to Discord.');
@@ -1121,23 +1115,8 @@ export async function postOutboundConnectorMessage(
         'Pass a numeric --channel <CHANNEL_ID> or set DISCORD_DEFAULT_CHANNEL_ID for Discord delivery.',
       );
     }
-    for (const chunk of chunks) {
-      const response = await fetchFn(`https://discord.com/api/v10/channels/${channel}/messages`, {
-        body: JSON.stringify({ content: chunk }),
-        headers: {
-          Authorization: `Bot ${token}`,
-          'Content-Type': 'application/json',
-        },
-        method: 'POST',
-        signal,
-      });
-      if (!response.ok) {
-        throw new Error(`Discord post failed with HTTP ${response.status}.`);
-      }
-    }
-    return { channel, chunksSent: chunks.length, connector: 'discord' };
+    return { channel, connector: 'discord', token };
   }
-
   if (options.connector === 'telegram') {
     const token = environment.TELEGRAM_BOT_TOKEN?.trim();
     if (!token) throw new Error('Set TELEGRAM_BOT_TOKEN before posting to Telegram.');
@@ -1145,42 +1124,129 @@ export async function postOutboundConnectorMessage(
     if (!chatId) {
       throw new Error('Pass --channel <CHAT_ID> or set TELEGRAM_DEFAULT_CHAT_ID for Telegram delivery.');
     }
-    for (const chunk of chunks) {
-      const response = await fetchFn(`https://api.telegram.org/bot${token}/sendMessage`, {
-        body: JSON.stringify({
-          chat_id: chatId,
-          disable_web_page_preview: true,
-          text: chunk,
-        }),
-        headers: { 'Content-Type': 'application/json' },
-        method: 'POST',
-        signal,
-      });
-      if (!response.ok) {
-        throw new Error(`Telegram post failed with HTTP ${response.status}.`);
-      }
-      const payload = (await response.json()) as { description?: string; ok?: boolean };
-      if (payload.ok !== true) {
-        throw new Error(`Telegram post failed: ${payload.description ?? 'unknown error'}.`);
-      }
-    }
-    return { channel: chatId, chunksSent: chunks.length, connector: 'telegram' };
+    return { channel: chatId, connector: 'telegram', token };
   }
-
   const botId = environment.GROUPME_BOT_ID?.trim();
   if (!botId) throw new Error('Set GROUPME_BOT_ID before posting to GroupMe.');
   if (options.channel?.trim()) {
     throw new Error('GroupMe posts to the group bound to GROUPME_BOT_ID and does not take --channel.');
   }
+  return { botId, channel: null, connector: 'groupme' };
+}
+
+export async function postOutboundConnectorMessage(
+  options: OutboundConnectorMessageOptions,
+): Promise<{ channel: string | null; chunksSent: number; connector: ConnectorName }> {
+  const target = validateOutboundConnectorTarget(options);
+  const fetchFn = options.fetchImpl ?? fetch;
+  const requestSignal = (): AbortSignal =>
+    options.signal
+      ? AbortSignal.any([options.signal, AbortSignal.timeout(15_000)])
+      : AbortSignal.timeout(15_000);
+  const trimmed = options.text.trim();
+  if (!trimmed) {
+    throw new Error('Cannot post an empty message to a connector.');
+  }
+  const rawLimit = connectorChunkLimit(options.connector) ?? 3_800;
+  const sourceText = options.connector === 'groupme' ? markdownToPlainText(trimmed) : trimmed;
+  const chunkLimit = options.connector === 'telegram' ? Math.min(rawLimit, 3_400) : rawLimit;
+  const chunks = splitConnectorMessage(sourceText, chunkLimit).filter((c) => c.trim().length > 0);
+  if (chunks.length === 0) {
+    throw new Error('Cannot post an empty message to a connector.');
+  }
+
+  if (options.connector === 'slack') {
+    const converter = new SlackFormatConverter();
+    for (const chunk of chunks) {
+      const mrkdwn = converter.toResponseUrlText({ markdown: chunk }) || chunk;
+      const response = await fetchFn('https://slack.com/api/chat.postMessage', {
+        body: JSON.stringify({ channel: target.channel, text: mrkdwn, unfurl_links: false }),
+        headers: {
+          Authorization: `Bearer ${target.token}`,
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        method: 'POST',
+        signal: requestSignal(),
+      });
+      if (!response.ok) {
+        throw new Error(`Slack post failed with HTTP ${response.status}.`);
+      }
+      const payload = (await response.json()) as { error?: string; ok?: boolean };
+      if (payload.ok !== true) {
+        throw new Error(`Slack post failed: ${payload.error ?? 'unknown error'}.`);
+      }
+    }
+    return { channel: target.channel, chunksSent: chunks.length, connector: 'slack' };
+  }
+
+  if (options.connector === 'discord') {
+    for (const chunk of chunks) {
+      const response = await fetchFn(`https://discord.com/api/v10/channels/${target.channel}/messages`, {
+        body: JSON.stringify({ content: chunk }),
+        headers: {
+          Authorization: `Bot ${target.token}`,
+          'Content-Type': 'application/json',
+        },
+        method: 'POST',
+        signal: requestSignal(),
+      });
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => '')).trim().slice(0, 200);
+        throw new Error(
+          detail
+            ? `Discord post failed with HTTP ${response.status}: ${detail}`
+            : `Discord post failed with HTTP ${response.status}.`,
+        );
+      }
+    }
+    return { channel: target.channel, chunksSent: chunks.length, connector: 'discord' };
+  }
+
+  if (options.connector === 'telegram') {
+    const converter = new TelegramFormatConverter();
+    for (const chunk of chunks) {
+      const formatted = converter.renderPostable({ markdown: chunk }) || chunk;
+      const response = await fetchFn(`https://api.telegram.org/bot${target.token}/sendMessage`, {
+        body: JSON.stringify({
+          chat_id: target.channel,
+          disable_web_page_preview: true,
+          parse_mode: 'MarkdownV2',
+          text: formatted,
+        }),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+        signal: requestSignal(),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        description?: string;
+        ok?: boolean;
+      } | null;
+      if (!response.ok || payload?.ok !== true) {
+        const detail = payload?.description?.trim();
+        throw new Error(
+          detail
+            ? `Telegram post failed${!response.ok ? ` (HTTP ${response.status})` : ''}: ${detail}`
+            : `Telegram post failed with HTTP ${response.status}.`,
+        );
+      }
+    }
+    return { channel: target.channel, chunksSent: chunks.length, connector: 'telegram' };
+  }
+
   for (const chunk of chunks) {
     const response = await fetchFn('https://api.groupme.com/v3/bots/post', {
-      body: JSON.stringify({ bot_id: botId, text: chunk }),
+      body: JSON.stringify({ bot_id: target.botId, text: chunk }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',
-      signal,
+      signal: requestSignal(),
     });
     if (!response.ok) {
-      throw new Error(`GroupMe post failed with HTTP ${response.status}.`);
+      const detail = (await response.text().catch(() => '')).trim().slice(0, 200);
+      throw new Error(
+        detail
+          ? `GroupMe post failed with HTTP ${response.status}: ${detail}`
+          : `GroupMe post failed with HTTP ${response.status}.`,
+      );
     }
   }
   return { channel: null, chunksSent: chunks.length, connector: 'groupme' };

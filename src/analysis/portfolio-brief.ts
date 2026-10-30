@@ -44,7 +44,6 @@ export interface PortfolioDropCandidate {
   playerId: string;
   points: number | null;
   position: string | null;
-  reason: string | null;
 }
 
 export interface PortfolioForecastShift {
@@ -56,7 +55,9 @@ export interface PortfolioForecastShift {
 
 export interface PortfolioMatchupSummary {
   complete: boolean;
+  myInProgressPoints: number;
   myProjectedSubtotal: number;
+  opponentInProgressPoints: number;
   opponentLabel: string;
   opponentProjectedSubtotal: number;
   opponentRosterId: number;
@@ -65,6 +66,8 @@ export interface PortfolioMatchupSummary {
 
 export interface PortfolioLeagueBrief {
   actions: FantasyLeagueAction[];
+  addsDisabled?: boolean | undefined;
+  bestBall?: boolean | undefined;
   error?: string | undefined;
   faabRemaining: number | null;
   forecastShifts: PortfolioForecastShift[];
@@ -81,6 +84,7 @@ export interface PortfolioLeagueBrief {
     warnings: string[];
   } | null;
   lineupError?: string | undefined;
+  lineupNote?: string | undefined;
   matchup: PortfolioMatchupSummary | null;
   matchupNote?: string | undefined;
   rawLineup?: Awaited<ReturnType<typeof optimizeRosterLineup>> | undefined;
@@ -168,7 +172,7 @@ export async function buildWeeklyPortfolioBrief(
     targetLeagues = pool.slice(0, MAX_PORTFOLIO_LEAGUES);
   } else {
     throw new ResearchDataError(
-      'Connect a Sleeper username (`seb setup <username>`) or supply `--user <username>` or `--league <id> --roster <n>`.',
+      'No Sleeper account or league roster specified. Connect a Sleeper username or supply a league ID and roster ID.',
     );
   }
 
@@ -187,31 +191,259 @@ export async function buildWeeklyPortfolioBrief(
   const leagues = await Promise.all(
     targetLeagues.map(async (league): Promise<PortfolioLeagueBrief> => {
       const leagueSeason = Number(league.season) || season;
-      const [rosters, leagueUsers] = await Promise.all([
-        deps.sleeper.getLeagueRosters(league.league_id),
-        deps.sleeper.getLeagueUsers(league.league_id).catch(() => []),
-      ]);
-      const explicitRoster = request.leagueId && request.rosterId !== undefined
-        ? rosters.find((candidate) => candidate.roster_id === request.rosterId)
-        : undefined;
-      if (request.leagueId && request.rosterId !== undefined && !explicitRoster) {
-        throw new ResearchDataError(
-          `Roster ${request.rosterId} does not exist in league ${league.league_id}.`,
-        );
-      }
-      const ownedRoster = explicitRoster ?? (user
-        ? rosters.find(
-            (candidate) =>
-              candidate.owner_id === user.userId ||
-              candidate.co_owners?.includes(user.userId) === true,
-          )
-        : undefined);
-      if (!ownedRoster) {
+      try {
+        const [rosters, leagueUsers] = await Promise.all([
+          deps.sleeper.getLeagueRosters(league.league_id),
+          deps.sleeper.getLeagueUsers(league.league_id).catch(() => []),
+        ]);
+        const explicitRoster = request.leagueId && request.rosterId !== undefined
+          ? rosters.find((candidate) => candidate.roster_id === request.rosterId)
+          : undefined;
+        if (request.leagueId && request.rosterId !== undefined && !explicitRoster) {
+          throw new ResearchDataError(
+            `Roster ${request.rosterId} does not exist in league ${league.league_id}.`,
+          );
+        }
+        const ownedRoster = explicitRoster ?? (user
+          ? rosters.find(
+              (candidate) =>
+                candidate.owner_id === user.userId ||
+                candidate.co_owners?.includes(user.userId) === true,
+            )
+          : undefined);
+        if (!ownedRoster) {
+          return {
+            actions: [],
+            error: user
+              ? `@${user.username} does not own a roster in ${league.name}.`
+              : 'Specify a roster ID when running a single-league brief without a Sleeper username.',
+            faabRemaining: null,
+            forecastShifts: [],
+            leagueId: league.league_id,
+            leagueName: league.name,
+            lineup: null,
+            matchup: null,
+            rosterId: null,
+            season: leagueSeason,
+            status: league.status,
+            suggestedDrops: [],
+            waiverMode: null,
+            waiverTargets: [],
+            week,
+          };
+        }
+
+        const isBestBall = Number(league.settings?.best_ball ?? 0) === 1;
+        const addsDisabled = Number(league.settings?.disable_adds ?? 0) === 1;
+
+        const actionCenter = buildFantasyLeagueActionCenter({
+          league,
+          players,
+          rosters: [ownedRoster],
+          week,
+        });
+
+        const explicitHistoricalWindow =
+          request.week !== undefined &&
+          week > 1 &&
+          (leagueSeason < Number(state.season) || (leagueSeason === Number(state.season) && week < state.week));
+
+        const [lineupOutcome, matchupOutcome, waiverOutcome] = await Promise.all([
+          isBestBall
+            ? Promise.resolve({ ok: true as const, value: undefined })
+            : optimizeRosterLineup(deps.sleeper, deps.nflverse, projectionService, {
+                leagueId: league.league_id,
+                rosterId: ownedRoster.roster_id,
+                season: leagueSeason,
+                week,
+              }).then(
+                (value) => ({ ok: true as const, value }),
+                (error: unknown) => {
+                  throwIfRequestAborted();
+                  return { error: errorText(error), ok: false as const };
+                },
+              ),
+          projectLeagueMatchup(deps.sleeper, deps.nflverse, projectionService, {
+            leagueId: league.league_id,
+            rosterId: ownedRoster.roster_id,
+            season: leagueSeason,
+            week,
+          }).then(
+            (value) => ({ ok: true as const, value }),
+            (error: unknown) => {
+              throwIfRequestAborted();
+              return { error: errorText(error), ok: false as const };
+            },
+          ),
+          addsDisabled
+            ? Promise.resolve({ ok: true as const, value: undefined })
+            : waiverService.rankTargets({
+                leagueId: league.league_id,
+                resultLimit: 3,
+                rosterId: ownedRoster.roster_id,
+                ...(explicitHistoricalWindow
+                  ? { analysisSeason: leagueSeason, throughWeek: week - 1 }
+                  : {}),
+              }).then(
+                (value) => ({ ok: true as const, value }),
+                (error: unknown) => {
+                  throwIfRequestAborted();
+                  return { error: errorText(error), ok: false as const };
+                },
+              ),
+        ]);
+
+        const rawLineup = lineupOutcome.ok ? lineupOutcome.value : undefined;
+        const rawMatchup = matchupOutcome.ok ? matchupOutcome.value : undefined;
+        const rawWaivers = waiverOutcome.ok ? waiverOutcome.value : undefined;
+
+        const activeRosterLimit = (league.roster_positions ?? []).filter(
+          (slot) => !['IR', 'RESERVE', 'TAXI'].includes(slot.toUpperCase()),
+        ).length;
+        const reservedIds = new Set([...(ownedRoster.reserve ?? []), ...(ownedRoster.taxi ?? [])]);
+        const activeOwnedCount = (ownedRoster.players ?? []).filter((id) => !reservedIds.has(id)).length;
+        const hasOpenRosterSpot = activeRosterLimit > 0 && activeOwnedCount < activeRosterLimit;
+
+        // ponytail: heuristic cap (<= 10.5 projected pts, active non-bye/non-IR) avoids suggesting bye-week or IR studs as drops; upgrade to rest-of-season value model if multi-week ROS rankings are added.
+        const suggestedDrops: PortfolioDropCandidate[] =
+          rawLineup && !addsDisabled && !hasOpenRosterSpot
+            ? [...rawLineup.bench]
+                .filter(
+                  (entry) =>
+                    entry.status === 'projected' &&
+                    entry.points !== null &&
+                    entry.points <= 10.5 &&
+                    !/\b(?:ir|pup)\b/iu.test(entry.injuryStatus ?? ''),
+                )
+                .sort(
+                  (a, b) =>
+                    (a.points ?? Infinity) - (b.points ?? Infinity) ||
+                    a.name.localeCompare(b.name),
+                )
+                .slice(0, 2)
+                .map((entry) => ({
+                  injuryStatus: entry.injuryStatus,
+                  name: entry.name,
+                  playerId: entry.playerId,
+                  points: entry.points,
+                  position: entry.position,
+                }))
+            : [];
+
+        const forecastShifts: PortfolioForecastShift[] = rawLineup
+          ? rawLineup.projections
+              .flatMap((item): PortfolioForecastShift[] => {
+                if (item.status !== 'projected' || !item.projection.forecastDiff) return [];
+                const diff = item.projection.forecastDiff;
+                const hasInjuryDriver = diff.drivers.some((driver) =>
+                  driver.startsWith('Injury status changed'),
+                );
+                if (Math.abs(diff.deltaExpectedPoints) < 0.5 && !hasInjuryDriver) return [];
+                return [{
+                  diff,
+                  expectedPoints: item.projection.expectedPoints,
+                  playerName: item.projection.player.name,
+                  position: item.projection.player.position,
+                }];
+              })
+              .sort((a, b) => Math.abs(b.diff.deltaExpectedPoints) - Math.abs(a.diff.deltaExpectedPoints))
+              .slice(0, 4)
+          : [];
+
+        let matchup: PortfolioMatchupSummary | null = null;
+        if (rawMatchup) {
+          const mySide = rawMatchup.rosters.find((side) => side.rosterId === ownedRoster.roster_id);
+          const oppSide = rawMatchup.rosters.find((side) => side.rosterId !== ownedRoster.roster_id);
+          if (mySide && oppSide) {
+            const oppRoster = rosters.find((candidate) => candidate.roster_id === oppSide.rosterId);
+            const oppUser = oppRoster?.owner_id
+              ? leagueUsers.find((candidate) => candidate.user_id === oppRoster.owner_id)
+              : undefined;
+            const teamName = typeof oppUser?.metadata?.team_name === 'string'
+              ? oppUser.metadata.team_name.trim()
+              : '';
+            const opponentLabel = teamName || oppUser?.display_name?.trim() || `Roster ${oppSide.rosterId}`;
+            const firstIsMine = rawMatchup.rosters[0]?.rosterId === ownedRoster.roster_id;
+            const winProbability = rawMatchup.winProbability === null
+              ? null
+              : firstIsMine
+                ? rawMatchup.winProbability
+                : Math.round((1 - rawMatchup.winProbability) * 1000) / 1000;
+            matchup = {
+              complete: mySide.complete && oppSide.complete,
+              myInProgressPoints: mySide.inProgressPoints,
+              myProjectedSubtotal: mySide.projectedSubtotal,
+              opponentInProgressPoints: oppSide.inProgressPoints,
+              opponentLabel,
+              opponentProjectedSubtotal: oppSide.projectedSubtotal,
+              opponentRosterId: oppSide.rosterId,
+              winProbability,
+            };
+          }
+        }
+
+        const matchupNote = !matchupOutcome.ok
+          ? matchupOutcome.error === 'The selected roster has no unique matchup for this week.'
+            ? 'No head-to-head matchup this week (bye or points format).'
+            : matchupOutcome.error
+          : undefined;
+
+        return {
+          actions: actionCenter.actions,
+          ...(addsDisabled ? { addsDisabled: true } : {}),
+          ...(isBestBall ? { bestBall: true } : {}),
+          faabRemaining: rawWaivers?.faab.remaining ?? null,
+          forecastShifts,
+          leagueId: league.league_id,
+          leagueName: league.name,
+          lineup: rawLineup
+            ? {
+                complete: rawLineup.complete,
+                currentProjectedPoints: rawLineup.currentProjectedPoints,
+                missingSlots: rawLineup.missingSlots,
+                optimalProjectedPoints: rawLineup.optimalProjectedPoints,
+                pointsDelta: rawLineup.pointsDelta,
+                recommendationEligible: rawLineup.recommendationEligible,
+                recommendedSwaps: rawLineup.recommendedSwaps,
+                warnings: rawLineup.warnings,
+              }
+            : null,
+          ...(isBestBall
+            ? { lineupNote: 'Best-ball league (optimal starters scored automatically).' }
+            : !lineupOutcome.ok
+              ? { lineupError: lineupOutcome.error }
+              : {}),
+          matchup,
+          ...(matchupNote ? { matchupNote } : {}),
+          ...(rawLineup ? { rawLineup } : {}),
+          ...(rawMatchup ? { rawMatchup } : {}),
+          ...(rawWaivers ? { rawWaivers } : {}),
+          rosterId: ownedRoster.roster_id,
+          season: leagueSeason,
+          status: league.status,
+          suggestedDrops,
+          ...(!waiverOutcome.ok ? { waiverError: waiverOutcome.error } : {}),
+          waiverMode: rawWaivers?.faab.mode ?? null,
+          waiverTargets: (rawWaivers?.targets ?? []).map((target) => ({
+            adds: target.demand.adds,
+            expectedPoints: target.production?.expectedPoints ?? null,
+            faabRange: target.faab ? { lower: target.faab.lower, upper: target.faab.upper } : null,
+            injuryStatus: target.player.injuryStatus,
+            name: target.player.name,
+            needLevel: target.rosterNeed.level,
+            playerId: target.player.playerId,
+            position: target.player.position,
+            rank: target.rank,
+            team: target.player.team,
+          })),
+          week,
+        };
+      } catch (error) {
+        throwIfRequestAborted();
+        if (request.leagueId && error instanceof ResearchDataError) throw error;
         return {
           actions: [],
-          error: user
-            ? `@${user.username} does not own a roster in ${league.name}.`
-            : 'Specify --roster <ID> when running a single-league brief without a Sleeper username.',
+          error: errorText(error),
           faabRemaining: null,
           forecastShifts: [],
           leagueId: league.league_id,
@@ -227,176 +459,11 @@ export async function buildWeeklyPortfolioBrief(
           week,
         };
       }
-
-      const actionCenter = buildFantasyLeagueActionCenter({
-        league,
-        players,
-        rosters: [ownedRoster],
-        week,
-      });
-
-      const [lineupOutcome, matchupOutcome, waiverOutcome] = await Promise.all([
-        optimizeRosterLineup(deps.sleeper, deps.nflverse, projectionService, {
-          leagueId: league.league_id,
-          rosterId: ownedRoster.roster_id,
-          season: leagueSeason,
-          week,
-        }).then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => {
-            throwIfRequestAborted();
-            return { error: errorText(error), ok: false as const };
-          },
-        ),
-        projectLeagueMatchup(deps.sleeper, deps.nflverse, projectionService, {
-          leagueId: league.league_id,
-          rosterId: ownedRoster.roster_id,
-          season: leagueSeason,
-          week,
-        }).then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => {
-            throwIfRequestAborted();
-            return { error: errorText(error), ok: false as const };
-          },
-        ),
-        waiverService.rankTargets({
-          leagueId: league.league_id,
-          resultLimit: 3,
-          rosterId: ownedRoster.roster_id,
-        }).then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => {
-            throwIfRequestAborted();
-            return { error: errorText(error), ok: false as const };
-          },
-        ),
-      ]);
-
-      const rawLineup = lineupOutcome.ok ? lineupOutcome.value : undefined;
-      const rawMatchup = matchupOutcome.ok ? matchupOutcome.value : undefined;
-      const rawWaivers = waiverOutcome.ok ? waiverOutcome.value : undefined;
-
-      // ponytail: heuristic cap (<= 10.5 projected pts, active non-bye/non-IR) avoids suggesting bye-week or IR studs as drops; upgrade to rest-of-season value model if multi-week ROS rankings are added.
-      const suggestedDrops: PortfolioDropCandidate[] = rawLineup
-        ? [...rawLineup.bench]
-            .filter(
-              (entry) =>
-                entry.status === 'projected' &&
-                entry.points !== null &&
-                entry.points <= 10.5 &&
-                !/\b(?:ir|pup)\b/iu.test(entry.injuryStatus ?? ''),
-            )
-            .sort(
-              (a, b) =>
-                (a.points ?? Infinity) - (b.points ?? Infinity) ||
-                a.name.localeCompare(b.name),
-            )
-            .slice(0, 2)
-            .map((entry) => ({
-              injuryStatus: entry.injuryStatus,
-              name: entry.name,
-              playerId: entry.playerId,
-              points: entry.points,
-              position: entry.position,
-              reason: entry.reason,
-            }))
-        : [];
-
-      const forecastShifts: PortfolioForecastShift[] = rawLineup
-        ? rawLineup.projections
-            .flatMap((item): PortfolioForecastShift[] => {
-              if (item.status !== 'projected' || !item.projection.forecastDiff) return [];
-              if (Math.abs(item.projection.forecastDiff.deltaExpectedPoints) < 0.5) return [];
-              return [{
-                diff: item.projection.forecastDiff,
-                expectedPoints: item.projection.expectedPoints,
-                playerName: item.projection.player.name,
-                position: item.projection.player.position,
-              }];
-            })
-            .sort((a, b) => Math.abs(b.diff.deltaExpectedPoints) - Math.abs(a.diff.deltaExpectedPoints))
-            .slice(0, 4)
-        : [];
-
-      let matchup: PortfolioMatchupSummary | null = null;
-      if (rawMatchup) {
-        const mySide = rawMatchup.rosters.find((side) => side.rosterId === ownedRoster.roster_id);
-        const oppSide = rawMatchup.rosters.find((side) => side.rosterId !== ownedRoster.roster_id);
-        if (mySide && oppSide) {
-          const oppRoster = rosters.find((candidate) => candidate.roster_id === oppSide.rosterId);
-          const oppUser = oppRoster?.owner_id
-            ? leagueUsers.find((candidate) => candidate.user_id === oppRoster.owner_id)
-            : undefined;
-          const teamName = typeof oppUser?.metadata?.team_name === 'string'
-            ? oppUser.metadata.team_name.trim()
-            : '';
-          const opponentLabel = teamName || oppUser?.display_name?.trim() || `Roster ${oppSide.rosterId}`;
-          const firstIsMine = rawMatchup.rosters[0]?.rosterId === ownedRoster.roster_id;
-          const winProbability = rawMatchup.winProbability === null
-            ? null
-            : firstIsMine
-              ? rawMatchup.winProbability
-              : Math.round((1 - rawMatchup.winProbability) * 1000) / 1000;
-          matchup = {
-            complete: mySide.complete && oppSide.complete,
-            myProjectedSubtotal: mySide.projectedSubtotal,
-            opponentLabel,
-            opponentProjectedSubtotal: oppSide.projectedSubtotal,
-            opponentRosterId: oppSide.rosterId,
-            winProbability,
-          };
-        }
-      }
-
-      return {
-        actions: actionCenter.actions,
-        faabRemaining: rawWaivers?.faab.remaining ?? null,
-        forecastShifts,
-        leagueId: league.league_id,
-        leagueName: league.name,
-        lineup: rawLineup
-          ? {
-              complete: rawLineup.complete,
-              currentProjectedPoints: rawLineup.currentProjectedPoints,
-              missingSlots: rawLineup.missingSlots,
-              optimalProjectedPoints: rawLineup.optimalProjectedPoints,
-              pointsDelta: rawLineup.pointsDelta,
-              recommendationEligible: rawLineup.recommendationEligible,
-              recommendedSwaps: rawLineup.recommendedSwaps,
-              warnings: rawLineup.warnings,
-            }
-          : null,
-        ...(!lineupOutcome.ok ? { lineupError: lineupOutcome.error } : {}),
-        matchup,
-        ...(!matchupOutcome.ok ? { matchupNote: matchupOutcome.error } : {}),
-        ...(rawLineup ? { rawLineup } : {}),
-        ...(rawMatchup ? { rawMatchup } : {}),
-        ...(rawWaivers ? { rawWaivers } : {}),
-        rosterId: ownedRoster.roster_id,
-        season: leagueSeason,
-        status: league.status,
-        suggestedDrops,
-        ...(!waiverOutcome.ok ? { waiverError: waiverOutcome.error } : {}),
-        waiverMode: rawWaivers?.faab.mode ?? null,
-        waiverTargets: (rawWaivers?.targets ?? []).map((target) => ({
-          adds: target.demand.adds,
-          expectedPoints: target.production?.expectedPoints ?? null,
-          faabRange: target.faab ? { lower: target.faab.lower, upper: target.faab.upper } : null,
-          injuryStatus: target.player.injuryStatus,
-          name: target.player.name,
-          needLevel: target.rosterNeed.level,
-          playerId: target.player.playerId,
-          position: target.player.position,
-          rank: target.rank,
-          team: target.player.team,
-        })),
-        week,
-      };
     }),
   );
 
-  const newsCandidates: Array<{ name: string; team?: string | null | undefined }> = [];
+  const primaryNewsCandidates: Array<{ name: string; team?: string | null | undefined }> = [];
+  const benchedSwapCandidates: Array<{ name: string; team?: string | null | undefined }> = [];
   for (const league of leagues) {
     const teamById = new Map<string, string>();
     for (const item of league.rawLineup?.projections ?? []) {
@@ -405,12 +472,12 @@ export async function buildWeeklyPortfolioBrief(
       }
     }
     for (const swap of league.lineup?.recommendedSwaps ?? []) {
-      newsCandidates.push({
+      primaryNewsCandidates.push({
         name: swap.startPlayer.name,
         team: teamById.get(swap.startPlayer.playerId),
       });
       if (swap.sitPlayer && swap.sitPlayer.playerId !== '0') {
-        newsCandidates.push({
+        benchedSwapCandidates.push({
           name: swap.sitPlayer.name,
           team: teamById.get(swap.sitPlayer.playerId),
         });
@@ -418,7 +485,7 @@ export async function buildWeeklyPortfolioBrief(
     }
     for (const starter of league.rawLineup?.optimalLineup ?? []) {
       if (starter.injuryStatus) {
-        newsCandidates.push({
+        primaryNewsCandidates.push({
           name: starter.name,
           team: teamById.get(starter.playerId),
         });
@@ -426,16 +493,18 @@ export async function buildWeeklyPortfolioBrief(
     }
     const topWaiver = league.waiverTargets[0];
     if (topWaiver) {
-      newsCandidates.push({ name: topWaiver.name, team: topWaiver.team });
+      primaryNewsCandidates.push({ name: topWaiver.name, team: topWaiver.team });
     }
   }
+  const newsCandidates = [...primaryNewsCandidates, ...benchedSwapCandidates];
   if (newsCandidates.length === 0) {
     const fallbackStarter = leagues[0]?.rawLineup?.optimalLineup[0];
     if (fallbackStarter) newsCandidates.push({ name: fallbackStarter.name });
   }
 
+  const maxNewsCandidates = Math.min(20, Math.max(8, leagues.length * 4));
   const bundledNewsChecks = deps.news
-    ? await bundleCandidateNewsChecks(deps.news, newsCandidates, 8)
+    ? await bundleCandidateNewsChecks(deps.news, newsCandidates, maxNewsCandidates)
     : [];
 
   return {
@@ -480,8 +549,12 @@ export function formatWeeklyPortfolioBrief(brief: WeeklyPortfolioBrief): string 
       const winText = league.matchup.winProbability !== null
         ? ` · Win probability: ${Math.round(league.matchup.winProbability * 100)}%`
         : ' · Partial subtotal';
+      const inProgressText =
+        league.matchup.myInProgressPoints > 0 || league.matchup.opponentInProgressPoints > 0
+          ? ` · Live in-progress: ${league.matchup.myInProgressPoints.toFixed(2)} vs. ${league.matchup.opponentInProgressPoints.toFixed(2)}`
+          : '';
       lines.push(
-        `- **Matchup**: ${league.matchup.myProjectedSubtotal.toFixed(2)} vs. ${league.matchup.opponentLabel} (${league.matchup.opponentProjectedSubtotal.toFixed(2)})${winText}`,
+        `- **Matchup**: ${league.matchup.myProjectedSubtotal.toFixed(2)} vs. ${league.matchup.opponentLabel} (${league.matchup.opponentProjectedSubtotal.toFixed(2)})${winText}${inProgressText}`,
       );
     } else if (league.matchupNote) {
       lines.push(`- **Matchup**: ${league.matchupNote}`);
@@ -508,11 +581,18 @@ export function formatWeeklyPortfolioBrief(brief: WeeklyPortfolioBrief): string 
       for (const warning of league.lineup.warnings.slice(0, 3)) {
         lines.push(`  - Alert: ${warning}`);
       }
+    } else if (league.lineupNote) {
+      lines.push(`- **Lineup**: ${league.lineupNote}`);
     } else if (league.lineupError) {
       lines.push(`- **Lineup**: ${league.lineupError}`);
     }
 
-    const urgentActions = league.actions.filter((action) => action.urgency !== 'low');
+    const hasLineupWarnings = (league.lineup?.warnings.length ?? 0) > 0;
+    const urgentActions = league.actions.filter(
+      (action) =>
+        action.urgency !== 'low' &&
+        !(hasLineupWarnings && action.kind === 'player-status'),
+    );
     for (const action of urgentActions.slice(0, 3)) {
       lines.push(`- **Action (${action.urgency})**: ${action.title} — ${action.details}`);
     }
@@ -525,14 +605,18 @@ export function formatWeeklyPortfolioBrief(brief: WeeklyPortfolioBrief): string 
         : '';
       lines.push(`- **Top waiver claims**${dropText}:`);
       for (const target of league.waiverTargets) {
-        const pts = target.expectedPoints !== null ? `${target.expectedPoints.toFixed(1)} est pts` : 'no weekly baseline';
+        const pts = target.expectedPoints !== null ? `${target.expectedPoints.toFixed(1)} est pts/g` : 'no weekly baseline';
         const faab = target.faabRange
-          ? ` · FAAB $${target.faabRange.lower}–$${target.faabRange.upper}`
+          ? target.faabRange.lower === target.faabRange.upper
+            ? ` · FAAB $${target.faabRange.lower}`
+            : ` · FAAB $${target.faabRange.lower}–$${target.faabRange.upper}`
           : '';
         lines.push(
           `  - #${target.rank} **${target.name}** (${target.position}, ${target.team ?? 'FA'}) — ${pts}, ${target.needLevel} need${faab}`,
         );
       }
+    } else if (league.addsDisabled) {
+      lines.push('- **Waivers**: Roster additions disabled in league settings.');
     } else if (league.waiverError) {
       lines.push(`- **Waivers**: ${league.waiverError}`);
     }

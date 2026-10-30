@@ -369,7 +369,7 @@ function summarizeProduction(
   return {
     analysisSeason,
     games: weeklyPoints.length,
-    expectedPoints: forecastMean(weeklyPoints.map((value) => value.points), null, parameters),
+    expectedPoints: round(forecastMean(weeklyPoints.map((value) => value.points), null, parameters)),
     latestWeek: latest.week,
     recentAverage,
     seasonAverage,

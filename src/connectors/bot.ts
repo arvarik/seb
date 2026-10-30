@@ -45,9 +45,20 @@ import { NewsClient } from '../news/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import { WeatherClient } from '../weather/client.js';
 import {
+  interactiveCommandPrivacyError,
+  parseInteractiveCommandInput,
+} from '../interactive/commands.js';
+import {
+  forgetNotes,
+  formatSavedNotes,
+  saveNotes,
+  UserMemoryStore,
+} from '../interactive/memory.js';
+import {
   createSessionState,
   formatSessionData,
   formatSessionInstructions,
+  type SessionState,
 } from '../interactive/session.js';
 import { FileSetupProfileStore } from '../setup/profile.js';
 import { applySetupProfile, refreshAutomaticSession } from '../setup/wizard.js';
@@ -293,16 +304,17 @@ function createAgentReply(environment: Environment): ConnectorReply {
   });
   const clients = { sleeperClient, nflverseClient, newsClient, weatherClient };
   const database = getSharedSebDatabase();
+  const memoryStore = new UserMemoryStore(environment);
   let cachedSelection: ResolvedModelProvider | undefined;
   const cachedContexts = new Map<
     'dm' | 'shared',
-    { data: string; expiresAt: number; instructions: string }
+    { expiresAt: number; session: SessionState }
   >();
 
-  const getRuntimeContextSnapshot = async (isDM: boolean) => {
+  const getRuntimeSession = async (isDM: boolean) => {
     const scope = isDM ? 'dm' : 'shared';
     const cached = cachedContexts.get(scope);
-    if (cached && Date.now() < cached.expiresAt) return cached;
+    if (cached && Date.now() < cached.expiresAt) return cached.session;
     const session = createSessionState();
     const preferredUser = environment.SEB_SLEEPER_USER?.trim();
     if (isDM || preferredUser) {
@@ -327,26 +339,43 @@ function createAgentReply(environment: Environment): ConnectorReply {
     } catch {
       // Degrade gracefully when Sleeper is unreachable.
     }
-    const next = {
-      data: formatSessionData(session),
-      expiresAt: Date.now() + CONNECTOR_CONTEXT_TTL_MS,
-      instructions: formatSessionInstructions(session),
-    };
-    cachedContexts.set(scope, next);
-    return next;
+    cachedContexts.set(scope, { expiresAt: Date.now() + CONNECTOR_CONTEXT_TTL_MS, session });
+    return session;
+  };
+
+  // Saved notes are private, so only a direct message reads its sender's notes.
+  const readSavedMemory = async (thread: Thread, message: Message) => {
+    if (!thread.isDM) return [];
+    try {
+      return await memoryStore.list(connectorMemoryOwner(thread, message));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`Seb could not read saved notes. It will answer without them. ${reason}\n`);
+      return [];
+    }
   };
 
   return async (thread, message, context, requestSignal) => {
     requestSignal.throwIfAborted();
-    const [selection, runtimeContext] = await Promise.all([
+    const memoryReply = await connectorMemoryReply(memoryStore, thread, message);
+    if (memoryReply !== null) {
+      await postConnectorResponse(thread, (async function* () { yield memoryReply; })(), requestSignal);
+      return;
+    }
+    const [selection, runtimeSession, savedMemory] = await Promise.all([
       cachedSelection
         ? Promise.resolve(cachedSelection)
         : resolveModelFamilies(configured, { signal: requestSignal }).then((resolved) => {
             cachedSelection = resolved;
             return resolved;
           }),
-      getRuntimeContextSnapshot(Boolean(thread.isDM)),
+      getRuntimeSession(Boolean(thread.isDM)),
+      readSavedMemory(thread, message),
     ]);
+    const runtimeContext = {
+      data: formatSessionData({ ...runtimeSession, savedMemory }),
+      instructions: formatSessionInstructions(runtimeSession),
+    };
     const primaryModel = selection.model;
     const fallbackModel = selection.fallbackModel;
     const usageSessionId = randomUUID();
@@ -446,6 +475,45 @@ function createAgentReply(environment: Environment): ConnectorReply {
       });
     });
   };
+}
+
+function connectorMemoryOwner(
+  thread: Pick<Thread, 'adapter'>,
+  message: Pick<Message, 'author'>,
+): string {
+  return `${thread.adapter.name}:${message.author.userId}`;
+}
+
+/** Runs /remember, /forget, and /memory without a model call. Returns null for other messages. */
+export async function connectorMemoryReply(
+  store: UserMemoryStore,
+  thread: Pick<Thread, 'adapter' | 'isDM'>,
+  message: Pick<Message, 'author' | 'text'>,
+): Promise<string | null> {
+  // Telegram can address a command to one bot, for example /remember@seb_bot.
+  const parsed = parseInteractiveCommandInput(message.text.replace(/^(\s*\/[a-z]+)@\w+/iu, '$1'));
+  const name = parsed?.command?.name;
+  if (!parsed || (name !== 'remember' && name !== 'forget' && name !== 'memory')) return null;
+  if (!thread.isDM) {
+    return 'Seb keeps saved notes only in direct messages. Send this command to Seb in a direct message.';
+  }
+  const privacyError = interactiveCommandPrivacyError(parsed);
+  if (privacyError) return privacyError;
+  const owner = connectorMemoryOwner(thread, message);
+  try {
+    if (name === 'remember') {
+      return parsed.argumentText
+        ? await saveNotes(store, owner, [parsed.argumentText], 'global')
+        : 'Use /remember NOTE to save a note for future conversations.';
+    }
+    if (name === 'forget') return await forgetNotes(store, owner, parsed.arguments[0]);
+    if (parsed.arguments.length > 0) {
+      return 'Use /memory to list saved notes, or /forget all to delete them.';
+    }
+    return formatSavedNotes(await store.list(owner));
+  } catch (error) {
+    return `Memory error: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 async function postAgentResponse(

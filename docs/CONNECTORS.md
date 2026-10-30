@@ -26,6 +26,10 @@ flowchart LR
 
 Seb responds to direct messages on Slack, Discord, and Telegram, while **GroupMe** bots operate exclusively in group chats (`isDM()` always returns `false`). Across every platform, mentioning Seb in a channel or group (matched against `SEB_BOT_NAME`, default `seb`) answers the question and subscribes that thread. Once subscribed, Seb automatically answers follow-up messages in the same thread without requiring another `@seb` mention.
 
+### Saved notes in direct messages
+
+In a direct message, send `/remember NOTE`, `/memory`, or `/forget <NUMBER|all>` to manage saved notes without a model call. Seb keeps the notes in `~/.config/seb/memory.json` under the platform and sender ID (for example `telegram:12345`), and it sends them to the model only in that sender's direct messages. In channels and groups, Seb reads no saved notes and answers memory commands with a direct-message reminder. Seb ignores leading spaces, so if a chat app reserves a leading `/` for its own commands, start the message with a space (` /remember NOTE`).
+
 ### Thread history compaction
 
 Before calling the model, Seb fetches up to **40** recent messages from the active thread (`HISTORY_LIMIT = 40`), coalesces adjacent same-role text segments, and strips prior `## Evidence` footers from historical assistant turns so follow-up prompts stay lean. History is bounded to a **12,000-character** budget (`MAX_HISTORY_CHARS = 12_000`) while always retaining and appending the incoming user turn last, ensuring coarse integer-second webhook timestamps (such as GroupMe's `created_at` values) never sort the current prompt behind an earlier message in the same second.

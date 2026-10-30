@@ -59,6 +59,7 @@ const RUNTIME_CONTEXT_KEY_PRIORITY = [
   'subject',
   'decisionContext',
   'workingMemory',
+  'savedMemory',
   'nfl',
   'sleeper',
   'usefulNextRequests',
@@ -656,7 +657,8 @@ Use compareStartSit to compare starters. Supply the legal starter slot for playe
 Use optimizeRosterLineup when the user asks to optimize, set, or audit their full starting lineup for a week. It projects starters and bench players and solves the highest-scoring legal slot assignment. Inspect optimalLineup, currentLineup, bench, and recommendedSwaps before saying any rostered player lacks a projection. Do not call optimizeRosterLineup or suggest unrequested lineup swaps when answering a single-player or slot-rule question; use getLeagueOverview or getRosterPlayers to check league slots and current starters.
 Use runWeeklyPortfolioBrief when the user asks for a weekly brief, autopilot rundown, or combined lineup + matchup + waiver audit across all active Sleeper leagues.
 When a projection includes forecastDiff, use its deltaExpectedPoints and drivers to explain why a player's forecast shifted since the previous check.
-When runtime context includes workingMemory, respect earlier session preferences, tracked players, and prior decisions unless the user overrides them.
+Runtime context can include workingMemory from this session and savedMemory notes that the user saved for future sessions. Use them as the user's default preferences, not as current facts or current news.
+The latest user message overrides workingMemory, and workingMemory overrides savedMemory. Apply a savedMemory note only when it fits the request, and apply a note with a league only to that league.
 projectLeagueMatchup and compareStartSit account for same-game/stack correlations when complete player intervals are available, and searchFirstClassNews clusters corroborated multi-publisher stories via corroboratedBy.
 Explain expected points and the uncertainty interval. Lower volatility (standard deviation) or a narrower interval means higher floor consistency; higher volatility (standard deviation) or a wider interval means higher boom-bust volatility. A D/ST weighted-historical-outcomes range is descriptive, not a calibrated forecast interval. Confidence describes evidence completeness, not a validated accuracy percentage or win probability. Flag close choices and all failed eligibility checks.
 Use simulatePlayoffOdds only with a complete future fantasy schedule. State its simulation and model limits.

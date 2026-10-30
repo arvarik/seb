@@ -3,12 +3,16 @@ import {
   createMockState,
   createTestMessage,
 } from '@chat-adapter/tests';
-import { Chat } from 'chat';
+import { Chat, type Thread } from 'chat';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildPrompt,
   compactConnectorHistory,
+  connectorMemoryReply,
   ModelResponseError,
   postConnectorResponse,
   registerConnectorHandlers,
@@ -20,6 +24,7 @@ import {
 } from '../src/connectors/bot.js';
 import { readConnectorConfig } from '../src/connectors/config.js';
 import { createGroupMeAdapter } from '../src/connectors/groupme.js';
+import { UserMemoryStore } from '../src/interactive/memory.js';
 import { SourceTracker } from '../src/sources.js';
 import {
   createConnectorApp,
@@ -330,6 +335,26 @@ describe('connector handlers', () => {
 
     expect(reply).toHaveBeenCalledOnce();
     await bot.shutdown();
+  });
+
+  it('keeps saved notes in direct messages and refuses them in shared threads', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'seb-connector-memory-'));
+    const store = new UserMemoryStore({ SEB_CONFIG_HOME: directory });
+    const direct = { adapter: { name: 'telegram' }, isDM: true } as unknown as Thread;
+    const shared = { adapter: { name: 'telegram' }, isDM: false } as unknown as Thread;
+    try {
+      expect(await connectorMemoryReply(store, direct, createTestMessage('m1', '/remember@seb_bot I am rebuilding in dynasty')))
+        .toContain('Seb saved the note');
+      expect(await connectorMemoryReply(store, shared, createTestMessage('m2', '/memory')))
+        .toContain('only in direct messages');
+      expect(await connectorMemoryReply(store, direct, createTestMessage('m3', '/memory')))
+        .toContain('I am rebuilding in dynasty');
+      expect(await store.list('telegram:U123')).toHaveLength(1);
+      expect(await connectorMemoryReply(store, direct, createTestMessage('m4', 'Who should I start?')))
+        .toBeNull();
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 
   it('bounds a failure post with an independent deadline', async () => {

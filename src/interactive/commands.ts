@@ -155,7 +155,9 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('replay', '/replay [SEASON] [THROUGH_WEEK]', 'Run the nflverse baseline replay.', 'Analyze', 'Measure the baseline against past results.', undefined, undefined, undefined, 2),
   command('refresh', '/refresh [all|sleeper|nflverse|weather|news]', 'Refresh source data on the next read.', 'Sources', 'Delete selected cache entries before the next read.', undefined, ['all', 'sleeper', 'nflverse', 'weather', 'news'], true, 1),
   command('new', '/new', 'Start a new conversation context.', 'Conversation', 'Exclude earlier messages from the next model call.', ['clear'], undefined, true, 0),
-  command('memory', '/memory [clear]', 'Show or clear pinned session working memory.', 'Conversation', 'Inspect or reset noted preferences, tracked players, and compacted decisions.', undefined, ['clear'], undefined, 1),
+  command('memory', '/memory [clear]', 'Show saved notes and session working memory, or clear session memory.', 'Conversation', 'Inspect saved notes, noted preferences, tracked players, and compacted decisions.', undefined, ['clear'], undefined, 1),
+  command('remember', '/remember [NOTE]', 'Save a note, or the noted session preferences, for future sessions.', 'Conversation', 'Save notes that Seb uses in every later session.'),
+  command('forget', '/forget NUMBER|all', 'Delete one saved note or every saved note.', 'Conversation', 'Remove saved notes from future sessions.', undefined, ['all'], true, 1),
   command('history', '/history [clear]', 'Show or clear question history.', 'Conversation', 'Read or delete the private prompt history.', undefined, ['clear'], undefined, 1),
   command('copy', '/copy [all]', 'Copy the latest answer or full conversation.', 'Conversation', 'Send the latest answer or full conversation to the clipboard.', undefined, ['all'], undefined, 1),
   command('select', '/select', 'Select the full conversation in terminal scrollback.', 'Conversation', 'Print the conversation for native selection. Press Escape to return.', ['copy-mode'], undefined, undefined, 0),
@@ -263,7 +265,14 @@ export function interactiveCommandPrivacyError(
   ) {
     return 'Seb does not accept API keys in slash commands. Run `seb configure`.';
   }
+  if (parsed.command?.name === 'remember' && containsLikelySecret(parsed.argumentText)) {
+    return 'Seb does not save API keys or tokens in memory.';
+  }
   return null;
+}
+
+export function containsLikelySecret(text: string): boolean {
+  return text.split(/\s+/u).some(isLikelyApiKey) || /\bbearer\s+\S+/iu.test(text);
 }
 
 export function searchInteractiveCommands(

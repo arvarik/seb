@@ -33,6 +33,7 @@ import {
 } from '../src/connectors/bot.js';
 import { SebDatabase } from '../src/data/sqlite-store.js';
 import { MemoryPromptHistory } from '../src/interactive/history.js';
+import { UserMemoryStore } from '../src/interactive/memory.js';
 import {
   clearSessionWorkingMemory,
   createSessionState,
@@ -884,7 +885,7 @@ describe('Feature 3: zero-UUID seb resume, session working memory, and SQLite fo
     expect(hasSessionWorkingMemory(state.memory)).toBe(true);
     expect(state.memory?.trackedPlayers).toEqual(['Runner Zero']);
     expect(state.memory?.notedPreferences).toHaveLength(3);
-    expect(state.memory?.decisions).toEqual([
+    expect(state.memory?.decisions.map((item) => item.text)).toEqual([
       'Start Runner Zero over Runner One for safe RB volume.',
     ]);
     expect(JSON.parse(formatSessionData(state)).workingMemory).toMatchObject({
@@ -1005,7 +1006,7 @@ describe('Feature 3: zero-UUID seb resume, session working memory, and SQLite fo
     expect(capturedPromptCount).toBeLessThanOrEqual(24);
     expect(
       transportSession.memory?.decisions.some((d) =>
-        d.includes('Early turn: check Bijan Robinson role -> Bijan handled 82% of snaps.'),
+        d.text.includes('Early turn: check Bijan Robinson role -> Bijan handled 82% of snaps.'),
       ),
     ).toBe(true);
 
@@ -1051,6 +1052,106 @@ describe('Feature 3: zero-UUID seb resume, session working memory, and SQLite fo
     expect(hasSessionWorkingMemory(transportSession.memory)).toBe(true);
     clearSessionWorkingMemory(transportSession);
     expect(transportSession.memory).toBeUndefined();
+  });
+
+  it('saves confirmed notes across sessions, replaces same-key preferences, and sends only current-week decisions', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'seb-saved-memory-'));
+    tempDirs.push(directory);
+    const environment = { NO_COLOR: '1', SEB_CONFIG_HOME: directory };
+    const memoryStore = new UserMemoryStore(environment);
+    const prompts: string[] = [];
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => {
+        prompts.push(JSON.stringify(options.prompt));
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { id: 't1', type: 'text-start' },
+              { delta: 'Noted.', id: 't1', type: 'text-delta' },
+              { id: 't1', type: 'text-end' },
+              {
+                finishReason: { raw: 'stop', unified: 'stop' },
+                type: 'finish',
+                usage: {
+                  inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: 10, total: 10 },
+                  outputTokens: { reasoning: undefined, text: 5, total: 5 },
+                },
+              },
+            ],
+          }),
+        };
+      },
+    });
+    const { nflverse, sleeper } = buildMultiPlayerFixture();
+    const openSession = () => {
+      const session = createSessionState(new Date('2026-10-25T00:00:00.000Z'));
+      session.user = 'arvind';
+      const uiState = new InteractiveUiState();
+      const transport = new SebInteractiveTransport({
+        agent: createFantasyFootballAgent({
+          getRuntimeContext: () => formatSessionData(session),
+          identityRepository: false,
+          languageModel: model,
+          nflverseClient: nflverse,
+          sleeperClient: sleeper,
+          weatherClient: {} as WeatherClient,
+        }),
+        environment,
+        memoryStore,
+        model: 'mock',
+        nflverse,
+        session,
+        sleeper,
+        sources: new SourceTracker(),
+        uiState,
+        version: 'test',
+        weather: {} as WeatherClient,
+      });
+      const send = async (text: string) => {
+        const id = `m-${randomUUID()}`;
+        return readAllText(await transport.sendMessages({
+          abortSignal: undefined,
+          chatId: 'chat-memory',
+          messageId: id,
+          messages: [{ id, parts: [{ text, type: 'text' }], role: 'user' }],
+          trigger: 'submit-message',
+        }));
+      };
+      return { send, session, uiState };
+    };
+
+    // Session A notes a preference, asks the user to confirm it, and saves it on /remember.
+    const first = openSession();
+    await first.send('I prefer safe floor players this week.');
+    expect(first.uiState.notification).toContain('/remember');
+    expect(await first.send('/remember')).toContain('I prefer safe floor');
+
+    // Session B starts empty and still sends the saved note to the model.
+    const second = openSession();
+    await second.send('Tell me about the Bills offense.');
+    expect(prompts.at(-1)).toContain('savedMemory');
+    expect(prompts.at(-1)).toContain('I prefer safe floor');
+
+    // A newer note with the same key replaces the old one, and a session preference overrides it.
+    expect(await second.send('/remember I want high ceiling players')).toContain('It replaced');
+    expect((await memoryStore.list('sleeper:arvind')).map((note) => note.text))
+      .toEqual(['I want high ceiling players']);
+    await second.send('I need a safe floor at flex.');
+    expect(prompts.at(-1)).not.toContain('I want high ceiling players');
+    expect(await second.send('/forget 1')).toContain('Seb deleted saved note #1');
+    expect(await memoryStore.list('sleeper:arvind')).toEqual([]);
+
+    // Decisions reach the model only for the week in which Seb made them.
+    second.session.week = 7;
+    recordSessionTurnMemory(second.session, {
+      answerText: 'Recommendation: Start Runner Zero.',
+      userPrompt: 'Should I start Runner Zero?',
+    });
+    expect(JSON.parse(formatSessionData(second.session)).workingMemory.decisions)
+      .toEqual(['Start Runner Zero.']);
+    second.session.week = 8;
+    expect(JSON.parse(formatSessionData(second.session)).workingMemory.decisions).toEqual([]);
+    expect(formatSessionWorkingMemory(second.session)).toContain('2026 Week 7: Start Runner Zero.');
   });
 
   it('persists deduplicated SQLite player-projection snapshots and attributes forecastDiff drivers across runs', async () => {
@@ -1540,7 +1641,7 @@ describe('Review & live-E2E audit regressions', () => {
     const richId = `seb-${randomUUID()}`;
     const richSession = createSessionState();
     richSession.memory = {
-      decisions: ['Start Jahmyr Gibbs'],
+      decisions: [{ leagueId: null, season: 2026, text: 'Start Jahmyr Gibbs', week: 8 }],
       notedPreferences: [],
       trackedPlayers: ['Jahmyr Gibbs'],
       updatedAt: '2026-10-29T12:00:00.000Z',

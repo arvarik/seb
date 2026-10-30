@@ -54,7 +54,7 @@ export function friendlyToolName(toolName: string): string {
     getUserLeagues: 'Read user leagues',
     getWeekWeather: 'Screen weekly weather risk',
     inspectLearning: 'Inspect local projection learning',
-    inspectSystemDocs: 'Inspect Seb architecture & design',
+    inspectSystemDocs: 'Inspect Seb capabilities & docs',
     learnCompletedWeek: 'Update completed-week learning',
     optimizeRosterLineup: 'Optimize the starting lineup',
     predictMatchup: 'Estimate the matchup',

@@ -42,6 +42,7 @@ import type { ProjectionSnapshotStore } from './projection/service.js';
 import { createProjectionTools } from './projection/tools.js';
 import { createWaiverTools } from './waivers/tools.js';
 import { createTradeTools } from './trades/tools.js';
+import type { SystemMetadataContext } from './system/metadata.js';
 import { createSystemTools } from './system/tools.js';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash';
@@ -280,6 +281,12 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
     : 'direct';
   const bundledNews = newsToolMode !== 'none' ? newsClient : undefined;
   const snapshotDatabase = options.snapshotDatabase ?? false;
+  // The system tool describes the finished tool set, so it reads this context after the set is built.
+  const systemContext: SystemMetadataContext = {
+    activeModel: typeof languageModel === 'string'
+      ? languageModel
+      : `${activeProvider ?? languageModel.provider} · ${languageModel.modelId}`,
+  };
   const tools = bindToolRequestSignals({
     ...createSleeperTools(sleeperClient),
     ...createPlayoffTools(sleeperClient),
@@ -309,12 +316,13 @@ function createAgentComponents(options: FantasyFootballAgentOptions) {
         ? {}
         : { repository: options.identityRepository },
     ),
-    ...createSystemTools(),
+    ...createSystemTools(() => systemContext),
     ...(newsToolMode !== 'none' ? createFirstClassNewsTools(newsClient) : {}),
     ...(newsToolMode === 'google' && toolProvider
       ? createGroundedNewsTools(toolProvider)
       : {}),
   });
+  systemContext.tools = tools;
   return { activeProvider, languageModel, newsToolMode, tools };
 }
 
@@ -633,8 +641,8 @@ function analysisRuntimeInstructions(
 const BASE_INSTRUCTIONS = `
 You are Seb, an NFL and fantasy football research assistant.
 
-Use inspectSystemDocs when the user asks about Seb's own code, architecture, system design, data sources, deterministic models, storage, or technical capabilities.
-Explain Seb's architecture accurately using this evidence.
+Use inspectSystemDocs when the user asks what Seb can do, which commands, tools, skills, or connectors Seb has, how a Seb feature works, or about Seb's own code, architecture, data sources, models, storage, memory, or limits.
+Base every claim about Seb on the inspectSystemDocs result, not on model memory. Add a query to search Seb's documentation for a specific feature, setting, or number.
 
 Use getLeagueTeams for fantasy team names or league members. It returns custom team names and owner names.
 Use getLeagueOverview for league settings and roster IDs.

@@ -1,6 +1,6 @@
 import { MODEL_FAMILIES, type ModelProviderId } from '../ai/model-provider.js';
 import { findSkill, parseSkillInvocation, SEB_SKILLS } from './skills.js';
-import { SYSTEM_TOPICS } from '../system/metadata.js';
+import { SYSTEM_TOPICS } from '../system/topics.js';
 
 export type CompletionShell = 'bash' | 'fish' | 'zsh';
 
@@ -105,14 +105,12 @@ export const INTERACTIVE_COMMANDS: readonly InteractiveCommand[] = [
   command('help', '/help', 'Show every interactive command.', 'Essentials', 'Print the complete command guide.', ['?'], undefined, undefined, 0),
   command(
     'about',
-    '/about [TOPIC]',
-    'Show Seb architecture, design, and capabilities.',
+    '/about [TOPIC|QUESTION]',
+    'Show what Seb can do and how it works, or search its documentation.',
     'Essentials',
-    'Explain how Seb is built, its deterministic models, data sources, and storage.',
+    'Explain Seb capabilities, commands, tools, skills, memory, design, and limits.',
     ['architecture', 'arch'],
     [...SYSTEM_TOPICS],
-    undefined,
-    1,
   ),
   command('explore', '/explore [QUESTION]', 'Find player, team, league, statistic, and news information.', 'Explore', 'Open Explore or ask one Explore question.'),
   command('fantasy', '/fantasy [QUESTION]', 'Use connected Sleeper leagues, rosters, deadlines, and player news.', 'My Fantasy', 'Open My Fantasy or ask one account-aware question.', ['my']),
@@ -450,6 +448,10 @@ function completionIsFinished(
   values: readonly string[],
 ): boolean {
   if (candidate.name === 'skill' && hasSkillPrefix(argumentInput)) {
+    return true;
+  }
+  // After the first word, /about takes a free-text question.
+  if (candidate.name === 'about' && /\S\s/u.test(argumentInput)) {
     return true;
   }
   if (candidate.name === 'team') {

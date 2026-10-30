@@ -46,7 +46,8 @@ import {
   runNflverseBaselineReplay,
 } from '../evaluation/nflverse-runner.js';
 import { TeamIdentityRegistry } from '../identity/teams.js';
-import { formatSystemMetadata } from '../system/metadata.js';
+import { formatDocSearch, searchSebDocs } from '../system/docs.js';
+import { formatSystemMetadata, isSystemTopic } from '../system/metadata.js';
 import { NflverseClient } from '../nflverse/client.js';
 import { SleeperClient } from '../sleeper/client.js';
 import {
@@ -211,6 +212,7 @@ function cloneSessionState(state: SessionState): SessionState {
 export class SebInteractiveTransport implements ChatTransport<UIMessage> {
   private readonly evictedTurnUserIds = new Set<string>();
   private readonly localOnlyMessageIds = new Set<string>();
+  private agent: SebAgent;
   private delegate: ChatTransport<UIMessage>;
   private lastRefreshedAt = 0;
   private readonly options: SebInteractiveTransportOptions;
@@ -231,6 +233,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     this.profileStore = options.profileStore ?? new FileSetupProfileStore({
       environment: options.environment,
     });
+    this.agent = options.agent;
     this.delegate = this.createDelegate(options.agent);
   }
 
@@ -715,8 +718,17 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
       }
       case 'about':
       case 'architecture':
-      case 'arch':
-        return formatSystemMetadata(arguments_[0]);
+      case 'arch': {
+        const topic = parsed.argumentText;
+        if (topic && !isSystemTopic(topic.toLowerCase())) {
+          return formatDocSearch(topic, await searchSebDocs(topic));
+        }
+        const active = this.uiState.activeModel;
+        return formatSystemMetadata(topic, {
+          ...(active ? { activeModel: `${active.provider} · ${active.model}` } : {}),
+          tools: this.agent.tools,
+        });
+      }
       case 'help':
       case '?':
         return INTERACTIVE_HELP;
@@ -1325,6 +1337,7 @@ export class SebInteractiveTransport implements ChatTransport<UIMessage> {
     const active = validateInteractiveModelSwitchResult(switched);
     const delegate = this.createDelegate(switched.agent);
 
+    this.agent = switched.agent;
     this.delegate = delegate;
     this.uiState.setActiveModel(active);
     this.options.session.contextAfterMessageId = messageId;

@@ -3,7 +3,7 @@
 **The source-grounded NFL & fantasy football AI agent. One terminal.**
 
 [![CI](https://github.com/arvarik/seb/actions/workflows/ci.yml/badge.svg)](https://github.com/arvarik/seb/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.1.2-informational.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-1.1.3-informational.svg)](package.json)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-339933?logo=node.js&logoColor=white)](package.json)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 

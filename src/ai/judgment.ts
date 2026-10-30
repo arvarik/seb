@@ -3,6 +3,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { registerTelemetry, type Telemetry, type UIMessageChunk } from 'ai';
 import type { Tracer as JudgmentTracer } from 'judgeval';
 
+import { SEB_VERSION } from '../version.js';
+
 type TracerClass = typeof JudgmentTracer;
 type Span = NonNullable<ReturnType<TracerClass['getCurrentSpan']>>;
 
@@ -14,6 +16,7 @@ interface TraceState {
 }
 
 interface TraceOptions {
+  attributes?: Record<string, string | number | boolean | undefined> | undefined;
   name: string;
   sessionId: string;
   input: unknown;
@@ -218,6 +221,15 @@ function startTrace(sdk: TracerClass, span: Span, options: TraceOptions): TraceS
   sdk.setSpanKind('agent', span);
   sdk.setSessionId(options.sessionId);
   sdk.setInput(options.input, span);
+  const setAttribute = (span as { setAttribute?: (key: string, value: string | number | boolean) => void }).setAttribute;
+  if (typeof setAttribute === 'function') {
+    setAttribute.call(span, 'seb.version', SEB_VERSION);
+    if (options.attributes) {
+      for (const [key, value] of Object.entries(options.attributes)) {
+        if (value !== undefined) setAttribute.call(span, key, value);
+      }
+    }
+  }
   return { span, sessionId: options.sessionId, output: '', failure: undefined };
 }
 

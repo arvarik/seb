@@ -376,6 +376,11 @@ function createAgentReply(environment: Environment): ConnectorReply {
       );
       if (prompt.length === 0) return;
       await traceJudgmentOperation({
+        attributes: {
+          'seb.connector.channel_id': thread.channelId,
+          'seb.connector.platform': thread.adapter.name,
+          'seb.connector.user_id': message.author.userId,
+        },
         name: 'seb.connector.reply',
         sessionId: thread.id,
         input: [{ role: 'user', content: message.text }],
@@ -470,6 +475,7 @@ async function postAgentResponse(
             role: 'user' as const,
             content: buildRecommendationRecoveryPrompt({
               blockedAnswer: recoveryContext.blockedAnswer,
+              missingStatusSubjects: recoveryContext.evidence.missingStatusSubjects,
               question,
               reasons: recoveryContext.reasons,
             }),
@@ -1040,6 +1046,7 @@ export async function postConnectorResponse(
   }
   for (const chunk of splitConnectorMessage(text, limit)) {
     signal.throwIfAborted();
+    if (!chunk.trim()) continue;
     await waitForSignal(thread.post({ raw: chunk }), signal);
   }
 }

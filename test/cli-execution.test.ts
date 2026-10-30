@@ -178,6 +178,43 @@ describe('CLI agent execution', () => {
     expect(answer.analysis.recommendation !== null).toBe(leagueId === '123456');
   });
 
+  it('grounds JSON confidence scores from tool results instead of keeping invented formatter scores', async () => {
+    mocks.generate.mockResolvedValue({
+      finishReason: 'stop',
+      sources: [],
+      text: 'Projected range is 18.2 mean.',
+      toolCalls: [{ toolName: 'projectPlayer' }],
+      toolResults: [{
+        input: { playerName: 'Josh Allen' },
+        output: { confidence: { label: 'medium', reasons: ['6-week sample'], score: 0.65 }, recommendationEligible: true },
+        toolName: 'projectPlayer',
+      }],
+      usage: { inputTokens: 10, outputTokens: 5 },
+    });
+    mocks.format.mockResolvedValue({
+      finishReason: 'stop',
+      output: {
+        assumptions: [],
+        confidence: { level: 'medium', rationale: 'Moderate sample size.', score: 0.5 },
+        kind: 'player_outlook',
+        limitations: [],
+        metrics: [],
+        recommendation: null,
+        risks: [],
+        schemaVersion: 1,
+        strengths: [],
+        subject: 'Josh Allen',
+        summary: 'Solid QB1 outlook.',
+        weaknesses: [],
+      },
+      usage: { inputTokens: 6, outputTokens: 4 },
+    });
+    const io = output();
+    await expect(runCli(['ask', '--json', 'Show Josh Allen Week 8 projection'], io.streams, {})).resolves.toBe(0);
+    const answer = JSON.parse(io.stdout.join(''));
+    expect(answer.analysis.confidence).toMatchObject({ level: 'medium', score: 0.65 });
+  });
+
   it('uses fallback once after capacity failure before visible text', async () => {
     mocks.stream.mockResolvedValueOnce(stream([{ type: 'error', error: { statusCode: 503 } }]))
       .mockResolvedValueOnce(stream([{ type: 'text-delta', text: 'Complete answer.' }, { type: 'finish', finishReason: 'stop' }]));

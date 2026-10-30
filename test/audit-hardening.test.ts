@@ -117,4 +117,15 @@ describe('connector messages', () => {
     const source = { id: 'one', label: 'Example', url: 'https://example.test', accessedAt: new Date().toISOString() };
     expect(formatEvidenceMarkdown([source, { ...source, id: 'two' }], { limit: 1, surface: 'connector' })).not.toContain('/sources');
   });
+  it('skips whitespace-only tail chunks when posting chunked connector replies', async () => {
+    const post = vi.fn().mockResolvedValue({});
+    const thread = { adapter: { name: 'groupme' }, post } as unknown as Thread;
+    await postConnectorResponse(
+      thread,
+      (async function* () { yield `${'x'.repeat(1000)}   \n  `; })(),
+      new AbortController().signal,
+    );
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith({ raw: 'x'.repeat(1000) });
+  });
 });

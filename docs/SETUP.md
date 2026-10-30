@@ -78,7 +78,7 @@ seb configure --import-env /absolute/path/to/.env
 Set a contact address on `NWS_USER_AGENT` so the National Weather Service can reach you if automated weather requests encounter issues, and use strict `'true'` or `'false'` strings for boolean flags:
 
 ```dotenv
-NWS_USER_AGENT=seb/1.1.2 (you@example.com)
+NWS_USER_AGENT=seb/1.1.3 (you@example.com)
 SEB_DEVTOOLS=false
 SEB_THEME=default
 SEB_ICONS=unicode

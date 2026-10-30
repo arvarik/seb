@@ -114,4 +114,36 @@ describe('saved sessions', () => {
     expect((await f.store.load(f.id)).messages).toHaveLength(3);
     await f.store.acquire(f.id); await f.store.release(f.id);
   });
+  it('skips local slash commands in session titles and strips deprecated rawInput on output-error parts', async () => {
+    const f = await fixture();
+    await f.store.acquire(f.id);
+    const rawSnapshot = {
+      ...f.snapshot,
+      localOnlyMessageIds: ['oversized-1'],
+      messages: [
+        { id: 'cmd-1', parts: [{ text: '/help', type: 'text' }], role: 'user' },
+        { id: 'cmd-1-reply', parts: [{ text: 'Catalog', type: 'text' }], role: 'assistant' },
+        { id: 'oversized-1', parts: [{ text: 'Too long local error', type: 'text' }], role: 'user' },
+        { id: 'real-1', parts: [{ text: 'Audit my Week 8 roster', type: 'text' }], role: 'user' },
+        {
+          id: 'err-1',
+          parts: [{
+            errorText: 'Tool failed',
+            rawInput: { stale: true },
+            state: 'output-error',
+            toolCallId: 'tc-1',
+            toolName: 'getLeagueOverview',
+            type: 'dynamic-tool',
+          }],
+          role: 'assistant',
+        },
+      ],
+    };
+    await writeFile(f.path, JSON.stringify(rawSnapshot));
+    const loaded = await f.store.load(f.id);
+    expect(loaded.localOnlyMessageIds).toEqual(['oversized-1']);
+    expect(JSON.stringify(loaded.messages)).not.toContain('rawInput');
+    expect(await f.store.list()).toEqual([{ id: f.id, title: 'Audit my Week 8 roster', updatedAt: f.snapshot.updatedAt }]);
+    await f.store.release(f.id);
+  });
 });

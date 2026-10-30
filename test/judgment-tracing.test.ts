@@ -3,7 +3,7 @@ import type { Telemetry, UIMessageChunk } from 'ai';
 
 const fake = vi.hoisted(() => ({
   imports: 0,
-  spans: [] as Array<{ name: string; end: ReturnType<typeof vi.fn> }>,
+  spans: [] as Array<{ name: string; end: ReturnType<typeof vi.fn>; setAttribute: ReturnType<typeof vi.fn> }>,
   init: vi.fn(),
   register: vi.fn(),
   setInput: vi.fn(),
@@ -24,7 +24,7 @@ vi.mock('judgeval', () => {
     init: fake.init,
     getOTELTracer: () => ({
       startActiveSpan: (name: string, run: (span: unknown) => unknown) => {
-        const span = { name, end: vi.fn() };
+        const span = { name, end: vi.fn(), setAttribute: vi.fn() };
         fake.spans.push(span);
         return run(span);
       },
@@ -250,5 +250,28 @@ describe('optional Judgment tracing', () => {
     expect(forwarded.text).toBe('Done');
     expect(forwarded.usage.inputTokenDetails.noCacheTokens).toBeUndefined();
     expect(forwarded.usage.outputTokenDetails.textTokens).toBeUndefined();
+  });
+
+  it('attaches seb.version and custom span attributes on traced operations', async () => {
+    const module = await import('../src/ai/judgment.js');
+    const { SEB_VERSION } = await import('../src/version.js');
+    await module.configureJudgmentTracing(enabled);
+    await module.traceJudgmentOperation(
+      {
+        ...options,
+        attributes: {
+          'seb.connector.channel_id': 'C123',
+          'seb.connector.platform': 'slack',
+          'seb.connector.user_id': 'U456',
+          unused: undefined,
+        },
+      },
+      async () => 'ok',
+    );
+    expect(fake.spans[0]!.setAttribute).toHaveBeenCalledWith('seb.version', SEB_VERSION);
+    expect(fake.spans[0]!.setAttribute).toHaveBeenCalledWith('seb.connector.platform', 'slack');
+    expect(fake.spans[0]!.setAttribute).toHaveBeenCalledWith('seb.connector.channel_id', 'C123');
+    expect(fake.spans[0]!.setAttribute).toHaveBeenCalledWith('seb.connector.user_id', 'U456');
+    expect(fake.spans[0]!.setAttribute).not.toHaveBeenCalledWith('unused', undefined);
   });
 });

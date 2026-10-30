@@ -6,6 +6,19 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-10-29
+
+### Fixed
+
+- **Decision Gate False Blocks & Targeted Recovery**:
+  - Ignore negated recommendation disclaimers (such as `"do not make any player recommendations"` or `"no player recommendations"`) in `questionRequestsRecommendation` unless an affirmative decision question is also present.
+  - Recognize pure all-option refusals (such as `"None of the three can fill your Week 8 flex"` or `"Don't start any of the three"`) in `answerWithholdsOrClarifies` without triggering a wasted recovery pass or `Decision unavailable`.
+  - Allow healthy kept starters in zero-swap `optimizeRosterLineup` runs to satisfy status evidence via fresh league/newsroom verification while still requiring explicit beat-news coverage for injured starters and swap candidates, and surface `missingStatusSubjects` in `buildRecommendationRecoveryPrompt` so recovery passes know which players lack reporting checks.
+  - Scope open-ended waiver follow-up projections (`rankWaiverTargets` + `projectPlayers`) to the top 3 projected waiver candidates rather than requiring individual headlines for every rostered comparison player or unprojected position slice.
+- **Structured `seb ask --json` Confidence Grounding & Recovery**: Run single-pass Decision Gate recovery during `seb ask --json` research when needed, forward extracted tool `confidence` metadata to the structured formatter, and ground `analysis.confidence` to the returned tool confidence score rather than invented formatter defaults.
+- **Interactive `seb resume` Hygiene**: Persist `localOnlyMessageIds` in saved session snapshots, filter historical local-only slash turns (such as `/help`, `/doctor`, and `/stats`) from resumed LLM prompts and `seb sessions` titles, and strip deprecated `rawInput` fields from legacy `output-error` tool parts before `validateUIMessages`.
+- **Connector Chunking & Judgment Span Metadata**: Attach `seb.version` to all Judgment root spans alongside `seb.connector.platform`, `seb.connector.channel_id`, and `seb.connector.user_id` on `seb.connector.reply` traces, and skip whitespace-only tail chunks in `postConnectorResponse`.
+
 ## [1.1.2] - 2026-10-28
 
 ### Added

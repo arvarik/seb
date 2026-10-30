@@ -143,7 +143,7 @@ Direct schedule and player-stat agent tools return at most 100 rows by default w
 Seb queries the [National Weather Service API](https://www.weather.gov/documentation/services-web-api) (`https://api.weather.gov`), which requires an identifying `User-Agent` header configured via `NWS_USER_AGENT`:
 
 ```dotenv
-NWS_USER_AGENT=seb/1.1.2 (you@example.com)
+NWS_USER_AGENT=seb/1.1.3 (you@example.com)
 ```
 
 Point grid discovery (`/points/{lat},{lon}`) stays fresh for **7 days** (30 days stale), `forecastHourly` periods stay fresh for **10 minutes** (6 hours stale, verifying that the returned forecast URL stays on the configured NWS origin), and `/alerts/active` stays fresh for **2 minutes** (30 minutes stale). Clear weather caches via `/refresh weather`.

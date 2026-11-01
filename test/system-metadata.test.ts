@@ -20,6 +20,7 @@ import { SourceTracker } from '../src/sources.js';
 import { SleeperClient } from '../src/sleeper/client.js';
 import { NflverseClient } from '../src/nflverse/client.js';
 import { WeatherClient } from '../src/weather/client.js';
+import type { NewsClient } from '../src/news/client.js';
 
 describe('system metadata & self-awareness', () => {
   it('defines all required architecture and design topics', () => {
@@ -128,6 +129,10 @@ describe('system metadata & self-awareness', () => {
     const agent = createFantasyFootballAgent({
       identityRepository: false,
       languageModel: new MockLanguageModelV4({}),
+      newsClient: {} as NewsClient,
+      nflverseClient: {} as NflverseClient,
+      sleeperClient: {} as SleeperClient,
+      weatherClient: {} as WeatherClient,
     });
     const result = (await agent.tools.inspectSystemDocs.execute?.(
       { query: 'saved notes', topic: 'capabilities' },
@@ -158,7 +163,9 @@ describe('system metadata & self-awareness', () => {
 
     const transport = new SebInteractiveTransport({
       agent: createFantasyFootballAgent({
+        identityRepository: false,
         languageModel: new MockLanguageModelV4({}),
+        newsClient: {} as NewsClient,
         sleeperClient: sleeper,
         nflverseClient: nflverse,
         weatherClient: weather,

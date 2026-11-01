@@ -1363,16 +1363,25 @@ export class SebDatabase {
   }
 
   private configure(): void {
+    this.database.pragma('busy_timeout = 5000');
+    if (String(this.database.pragma('journal_mode', { simple: true })).toLowerCase() !== 'wal') {
+      this.database.pragma('journal_mode = WAL');
+    }
     this.database.exec(`
-      PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
       PRAGMA foreign_keys = ON;
-      PRAGMA busy_timeout = 5000;
       PRAGMA temp_store = MEMORY;
     `);
   }
 
   private ensureIndexes(): void {
+    const existing = this.database
+      .prepare(
+        `SELECT COUNT(*) AS count FROM sqlite_master
+         WHERE type = 'index' AND name IN ('cache_stale_until_idx', 'snapshot_as_of_idx')`,
+      )
+      .get() as { count: number };
+    if (Number(existing.count) >= 2) return;
     this.database.exec(`
       CREATE INDEX IF NOT EXISTS cache_stale_until_idx ON cache_entries(stale_until);
       CREATE INDEX IF NOT EXISTS snapshot_as_of_idx ON snapshots(as_of DESC, created_at DESC);
@@ -1380,10 +1389,7 @@ export class SebDatabase {
   }
 
   private migrate(): void {
-    const versionRow = this.database
-      .prepare('PRAGMA user_version')
-      .get() as { user_version: number } | undefined;
-    const version = Number(versionRow?.user_version ?? 0);
+    const version = databaseSchemaVersion(this.database);
     if (version > DATABASE_SCHEMA_VERSION) {
       throw new Error(`The Seb database schema ${version} is newer than this application supports.`);
     }
@@ -1429,7 +1435,7 @@ export class SebDatabase {
         `);
       });
     }
-    if (version < 2) {
+    if (databaseSchemaVersion(this.database) < 2) {
       this.transaction(() => {
         const lockedVersion = databaseSchemaVersion(this.database);
         if (lockedVersion >= 2) return;
@@ -1461,7 +1467,7 @@ export class SebDatabase {
         `);
       });
     }
-    if (version < 3) {
+    if (databaseSchemaVersion(this.database) < 3) {
       this.transaction(() => {
         const lockedVersion = databaseSchemaVersion(this.database);
         if (lockedVersion >= 3) return;
@@ -1488,7 +1494,7 @@ export class SebDatabase {
         this.database.pragma('user_version = 3');
       });
     }
-    if (version < 4) {
+    if (databaseSchemaVersion(this.database) < 4) {
       this.transaction(() => {
         const lockedVersion = databaseSchemaVersion(this.database);
         if (lockedVersion >= 4) return;
@@ -1505,7 +1511,7 @@ export class SebDatabase {
         `);
       });
     }
-    if (version < 5) {
+    if (databaseSchemaVersion(this.database) < 5) {
       this.transaction(() => {
         const lockedVersion = databaseSchemaVersion(this.database);
         if (lockedVersion >= 5) return;
@@ -1657,7 +1663,7 @@ export class SebDatabase {
         this.database.pragma('user_version = 5');
       });
     }
-    if (version < 6) {
+    if (databaseSchemaVersion(this.database) < 6) {
       this.transaction(() => {
         const lockedVersion = databaseSchemaVersion(this.database);
         if (lockedVersion === 6) {
